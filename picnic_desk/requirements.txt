@@ -1,0 +1,5 @@
+# Pinned on purpose: desk.py uses a few of this library's internals for the
+# recipe pages, and 2.0.1 is the version that was read and tested against.
+python-picnic-api2==2.0.1
+flask>=3.0,<4
+waitress>=3.0,<4

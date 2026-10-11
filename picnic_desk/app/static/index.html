@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>Picnic Desk</title>
+  <link rel="stylesheet" href="static/app.css">
+</head>
+<body>
+  <div class="desk" id="desk" hidden>
+    <main class="shelf">
+      <header class="top">
+        <form class="find" id="find" role="search" autocomplete="off">
+          <label class="visually-hidden" for="q">Search Picnic</label>
+          <input id="q" name="q" type="search" placeholder="Search Picnic, for example havermelk" spellcheck="false" enterkeyhint="search">
+          <kbd title="Press / to jump to the search box">/</kbd>
+        </form>
+        <nav class="views" aria-label="Ways to fill the basket">
+          <button type="button" data-view="search" aria-current="page">Search</button>
+          <button type="button" data-view="list">Paste a list</button>
+          <button type="button" data-view="history">Bought before</button>
+          <button type="button" data-view="saved">Saved</button>
+          <button type="button" data-view="recipes">Recipes</button>
+        </nav>
+      </header>
+
+      <section id="view-search" class="view">
+        <div class="shortcuts" id="shortcuts"></div>
+        <div id="search-results" aria-live="polite"></div>
+      </section>
+
+      <section id="view-list" class="view" hidden>
+        <form class="paste" id="paste">
+          <label for="list-text">One product per line. Start a line with a number to add that many.</label>
+          <textarea id="list-text" rows="8" spellcheck="false" placeholder="2 havermelk&#10;tofu&#10;bananen&#10;3x tomatenblokjes"></textarea>
+          <div class="paste-actions">
+            <button type="submit" class="primary">Find these products</button>
+            <button type="button" class="quiet" id="list-reset" hidden>Start a new list</button>
+          </div>
+        </form>
+        <div id="list-rows"></div>
+      </section>
+
+      <section id="view-history" class="view" hidden></section>
+      <section id="view-saved" class="view" hidden></section>
+      <section id="view-recipes" class="view" hidden></section>
+      <section id="view-check" class="view" hidden></section>
+    </main>
+
+    <aside class="till" aria-label="Basket">
+      <div class="receipt">
+        <div class="receipt-head">
+          <h2>Basket</h2>
+          <span id="basket-count"></span>
+        </div>
+        <ul class="lines" id="lines"></ul>
+        <p class="empty-basket" id="empty-basket">Nothing in the basket yet. Add products from the left.</p>
+        <div class="sum">
+          <div class="total"><span>Total</span><span id="total">0,00</span></div>
+          <div class="minimum" id="minimum" hidden>
+            <div class="bar"><i id="minimum-bar"></i></div>
+            <p id="minimum-text"></p>
+          </div>
+          <p class="slot" id="slot" hidden></p>
+          <p class="handoff">Choose a delivery slot and pay in the Picnic app.</p>
+        </div>
+        <div class="receipt-foot">
+          <button type="button" class="quiet" id="clear" hidden>Empty the basket</button>
+          <span class="who"><span id="who"></span> <button type="button" class="quiet" id="logout">Sign out</button></span>
+        </div>
+        <div class="receipt-foot plain">
+          <button type="button" class="quiet" id="check">Check what works with Picnic</button>
+        </div>
+      </div>
+    </aside>
+  </div>
+
+  <main class="door" id="door" hidden>
+    <form class="signin" id="signin" autocomplete="on">
+      <h1>Sign in to Picnic</h1>
+      <p>Use the account from the Picnic app. Your password goes to Picnic once and is not kept here; only the session it returns is stored with this add-on.</p>
+      <label for="email">Email address</label>
+      <input id="email" type="email" autocomplete="username" required>
+      <label for="password">Password</label>
+      <input id="password" type="password" autocomplete="current-password" required>
+      <button type="submit" class="primary">Sign in</button>
+    </form>
+
+    <form class="signin" id="codeform" hidden autocomplete="off">
+      <h1>Enter your verification code</h1>
+      <p>Picnic wants a one-time code for this sign-in. Choose where to receive it.</p>
+      <div class="channels">
+        <button type="button" class="secondary" data-channel="SMS">Send by text message</button>
+        <button type="button" class="secondary" data-channel="EMAIL">Send by email</button>
+      </div>
+      <label for="code">Code</label>
+      <input id="code" inputmode="numeric" autocomplete="one-time-code" required>
+      <button type="submit" class="primary">Verify code</button>
+      <button type="button" class="quiet" id="code-back">Use a different account</button>
+    </form>
+  </main>
+
+  <p class="demo" id="demo" hidden>Demo mode. Nothing here reaches Picnic.</p>
+  <div class="notice" id="notice" role="status" aria-live="polite" hidden></div>
+
+  <script src="static/app.js"></script>
+</body>
+</html>
