@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.3.0
+
+- Product page: click a product anywhere (search, basket, recipe) for its
+  pictures, description, allergens, ingredients and nutrition. `Enter` on a
+  product now opens this page; `+` still adds.
+- Pictures: a search tile's picture is now loaded the way the tile itself
+  names it (its own picture id and file type), with the documented sizes as
+  fallbacks. Before, only one address form was tried, so pictures that exist
+  in another form stayed empty.
+- Recipes show a price indication: on each card for the default portions, and
+  per portion next to the total when a recipe is open.
+- "Check what works with Picnic" now tries up to eight pictures, says which
+  address form worked, spells out a picture that failed, and opens a product
+  page.
+
 ## 0.2.0
 
 - Distributed as an app repository: add and remove it with one address.

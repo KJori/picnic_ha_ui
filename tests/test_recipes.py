@@ -105,7 +105,8 @@ class ListPages(unittest.TestCase):
         by_id = {recipe["id"]: recipe for recipe in result["recipes"]}
         self.assertEqual(
             by_id[RECIPE],
-            {"id": RECIPE, "name": "Gyros-rijstpan met feta", "image": "recipes/abc", "segments": ["SAVED_RECIPES"]},
+            {"id": RECIPE, "name": "Gyros-rijstpan met feta", "image": "recipes/abc", "image_variant": None,
+             "price_text": None, "segments": ["SAVED_RECIPES"]},
         )
         self.assertEqual(by_id[OWN]["name"], "Mijn recept")
         self.assertEqual(by_id[OWN]["segments"], ["USER_DEFINED_RECIPES"])
@@ -120,6 +121,17 @@ class ListPages(unittest.TestCase):
                 {"id": "recipe-cattree-jamie-oliver", "label": "Jamie oliver"},
             ],
         )
+
+    def test_picture_variant_and_price_shown_on_a_tile(self):
+        tile = cookbook_tile(RECIPE, "Rijstpan", ("NEW_RECIPES", "Nieuw"), "abc")
+        stack = tile["pml"]["component"]["child"]["children"]
+        stack[0].update({"derivativeType": "recipe-tile", "extension": "webp"})
+        stack.append(rich("vanaf €\u00a02,45 p.p."))
+        recipe = parse_list(page([tile]))["recipes"][0]
+        self.assertEqual((recipe["image"], recipe["image_variant"], recipe["price_text"]), ("recipes/abc", "recipe-tile.webp", "vanaf € 2,45 p.p."))
+        odd = cookbook_tile(NEW, "Soep", ("NEW_RECIPES", "Nieuw"), "def")
+        odd["pml"]["component"]["child"]["children"][0].update({"derivativeType": "../x", "extension": "exe"})
+        self.assertIsNone(parse_list(page([odd]))["recipes"][0]["image_variant"])
 
     def test_name_hidden_in_script_text(self):
         tile = {
@@ -201,7 +213,7 @@ class DetailPages(unittest.TestCase):
         self.assertEqual(
             first,
             {"id": "s1", "ingredient_id": "i1", "qty": 2, "checked": True, "available": True,
-             "name": "Paprika mix", "unit": "500 g", "price": 249, "image": "p1"},
+             "name": "Paprika mix", "unit": "500 g", "price": 249, "image": "p1", "image_variant": None},
         )
         self.assertEqual((second["name"], second["unit"], second["price"], second["available"]), ("Tomaten", "1 stuk nodig", 119, False))
         self.assertEqual((third["name"], third["unit"], third["price"], third["checked"]), ("Basmatirijst", "1 pak", 205, False))

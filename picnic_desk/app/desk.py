@@ -33,20 +33,21 @@ from python_picnic_api2 import (
     PicnicAuthError,
 )
 from python_picnic_api2 import client as picnic_client
-from python_picnic_api2.models import Cart
+from python_picnic_api2.models import Article, Cart
 
+import products as product_pages
 import recipes as recipe_pages
+from pictures import IMAGE_REF, Pictures, variant_name
 
-IMAGE_URL = (
-    "https://storefront-prod.{cc}.picnicinternational.com/static/images/{id}/{size}.png"
-)
-IMAGE_REF = re.compile(r"^(?:[a-z][a-z0-9_-]{1,30}/)?[A-Za-z0-9_-]{8,128}$")
 RECIPE_ID = re.compile(r"^[a-f0-9]{24,32}$")
+PRODUCT_ID = re.compile(r"^s?\d{3,12}$")
 PAGE_ID = re.compile(r"^[A-Za-z0-9_-]{3,80}$")
 # The app version the recipe pages were checked against by MRVDH/picnic-api.
 # The library's own (older) version string is tried second.
 PAGE_AGENT = "30100;1.246.1-15599;"
 RECIPE_LIST_MAX_AGE = 600
+RECIPE_PRICE_MAX_AGE = 24 * 3600
+RECIPE_PRICE_ITEMS = 600
 RECIPE_NAME_LOOKUPS = 20
 MAX_SHORTCUTS = 24
 RECIPES_VIEW = "recipes"
@@ -62,7 +63,9 @@ REQUEST_TIMEOUT = 20  # seconds; the library itself sets none
 HISTORY_DELIVERIES = 10  # how many past deliveries feed "Bought before"
 HISTORY_MAX_AGE = 12 * 3600
 SEARCH_LIMIT = 60
-IMAGE_CACHE_ITEMS = 500
+PRODUCT_MAX_AGE = 1800
+PRODUCT_CACHE_ITEMS = 300
+CHECK_PICTURES = 8
 
 
 class NotLoggedIn(Exception):
@@ -80,12 +83,13 @@ class Desk:
         self.country = (country or "NL").upper()
         self._api_class = api_class
         self._lock = threading.RLock()
-        self._images: OrderedDict[str, bytes] = OrderedDict()
-        self._image_lock = threading.Lock()
         self.pending_2fa = False
         self.api = None
         self.user_name = None
+        self.pictures = Pictures(self.country, lambda: self.api.session if self.api is not None else None)
         self._recipe_lists: dict = {}  # category -> (time, parsed list)
+        self._recipe_prices: dict | None = None  # recipe id -> price indication, kept on disk
+        self._products: OrderedDict[str, tuple] = OrderedDict()  # product id -> (time, details)
 
         self._stored_token = self._read("auth.json", {}).get("token")
         if self._stored_token:
@@ -133,6 +137,8 @@ class Desk:
         self.user_name = None
         self._stored_token = None
         self._recipe_lists = {}
+        self._products.clear()
+        self.pictures.forget()
         self._remove("auth.json")
 
     def _call(self, fn):
@@ -219,12 +225,13 @@ class Desk:
         with self._lock:
             self._forget()
             self._remove("history.json")
+            self._remove("recipe_prices.json")
+            self._recipe_prices = None
             return self.state()
 
     # ---------------------------------------------------------------- shaping
 
-    @staticmethod
-    def _tile(item) -> dict:
+    def _tile(self, item) -> dict:
         """A search tile as the UI wants it.
 
         display_price is the price shown on the tile (library docs). The
@@ -255,6 +262,15 @@ class Desk:
         ]
         if price is None and tiers:
             price = min(tiers, key=lambda tier: tier["from_quantity"])["price"]
+        # The picture the phone app shows on a tile is named next to the product,
+        # as {id, derivativeType, extension}; its id can differ from image_id.
+        image = item.image_id
+        config = item.raw.get("sellingUnitImageConfiguration") if isinstance(item.raw, dict) else None
+        if isinstance(config, dict) and isinstance(config.get("id"), str) and IMAGE_REF.match(config["id"]):
+            image = config["id"]
+            self.pictures.hint(
+                image, variant_name(config.get("derivativeType"), config.get("extension")), alternate=item.image_id
+            )
         return {
             "id": item.id,
             "name": item.name or item.id,
@@ -268,7 +284,7 @@ class Desk:
             ],
             "base_price": base_price,
             "unavailable": unavailable,
-            "image": item.image_id,
+            "image": image,
             "max": item.max_count or 99,
         }
 
@@ -498,6 +514,87 @@ class Desk:
             self._write("saved.json", items)
             return items
 
+    # ---------------------------------------------------------------- product
+
+    def product(self, product_id: str, refresh: bool = False) -> dict:
+        """Everything the product page says: description, ingredients and the
+        other fold-out sections, allergens, pictures, prices.
+
+        Name, brand, pack size and prices are read by the library's own parser.
+        The rest is read by products.py. The fold-out sections were documented
+        by MRVDH/picnic-api for a newer app version than the library presents,
+        so when the first answer has none the page is asked for once more as
+        that newer version.
+        """
+        if not PRODUCT_ID.match(product_id or ""):
+            raise DeskError("Unknown product.")
+        cached = self._products.get(product_id)
+        if cached and not refresh and time.time() - cached[0] < PRODUCT_MAX_AGE:
+            return cached[1]
+        path = f"/pages/product-details-page-root?id={product_id}&show_category_action=true"
+
+        def read(page):
+            try:
+                article = Article.from_page(page, product_id)
+            except Exception:  # a layout the library does not know
+                article = None
+            return article, product_pages.parse_extras(page)
+
+        def run(api):
+            page = api._get(path, add_picnic_headers=True)  # the request behind the library's get_article
+            error = self._error_in(page)
+            if error:
+                raise DeskError(f"Picnic says: {error}")
+            article, extras = read(page)
+            if not extras["sections"] and not extras["allergens"]:
+                try:
+                    with self._agent(PAGE_AGENT):
+                        newer = api._get(path, add_picnic_headers=True)
+                except PicnicAuthError:
+                    raise
+                except Exception:
+                    newer = None
+                if isinstance(newer, dict) and not self._error_in(newer):
+                    newer_article, more = read(newer)
+                    article = article or newer_article
+                    for key, value in more.items():
+                        if value and (not extras[key] or (key == "pictures" and len(value) > len(extras[key]))):
+                            extras[key] = value
+            return article, extras
+
+        article, extras = self._call(run)
+        if article is None and not (extras["description"] or extras["sections"]):
+            raise DeskError("Picnic sent this product page in a form this add-on cannot read yet.")
+
+        images = []
+        if article is not None and isinstance(article.image_id, str) and IMAGE_REF.match(article.image_id):
+            images.append(article.image_id)
+        for picture in extras["pictures"]:
+            self.pictures.hint(picture["ref"], picture["variant"])
+            if picture["ref"] not in images:
+                images.append(picture["ref"])
+
+        details = {
+            "id": product_id,
+            "name": (article.name if article else None) or "",
+            "brand": (article.producer if article else None) or "",
+            "unit": (article.unit_quantity if article else None) or "",
+            "price": article.price if article else None,
+            "was": article.original_price if article else None,
+            "price_per_unit": (article.price_per_unit if article else None) or "",
+            # For a multipack the page only gives the price per piece (library docs).
+            "multipack": bool(article and article.is_bundle),
+            "images": images[:8],
+            "description": extras["description"] or (article.description if article else None) or "",
+            "highlights": extras["highlights"] or (list(article.highlights) if article else []),
+            "allergens": extras["allergens"],
+            "sections": extras["sections"],
+        }
+        self._products[product_id] = (time.time(), details)
+        while len(self._products) > PRODUCT_CACHE_ITEMS:
+            self._products.popitem(last=False)
+        return details
+
     # -------------------------------------------------------------- shortcuts
 
     def _default_shortcuts(self) -> list[dict]:
@@ -591,6 +688,8 @@ class Desk:
             return cached[1]
         page = self._call(lambda api: self._page(api, category or "cookbook-page-content"))
         parsed = recipe_pages.parse_list(page)
+        for recipe in parsed["recipes"]:
+            self.pictures.hint(recipe["image"], recipe.pop("image_variant", None))
         parsed["category"] = category
         if category:  # keep offering the categories found on the overview
             overview = self._recipe_lists.get("")
@@ -624,9 +723,49 @@ class Desk:
                     item["unit"] = item["unit"] or article.unit_quantity or ""
                     item["price"] = item["price"] if item["price"] is not None else article.price
                     item["image"] = item["image"] or article.image_id
+        self.pictures.hint(detail["image"], detail.pop("image_variant", None))
         for item in detail["ingredients"]:
+            self.pictures.hint(item["image"], item.pop("image_variant", None))
             item["name"] = item["name"] or f"Product {item['id']}"
         return detail
+
+    @staticmethod
+    def _recipe_cost(detail: dict) -> dict:
+        """What the recipe costs as Picnic would put it in the basket: the whole
+        packs of every product it ticks by default, for the shown portions."""
+        usual = [i for i in detail["ingredients"] if i["checked"] and i["available"]]
+        priced = [i for i in usual if isinstance(i["price"], int)]
+        return {
+            "price": sum(i["price"] * i["qty"] for i in priced) if priced else None,
+            "portions": detail["portions"],
+            # False when a product had no readable price, so the real cost is higher.
+            "complete": bool(usual) and len(priced) == len(usual),
+        }
+
+    def _remember_cost(self, recipe_id: str, cost: dict):
+        if self._recipe_prices is None:
+            stored = self._read("recipe_prices.json", {})
+            self._recipe_prices = stored if isinstance(stored, dict) else {}
+        self._recipe_prices[recipe_id] = {**cost, "at": time.time()}
+        while len(self._recipe_prices) > RECIPE_PRICE_ITEMS:
+            self._recipe_prices.pop(next(iter(self._recipe_prices)))
+        self._write("recipe_prices.json", self._recipe_prices)
+
+    def recipe_price(self, recipe_id: str) -> dict:
+        """A price indication for a recipe at its default portions, remembered
+        for a day so the recipe list does not ask Picnic again."""
+        self._check_recipe(recipe_id, None)
+        if self._recipe_prices is None:
+            stored = self._read("recipe_prices.json", {})
+            self._recipe_prices = stored if isinstance(stored, dict) else {}
+        known = self._recipe_prices.get(recipe_id)
+        if isinstance(known, dict) and time.time() - known.get("at", 0) < RECIPE_PRICE_MAX_AGE:
+            return {key: known.get(key) for key in ("price", "portions", "complete")}
+        detail = self._call(lambda api: self._recipe_detail(api, recipe_id, None, names=False))
+        cost = self._recipe_cost(detail)
+        with self._lock:
+            self._remember_cost(recipe_id, cost)
+        return cost
 
     @staticmethod
     def _check_recipe(recipe_id: str, portions):
@@ -637,7 +776,11 @@ class Desk:
 
     def recipe(self, recipe_id: str, portions: int | None = None) -> dict:
         self._check_recipe(recipe_id, portions)
-        return self._call(lambda api: self._recipe_detail(api, recipe_id, portions, names=True))
+        detail = self._call(lambda api: self._recipe_detail(api, recipe_id, portions, names=True))
+        if portions is None:  # the default portions: refresh the remembered price indication
+            with self._lock:
+                self._remember_cost(recipe_id, self._recipe_cost(detail))
+        return detail
 
     def recipe_add(self, recipe_id: str, portions: int | None, selected) -> dict:
         """Put the ticked ingredients of a recipe in the basket.
@@ -706,7 +849,8 @@ class Desk:
             "linked": linked,
         }
 
-    def raw_page(self, page_id: str, recipe_id: str | None = None, portions: int | None = None):
+    def raw_page(self, page_id: str, recipe_id: str | None = None, portions: int | None = None,
+                 product_id: str | None = None):
         """The untouched page as Picnic sent it, for working out parsing problems."""
         if not PAGE_ID.match(page_id or ""):
             raise DeskError("Unknown page.")
@@ -714,6 +858,10 @@ class Desk:
         if recipe_id:
             self._check_recipe(recipe_id, portions)
             path += f"?selling_group_id={recipe_id}" + (f"&portions={portions}" if portions else "")
+        elif product_id:
+            if not PRODUCT_ID.match(product_id):
+                raise DeskError("Unknown product.")
+            path += f"?id={product_id}&show_category_action=true"
         return self._call(lambda api: self._page(api, path))
 
     # ------------------------------------------------------------- self-check
@@ -743,13 +891,29 @@ class Desk:
             if not condition:
                 raise DeskError(message)
 
-        def picture(ref: str | None) -> str:
-            need(ref, "No picture to try: the step before found none.")
-            data = self.image(ref)
-            need(data, "Picnic did not return a picture.")
-            known = data[:4] == b"\x89PNG" or data[:3] == b"\xff\xd8\xff" or data[:4] == b"RIFF" or data.lstrip()[:4] == b"<svg"
-            need(known, "The answer was not a picture.")
-            return f"Loaded a picture of {len(data) // 1024 or 1} kB."
+        def pictures(refs) -> str:
+            refs = [ref for ref in refs or [] if ref][:CHECK_PICTURES]
+            need(refs, "No pictures to try: the step before found none.")
+            if hasattr(self.api, "demo_image"):
+                loaded = [ref for ref in refs if self.api.demo_image(ref)]
+                need(len(loaded) == len(refs), f"{len(loaded)} of {len(refs)} pictures loaded.")
+                return f"{len(loaded)} of {len(refs)} pictures loaded."
+            worked: dict[str, int] = {}
+            failed = []
+            for ref in refs:
+                data, variant, tried = self.pictures.load(ref, fresh=True)
+                if data:
+                    worked[variant] = worked.get(variant, 0) + 1
+                else:
+                    failed.append((ref, tried))
+            text = f"{len(refs) - len(failed)} of {len(refs)} pictures loaded."
+            if worked:
+                text += " Worked as: " + ", ".join(f"{name} ({count})" for name, count in sorted(worked.items(), key=lambda kv: -kv[1])) + "."
+            if failed:
+                ref, tried = failed[0]
+                text += f" Picture {ref[:16]}… failed; tried " + ", ".join(f"{label}: {outcome}" for label, outcome in tried) + "."
+            need(not failed, text)
+            return text
 
         def account():
             user = self._call(lambda api: api.get_user())
@@ -762,8 +926,23 @@ class Desk:
             need(tiles, f"No products came back for “{word}”.")
             priced = [t for t in tiles if isinstance(t["price"], int)]
             need(priced, "Products came back without prices.")
-            found["product_image"] = next((t["image"] for t in tiles if t["image"]), None)
+            found["product_images"] = [t["image"] for t in tiles if t["image"]]
+            found["product"] = next((t["id"] for t in tiles if not t["unavailable"]), tiles[0]["id"])
             return f"{len(tiles)} products for “{word}”, {len(priced)} with a price. First: {tiles[0]['name']}."
+
+        def product_page():
+            need(found.get("product"), "No product to open: the search found none.")
+            info = self.product(found["product"], refresh=True)
+            titles = ", ".join(section["title"] for section in info["sections"])
+            need(
+                info["description"] or info["sections"],
+                f"{info['name'] or found['product']} opened, but without a description or fold-out sections such as ingredients.",
+            )
+            return (
+                f"{info['name']}: description {'found' if info['description'] else 'missing'}, "
+                f"{len(info['sections'])} fold-out sections{f' ({titles})' if titles else ''}, "
+                f"{sum(len(group['items']) for group in info['allergens'])} allergens, {len(info['images'])} pictures."
+            )
 
         def basket():
             cart = self.cart()
@@ -791,7 +970,7 @@ class Desk:
             named = [r for r in recipes if r["name"]]
             need(named, "Recipes came back without names.")
             found["recipe"] = named[0]["id"]
-            found["recipe_image"] = next((r["image"] for r in recipes if r["image"]), None)
+            found["recipe_images"] = [r["image"] for r in recipes if r["image"]]
             return (
                 f"{len(recipes)} recipes, {len(named)} with a name, "
                 f"{len([r for r in recipes if r['image']])} with a picture, {len(listing['categories'])} categories."
@@ -809,12 +988,13 @@ class Desk:
 
         check("Account", account)
         check("Search", search)
-        check("Product pictures", lambda: picture(found.get("product_image")))
+        check("Product pictures", lambda: pictures(found.get("product_images")))
+        check("Product page", product_page)
         check("Basket", basket)
         check("Past deliveries", deliveries)
         check("Recipe overview", recipe_list)
         check("Opening a recipe", one_recipe)
-        check("Recipe pictures", lambda: picture(found.get("recipe_image")))
+        check("Recipe pictures", lambda: pictures(found.get("recipe_images")))
         return {
             "checks": checks,
             "not_checked": [
@@ -826,33 +1006,7 @@ class Desk:
     # ----------------------------------------------------------------- images
 
     def image(self, image_id: str) -> bytes | None:
-        with self._image_lock:
-            if image_id in self._images:
-                self._images.move_to_end(image_id)
-                return self._images[image_id]
         api = self.api
-        if api is None:
-            return None
-        data = None
-        if hasattr(api, "demo_image"):  # demo mode, see demo.py
+        if api is not None and hasattr(api, "demo_image"):  # demo mode, see demo.py
             return api.demo_image(image_id)
-        # Sizes named by both python-picnic-api2 and MRVDH/picnic-api; "large" is
-        # the one ivo-toby/mcp-picnic uses for recipe pictures.
-        sizes = ("medium", "large", "small") if "/" in image_id else ("medium", "small")
-        for size in sizes:
-            url = IMAGE_URL.format(cc=self.country.lower(), id=image_id, size=size)
-            try:
-                # Plain GET on the shared session: static files, no lock needed.
-                response = api.session.get(url)
-            except Exception:
-                return None
-            if response.status_code == 200 and response.content:
-                data = response.content
-                break
-        if data is None:
-            return None
-        with self._image_lock:
-            self._images[image_id] = data
-            while len(self._images) > IMAGE_CACHE_ITEMS:
-                self._images.popitem(last=False)
-        return data
+        return self.pictures.get(image_id)

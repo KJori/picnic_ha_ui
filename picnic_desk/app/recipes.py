@@ -17,6 +17,8 @@ from __future__ import annotations
 import json
 import re
 
+from pictures import variant_name
+
 HEX_ID = r"[a-f0-9]{24,32}"
 _ID = re.compile(rf"^{HEX_ID}$")
 _ID_REF = re.compile(rf"(?:selling_group_id|recipe_id|recipeIds)=({HEX_ID})")
@@ -29,6 +31,8 @@ _COLOR = re.compile(r"#\([^)]*\)")
 _LINK = re.compile(r"\[([^\]]+)\]\((?:action|app|https?)://[^)]*\)")
 _PRICE = re.compile(r"^(?:€\s*)?(\d{1,4})[,.](\d{2})(?:\s*€)?$")
 _TIME = re.compile(r"\b\d+\s*min\b", re.I)
+# A price somewhere in a line of tile text, e.g. "€ 2,45 p.p." or "vanaf 3.10 €".
+_PRICE_IN_LINE = re.compile(r"€\s*\d{1,3}[,.]\d{2}|\d{1,3}[,.]\d{2}\s*€")
 _BUTTON_WORDS = {
     "add", "ajouter", "ansehen", "bekijken", "hinzufügen", "toevoegen", "view", "voir",
     "nicht alles vorrätig",
@@ -76,13 +80,16 @@ def _lines(node) -> list[tuple[str, str | None]]:
     return out
 
 
-def _image(node) -> str | None:
-    """First image under a node, as 'namespace/id' or a bare id."""
+def _image(node) -> tuple[str | None, str | None]:
+    """First image under a node: ('namespace/id' or a bare id, the variant
+    Picnic names for it such as 'padded.webp', or None)."""
     for item in walk(node):
         source = item.get("source")
         if item.get("type") == "IMAGE" and isinstance(source, dict) and isinstance(source.get("id"), str):
-            return _image_ref(source["id"], source.get("namespace"))
-    return None
+            return _image_ref(source["id"], source.get("namespace")), variant_name(
+                item.get("derivativeType"), item.get("extension")
+            )
+    return None, None
 
 
 def _image_ref(image_id: str, namespace) -> str:
@@ -124,7 +131,7 @@ def _label(slug: str) -> str:
 def parse_list(page) -> dict:
     """Recipes on a cookbook or recipe-category page.
 
-    Returns {"recipes": [{id, name, image, segments}], "segments": [{id, label}],
+    Returns {"recipes": [{id, name, image, image_variant, price_text, segments}], "segments": [{id, label}],
     "categories": [{id, label}]}.
     """
     recipes: dict[str, dict] = {}
@@ -132,7 +139,8 @@ def parse_list(page) -> dict:
 
     def entry(recipe_id: str) -> dict:
         return recipes.setdefault(
-            recipe_id, {"id": recipe_id, "name": None, "image": None, "segments": []}
+            recipe_id,
+            {"id": recipe_id, "name": None, "image": None, "image_variant": None, "price_text": None, "segments": []},
         )
 
     def tag(item: dict, segment: dict | None):
@@ -183,7 +191,11 @@ def parse_list(page) -> dict:
                 name = titled[0] if titled else (max(plausible, key=len) if plausible else None)
             item["name"] = name.strip() if isinstance(name, str) and name.strip() else None
         if not item["image"]:
-            item["image"] = _image(node)
+            item["image"], item["image_variant"] = _image(node)
+        if not item["price_text"] and is_tile:
+            # If the tile itself shows a price, pass its wording on unchanged.
+            shown = _lines(node.get("pml") if isinstance(node.get("pml"), dict) else node)
+            item["price_text"] = next((text for text, _ in shown if _PRICE_IN_LINE.search(text) and len(text) <= 40), None)
 
     # Names that only exist inside script strings (the user's own recipes).
     missing = {item["id"] for item in recipes.values() if not item["name"]}
@@ -227,11 +239,13 @@ def _tile_display(node: dict) -> dict:
     # The pack size normally follows the name; only look before it as a last resort.
     rest = [entry for entry in usable if name_entry and entry[0] > name_entry[0]]
     rest = rest or [entry for entry in usable if entry is not name_entry]
+    image, image_variant = _image(node)
     return {
         "name": name_entry[1] if name_entry else None,
         "unit": rest[0][1] if rest else "",
         "price": price,
-        "image": _image(node),
+        "image": image,
+        "image_variant": image_variant,
     }
 
 
@@ -246,6 +260,7 @@ def parse_detail(page, recipe_id: str | None = None) -> dict | None:
     title: dict = {}
     header: dict = {}
     image = None
+    image_variant = None
 
     for node in walk(page):
         if (
@@ -274,7 +289,7 @@ def parse_detail(page, recipe_id: str | None = None) -> dict | None:
                 if primary:
                     image = _image_ref(primary["id"], primary.get("namespace"))
         if image is None and node.get("id") == "selling-group-details-image":
-            image = _image(node)
+            image, image_variant = _image(node)
 
     if context is None:
         return None
@@ -317,6 +332,7 @@ def parse_detail(page, recipe_id: str | None = None) -> dict | None:
                 "unit": tile.get("unit") or "",
                 "price": tile.get("price"),
                 "image": tile.get("image"),
+                "image_variant": tile.get("image_variant"),
             }
         )
 
@@ -329,5 +345,6 @@ def parse_detail(page, recipe_id: str | None = None) -> dict | None:
         "portions": portions if isinstance(portions, int) and portions > 0 else (default if isinstance(default, int) else 2),
         "default_portions": default if isinstance(default, int) else None,
         "image": image,
+        "image_variant": image_variant,
         "ingredients": ingredients,
     }

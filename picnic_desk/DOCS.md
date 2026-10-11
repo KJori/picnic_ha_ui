@@ -22,6 +22,8 @@ For Germany or France, set `country_code` on the Configuration tab and restart.
 
 - **Search**: type in the box. Words separated by commas are searched one
   after the other.
+- **Product page**: click a product, in the results, the basket or a recipe,
+  for its pictures, description, allergens, ingredients and nutrition.
 - **Shortcuts**: the labels under the search box are saved searches. Use
   **Edit shortcuts** to add your own or remove one. They are not Picnic's own
   categories, so adjust the search words until a shortcut shows what you want.
@@ -32,13 +34,17 @@ For Germany or France, set `country_code` on the Configuration tab and restart.
 - **Saved**: products you starred.
 - **Recipes**: Picnic's recipes. Open one, set the portions, untick what you
   already have, and add the rest. The second list holds what Picnic assumes is
-  in your cupboard; tick anything you need from it.
+  in your cupboard; tick anything you need from it. The price on a card is
+  what the products Picnic adds by default cost, as whole packs, for the
+  recipe's standard portions. It is worked out once per recipe and kept for a
+  day.
 - **Basket**: the receipt on the right. It follows the real Picnic basket, so
   changes made in the phone app show up when you return to this tab.
 
-Keyboard: `/` jumps to the search box, `Enter` moves into the results, the
-arrow keys move between products, `+` and `-` change the amount, `s` saves a
-product, `Esc` clears the search.
+Keyboard: `/` jumps to the search box and `Enter` moves into the results.
+On a product, `Enter` opens its page, `+` and `-` change the amount, `s` saves
+it and the arrow keys move around. `Esc` closes a product page or clears the
+search.
 
 ## How recipes are added
 
@@ -60,7 +66,8 @@ In the app's own data folder, which Home Assistant includes in backups:
   password is sent to Picnic once at sign-in and is never written anywhere.
   **Sign out** deletes the token.
 - `saved.json`, `shortcuts.json`: your starred products and shortcuts.
-- `history.json`: the cached "Bought before" list.
+- `history.json`, `recipe_prices.json`: the cached "Bought before" list and
+  recipe price indications. **Sign out** deletes both.
 
 The app has no open network port. It only accepts connections from Home
 Assistant's ingress gateway, behind your Home Assistant login.
@@ -68,9 +75,13 @@ Assistant's ingress gateway, behind your Home Assistant login.
 ## If something does not work
 
 - Run **Check what works with Picnic** and note which part fails.
-- When recipes fail to load, the screen offers **Download what Picnic sent**.
-  That file shows exactly what needs fixing. It can contain your name and
-  address, so look through it before sharing.
+- When recipes fail to load, or a product page comes without description or
+  ingredients, the screen offers **Download what Picnic sent**. That file
+  shows exactly what needs fixing. It can contain your name and address, so
+  look through it before sharing.
+- Pictures: the check lists how many of a sample loaded, which address form
+  worked, and for a picture that failed every form that was tried with
+  Picnic's answer to each.
 - The Log tab shows the underlying error.
 
 ## Limits
@@ -79,4 +90,8 @@ Assistant's ingress gateway, behind your Home Assistant login.
   search, the basket, recipes or sign-in.
 - No slot picking, checkout or payment.
 - Recipe names, pack sizes and prices are read from the text on Picnic's
-  recipe pages and can be incomplete.
+  recipe pages and can be incomplete. A recipe's price indication says "at
+  least" when a product's price could not be read.
+- Ingredients, allergens and nutrition come from fold-out sections that only
+  one other open-source client describes. When Picnic's page differs, the
+  product page shows less.

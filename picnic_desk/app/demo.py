@@ -19,7 +19,11 @@ import math
 from urllib.parse import parse_qs, urlparse
 
 from python_picnic_api2 import PicnicAPI
+from python_picnic_api2 import client as picnic_client
 from python_picnic_api2.session import Picnic2FAError
+
+# The newer app version desk.py presents for pages; see PAGE_AGENT there.
+NEWER_AGENT = "30100;1.246.1-15599;"
 
 # id, name, unit, price in cents, optional promo price, optional label
 CATALOGUE = [
@@ -113,7 +117,41 @@ def _image_id(product_id: str) -> str:
     return hashlib.sha256(product_id.encode()).hexdigest()
 
 
+def _tile_image_id(product_id: str) -> str:
+    """The picture a search tile names. As in Picnic's own sample responses,
+    for some products this is a different id than the product's image_id."""
+    if int(product_id[1:]) % 2:
+        return _image_id(product_id)
+    return hashlib.sha256(("tile" + product_id).encode()).hexdigest()
+
+
+def _second_image_id(product_id: str) -> str:
+    return hashlib.sha256(("back" + product_id).encode()).hexdigest()
+
+
 IMAGE_OWNERS = {_image_id(row[0]): row for row in CATALOGUE}
+IMAGE_OWNERS.update({_tile_image_id(row[0]): row for row in CATALOGUE})
+IMAGE_OWNERS.update({_second_image_id(row[0]): row for row in CATALOGUE})
+
+# description, ingredients, allergens (contains, may contain), nutrition
+PRODUCT_TEXT = {
+    "s1001": ("Romige haverdrank die goed opschuimt in koffie.",
+              "Water, **haver** (10%), raapzaadolie, calciumcarbonaat, zout, vitamine D2, B12.",
+              (["Haver (gluten)"], []), "Energie 247 kJ / 59 kcal\nVetten 3,0 g\nKoolhydraten 6,6 g\nEiwitten 1,0 g"),
+    "s1004": ("Stevige tofu om te bakken, grillen of roerbakken.",
+              "Water, **soja**bonen (38%), stremsel: magnesiumchloride.",
+              (["Soja"], []), "Energie 536 kJ / 128 kcal\nVetten 7,5 g\nKoolhydraten 1,0 g\nEiwitten 13,5 g"),
+    "s1022": ("Pindakaas van alleen geroosterde pinda's.",
+              "**Pinda's** (100%).",
+              (["Pinda's"], ["Noten", "Sesam"]), "Energie 2590 kJ / 625 kcal\nVetten 51 g\nKoolhydraten 12 g\nEiwitten 26 g"),
+    "s1019": ("Volkoren pasta van harde tarwe.",
+              "Volkoren harde **tarwe**griesmeel.",
+              (["Tarwe (gluten)"], ["Ei", "Soja"]), "Energie 1480 kJ / 350 kcal\nVetten 2,5 g\nKoolhydraten 64 g\nEiwitten 13 g"),
+    "s1029": ("Pure chocolade met 70% cacao.",
+              "Cacaomassa, suiker, cacaoboter, emulgator: **soja**lecithine.",
+              (["Soja"], ["Melk", "Noten", "Pinda's"]), "Energie 2330 kJ / 560 kcal\nVetten 41 g\nKoolhydraten 33 g\nEiwitten 8 g"),
+}
+NO_INGREDIENTS = {"s1031", "s1032"}  # household products
 
 
 def _iso(moment: dt.datetime) -> str:
@@ -229,6 +267,9 @@ class DemoPicnicAPI(PicnicAPI):
                         "decorators": decorators,
                         "price_ranges": BUNDLES.get(product_id),
                     },
+                    "sellingUnitImageConfiguration": {
+                        "derivativeType": "padded", "extension": "webp", "id": _tile_image_id(product_id),
+                    },
                 }
             )
         return {"body": {"child": {"children": tiles}}}
@@ -245,6 +286,60 @@ class DemoPicnicAPI(PicnicAPI):
             "status": "COMPLETED",
             "orders": [{"type": "ORDER", "id": f"o{index}", "items": self._lines(PAST_ORDERS[index])}],
         }
+
+    # --------------------------------------------------------------- product
+
+    @staticmethod
+    def _product_payload(product_id: str) -> dict:
+        """A product page in the shape of python-picnic-api2's sample pages.
+        The allergens, fold-out sections and picture gallery (the parts named in
+        MRVDH/picnic-api) are only served to the newer app version, so that the
+        second request in desk.py's product() is exercised."""
+        if product_id not in BY_ID:
+            return {"error": {"code": "NOT_FOUND", "message": "Product niet gevonden"}}
+        _, name, unit, price, promo, _ = BY_ID[product_id]
+        brand, _, title = name.partition(" ") if name.startswith(("Picnic ", "Oatly ", "Alpro ")) else ("", "", name)
+        pml = lambda container_id, children: {  # noqa: E731
+            "type": "PML", "id": container_id, "pml": {"component": {"type": "STACK", "children": children}}}
+        main = [{"type": "CONTAINER", "child": {"markdown": f"#(#333333){title[:1].upper() + title[1:]}#(#333333)",
+                                                "textType": "HEADER1", "type": "RICH_TEXT"}}]
+        if brand:
+            main.append({"markdown": brand, "textAttributes": {"weight": "REGULAR"}, "type": "RICH_TEXT"})
+        main.append({"type": "STACK", "children": [
+            {"markdown": f"#(#333333){unit}#(#333333)", "type": "RICH_TEXT"},
+            {"markdown": "€%d.%02d/stuk" % divmod(promo or price, 100), "type": "RICH_TEXT"},
+        ]})
+        prices = [{"price": promo or price, "type": "PRICE"}]
+        if promo:
+            prices.append({"price": price, "isCrossed": True, "type": "PRICE"})
+        main.append({"type": "STACK", "children": prices})
+
+        description, ingredients, (contains, may_contain), nutrition = PRODUCT_TEXT.get(
+            product_id, (f"{name}, {unit}.", "Zie de verpakking.", ([], []), ""))
+        children = [
+            pml("product-details-page-root-main-container", main),
+            {"type": "image_gallery", "image_id": _image_id(product_id)},
+            pml("product-page-description", [_rich(description)]),
+            pml("product-page-highlights", [_rich("**Elke dag** lage prijs"), _rich(unit)]),
+        ]
+        if picnic_client._HEADERS.get("x-picnic-agent") == NEWER_AGENT:
+            if contains or may_contain:
+                texts = (["Bevat", *contains] if contains else []) + (["Bevat mogelijk", *may_contain] if may_contain else [])
+                children.append(pml("product-page-allergies", [_rich(text) for text in texts]))
+            if product_id not in NO_INGREDIENTS:
+                items = [{"header": _rich("**Ingrediënten**"), "body": {"type": "STACK", "children": [_rich(ingredients)]}}]
+                if nutrition:
+                    items.append({"header": _rich("**Voedingswaarde**"),
+                                  "body": {"type": "STACK", "children": [_rich("Per 100 g"), _rich(nutrition)]}})
+                items.append({"header": _rich("**Extra informatie**"),
+                              "body": {"type": "STACK", "children": [_rich("Koel en droog bewaren.")]}})
+                children.append({"type": "PML", "id": "accordion-list",
+                                 "pml": {"component": {"type": "ACCORDION", "items": items}}})
+            children.append(pml("product-page-image-gallery-main-image-container", [
+                {"type": "IMAGE", "source": {"id": _image_id(product_id)}, "derivativeType": "padded", "extension": "webp"},
+                {"type": "IMAGE", "source": {"id": _second_image_id(product_id)}, "derivativeType": "padded", "extension": "webp"},
+            ]))
+        return {"body": {"child": {"child": {"children": children}}}}
 
     # --------------------------------------------------------------- recipes
 
@@ -370,6 +465,8 @@ class DemoPicnicAPI(PicnicAPI):
             return self._search_payload(parse_qs(parsed.query).get("search_term", [""])[0])
         if parsed.path == "/cart":
             return self._cart_payload()
+        if parsed.path == "/pages/product-details-page-root":
+            return self._product_payload(parse_qs(parsed.query).get("id", [""])[0])
         if parsed.path == "/pages/cookbook-page-content":
             return self._recipe_list_payload(None)
         if parsed.path.startswith("/pages/recipe_cattree_"):

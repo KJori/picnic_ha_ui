@@ -45,7 +45,8 @@ class ServerCase(unittest.TestCase):
 class SignedOut(ServerCase):
     def test_everything_private_needs_a_session(self):
         for path in ("/api/cart", "/api/search?q=tofu", "/api/history", "/api/recipes", "/api/selfcheck",
-                     "/api/recipes/" + "a" * 24, "/api/raw-page/cookbook-page-content"):
+                     "/api/recipes/" + "a" * 24, "/api/recipes/" + "a" * 24 + "/price", "/api/products/s1004",
+                     "/api/raw-page/cookbook-page-content"):
             response = self.client.get(path)
             self.assertEqual((response.status_code, response.get_json().get("signed_out")), (401, True), path)
         self.assertEqual(self.client.post("/api/cart/change", json={"id": "s1004", "delta": 1}).status_code, 401)
@@ -109,6 +110,27 @@ class SignedIn(ServerCase):
         self.assertEqual(sorted(l["id"] for l in added["cart"]["lines"]), sorted(ids))
         self.assertEqual(self.client.get("/api/recipes?category=recipe_cattree_vegan").status_code, 200)
 
+    def test_product_page(self):
+        info = self.client.get("/api/products/s1004").get_json()
+        self.assertEqual((info["name"], info["price"]), ("Picnic Tofu naturel", 179))
+        self.assertEqual(info["sections"][0]["title"], "Ingrediënten")
+        self.assertEqual(self.client.get("/api/products/s1004?refresh=1").status_code, 200)
+        for bad in ("nope", "s1%3B", "s99999999999999999", "s9999"):
+            self.assertEqual(self.client.get(f"/api/products/{bad}").status_code, 400, bad)
+        raw = self.client.get("/api/raw-page/product-details-page-root?product=s1004")
+        self.assertEqual(raw.status_code, 200)
+        self.assertIn("product-details-page-root-main-container", raw.get_data(as_text=True))
+        self.assertEqual(self.client.get("/api/raw-page/product-details-page-root?product=x").status_code, 400)
+
+    def test_recipe_price(self):
+        recipe_id = self.client.get("/api/recipes").get_json()["recipes"][0]["id"]
+        self.assertEqual(self.client.get(f"/api/recipes/{recipe_id}/price").get_json(), {"price": 485, "portions": 2, "complete": True})
+        self.assertEqual(self.client.get("/api/recipes/nope/price").status_code, 400)
+        self.assertNotIn("image_variant", self.client.get("/api/recipes").get_json()["recipes"][0])
+        detail = self.client.get(f"/api/recipes/{recipe_id}").get_json()
+        self.assertNotIn("image_variant", detail)
+        self.assertNotIn("image_variant", detail["ingredients"][0])
+
     def test_recipe_input_is_checked(self):
         recipe_id = self.client.get("/api/recipes").get_json()["recipes"][0]["id"]
         bad = [
@@ -134,6 +156,8 @@ class SignedIn(ServerCase):
         product = self.client.get("/api/search?q=tofu").get_json()["products"][0]
         picture = self.client.get(f"/api/image/{product['image']}")
         self.assertEqual((picture.status_code, picture.mimetype), (200, "image/svg+xml"))
+        for ref in self.client.get("/api/products/s1004").get_json()["images"]:
+            self.assertEqual(self.client.get(f"/api/image/{ref}").status_code, 200)
         self.assertEqual(picture.headers["X-Content-Type-Options"], "nosniff")
         self.assertIn("default-src 'none'", picture.headers["Content-Security-Policy"])
         recipe = self.client.get("/api/recipes").get_json()["recipes"][0]

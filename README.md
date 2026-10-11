@@ -2,7 +2,8 @@
 
 A Home Assistant app (add-on) that puts a desktop screen for filling your
 Picnic basket in the sidebar: search, shortcuts for the things you always buy,
-a pasted shopping list, what you bought before, and Picnic's recipes.
+a pasted shopping list, what you bought before, product pages with
+ingredients, and Picnic's recipes.
 
 Picnic only has a phone app and no official programming interface. This talks
 to the same service the phone app uses, through the unofficial

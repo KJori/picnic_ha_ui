@@ -28,7 +28,7 @@ project.** That is what "Check what works with Picnic" in the app is for.
 | Read the basket | `GET /cart` | Library, MRVDH | Library sample `cart_de.json` (an empty basket) |
 | Add, remove, empty | `POST /cart/add_product`, `/cart/remove_product`, `/cart/clear` | Library, MRVDH | Request bodies compared with the library's |
 | Past deliveries | `POST /deliveries/summary`, `GET /deliveries/<id>` | Library, MRVDH | Library samples `current_deliveries_de.json`, `delivery_de.json` |
-| Product name for a recipe line | `GET /pages/product-details-page-root?id=` | Library | Library sample `product_details_page_nl.json` |
+| Product page | `GET /pages/product-details-page-root?id=&show_category_action=true` | Library `client.py` (`get_article`) | Library sample `product_details_page_nl.json` |
 
 ## Made by this app, because the library has no recipe support
 
@@ -39,7 +39,9 @@ project.** That is what "Check what works with Picnic" in the app is for.
 | One recipe | `GET /pages/selling-group-details-page?selling_group_id=&portions=` | MRVDH, mcp-picnic | Page shapes taken from those projects' tests |
 | Put a recipe in the basket | `POST /pages/task/assign-selling-group-to-basket` with `{"payload": {"selling_group_id", "portions"}}` | MRVDH `recipe/types.ts` (read from the app's own page script), mcp-picnic | Request body asserted; the answer is not relied on |
 | App version sent with recipe calls | `x-picnic-agent: 30100;1.246.1-15599;` | MRVDH `http-client.ts` | Asserted; falls back to the library's version |
-| Pictures | `/static/images/<id>/<size>.png`, `/static/images/recipes/<id>/<size>.png` | Library `helper.py` | Address pattern only |
+| Pictures | `/static/images/<id>/<size>.png`, `/static/images/recipes/<id>/<size>.png` | Library `helper.py`, MRVDH `catalog/service.ts` | Address pattern only |
+| Pictures as a tile names them | `/static/images/<id>/<derivativeType>.<extension>`, for example `padded.webp` | The fields are in the library's sample search pages and typed in MRVDH `types/fusion.ts`; putting them together into this address is a reading of those fields, not something written down | Address pattern only |
+| Product page asked a second time | Same call with `x-picnic-agent: 30100;1.246.1-15599;` when the first answer has no fold-out sections | MRVDH read those sections with that app version | Asserted |
 
 ## Fields that are read, and where they are described
 
@@ -55,6 +57,10 @@ project.** That is what "Check what works with Picnic" in the app is for.
 | Recipe `selling_units[]`: `selling_unit_id`, `ingredient_id`, `quantity`, `checked`, `status` | The products of a recipe; `checked` is Picnic's default tick | MRVDH `recipe/types.ts`, mcp-picnic |
 | Tile contexts `recipe_id`, `recipe_name`, `segment_type`, `segment_name` | Recipe lists and their groups | MRVDH `recipe/helpers.ts` |
 | Error answers `{"error": {"code", "message"}}` | Shown as "Picnic says: …" | Library, MRVDH `http-client.ts` |
+| Tile `sellingUnitImageConfiguration`: `id`, `derivativeType`, `extension` | Which picture a search tile shows. In the library's samples the id differs from `sellingUnit.image_id` for two of three products | Library samples `search_page_nl.json`, `search_page_de.json`; MRVDH `types/fusion.ts` |
+| Picture component `derivativeType`, `extension` | The same for pictures on recipe and product pages | MRVDH `types/fusion.ts` |
+| Product page: name, brand, pack size, price, crossed-out price, price per unit, first picture, description, highlights | Read by the library's own `Article.from_page` | Library `models/article.py` |
+| Product page containers `product-page-allergies`, `accordion-list` (items with `header` and `body`), `product-page-image-gallery-main-image-container`, `description` | Allergens, the fold-out sections such as ingredients and nutrition, all pictures | MRVDH `catalog/helpers.ts`, marked experimental there. No captured sample exists |
 
 ## What nobody has written down, so it is not relied on
 
@@ -70,6 +76,12 @@ project.** That is what "Check what works with Picnic" in the app is for.
   product tiles on the recipe page, the way mcp-picnic does it. If the layout
   differs, a pack size can end up where the name should be. Missing names are
   filled in from the product page through the library.
+- **Which picture addresses exist.** The sizes in the two libraries and the
+  `padded.webp` form from the tiles are all tried, the tile's own form first.
+  The self-check reports which form worked on your account.
+- **A recipe's price** is not taken from Picnic. It is the sum of the pack
+  prices of the products Picnic ticks by default, read from the recipe page.
+  If a recipe tile itself shows a price, that text is shown instead.
 - **What Picnic returns for a shortcut word** such as "vegan". Shortcuts are
   saved searches, not Picnic's own category tree, which newer app versions
   receive in a format this app does not read.

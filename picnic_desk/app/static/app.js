@@ -166,7 +166,11 @@
       if (line.id === state.fresh) item.classList.add("fresh");
       item.dataset.id = line.id;
       const what = el("div", "what");
-      what.append(el("b", "", line.name));
+      const title = el("button", "name", line.name);
+      title.type = "button";
+      title.title = "Show description and ingredients";
+      title.addEventListener("click", () => openProduct({ id: line.id, name: line.name, unit: line.unit, max: line.max, image: line.image }));
+      what.append(title);
       const detail = [line.unit, line.recipe ? "for a recipe" : ""].filter(Boolean).join(", ");
       if (detail) what.append(el("span", "", detail));
       item.append(
@@ -307,13 +311,18 @@
 
     item.append(picture, name, meta, buy, star);
     item.addEventListener("keydown", (event) => tileKeys(event, item, product, want));
+    item.addEventListener("click", (event) => {
+      if (!event.target.closest("button")) openProduct(product);
+    });
     return item;
   }
 
   function tileKeys(event, item, product, want) {
     if (event.target !== item || event.ctrlKey || event.metaKey || event.altKey) return;
     const key = event.key;
-    if ((key === "+" || key === "=" || key === "Enter") && !product.unavailable) {
+    if (key === "Enter" || key === "i") {
+      openProduct(product);
+    } else if ((key === "+" || key === "=") && !product.unavailable) {
       change(product, (state.qty.get(product.id) || 0) === 0 ? want : 1);
     } else if (key === "-" || key === "_") {
       change(product, -1);
@@ -337,6 +346,156 @@
     list.append(...products.map((product) => tile(product, options(product))));
     return list;
   }
+
+  // -------------------------------------------------------------- product page
+
+  const sheet = $("#product");
+
+  /** Picnic's text as nodes: **bold** becomes <strong>, line breaks are kept. */
+  function rich(text) {
+    const fragment = document.createDocumentFragment();
+    String(text).split("\n").forEach((line, index) => {
+      if (index) fragment.append(document.createElement("br"));
+      line.split(/\*\*(.+?)\*\*/g).forEach((part, at) => {
+        if (part) fragment.append(at % 2 ? el("strong", "", part) : part);
+      });
+    });
+    return fragment;
+  }
+
+  function productPicture(ref, className) {
+    const box = el("div", className);
+    if (ref) {
+      const img = document.createElement("img");
+      img.alt = "";
+      img.src = `api/image/${ref}`;
+      img.addEventListener("error", () => img.remove());
+      box.append(img);
+    }
+    return box;
+  }
+
+  function renderProduct(product, info, problem) {
+    const close = el("button", "quiet close", "Close");
+    close.type = "button";
+    close.addEventListener("click", () => sheet.close());
+
+    const images = info && info.images.length ? info.images : (product.image ? [product.image] : []);
+    const gallery = el("div", "gallery");
+    const main = productPicture(images[0], "picture");
+    gallery.append(main);
+    if (images.length > 1) {
+      const thumbs = el("div", "thumbs");
+      images.forEach((ref, index) => {
+        const thumb = el("button", "thumb");
+        thumb.type = "button";
+        thumb.setAttribute("aria-label", `Picture ${index + 1} of ${images.length}`);
+        thumb.setAttribute("aria-pressed", String(index === 0));
+        thumb.append(productPicture(ref, "picture"));
+        thumb.addEventListener("click", () => {
+          gallery.firstChild.replaceWith(productPicture(ref, "picture"));
+          for (const other of $$(".thumb", thumbs)) other.setAttribute("aria-pressed", String(other === thumb));
+        });
+        thumbs.append(thumb);
+      });
+      gallery.append(thumbs);
+    }
+
+    const words = el("div", "words");
+    const name = (info && info.name) || product.name || "";
+    const brand = info && info.brand && !name.startsWith(info.brand) ? info.brand : "";
+    if (brand) words.append(el("p", "brand", brand));
+    const heading = el("h2", "", name);
+    heading.id = "product-name";
+    words.append(heading);
+    const unit = (info && info.unit) || product.unit || "";
+    const perUnit = info && info.price_per_unit;
+    if (unit || perUnit) words.append(el("p", "hint", [unit, perUnit].filter(Boolean).join(", ")));
+
+    const price = info && info.price != null ? info.price : product.price;
+    const buy = el("div", "buy");
+    const pricing = el("span", "pricing");
+    if (price != null) pricing.append(el("span", "price", money(price)));
+    if (info && info.was != null && info.was > price) {
+      const was = el("s", "", money(info.was));
+      was.setAttribute("aria-label", `was ${money(info.was)}`);
+      pricing.append(was);
+    }
+    buy.append(pricing);
+    if (!product.unavailable) buy.append(stepper({ max: 99, ...product, name }));
+    else buy.append(el("span", "gone", product.unavailable));
+    words.append(buy);
+    if (info && info.multipack) words.append(el("p", "hint", "Multipack: Picnic shows the price per piece here. The basket shows what the pack costs."));
+    if (info && info.highlights.length) {
+      const list = el("ul", "highlights");
+      for (const text of info.highlights) { const item = el("li"); item.append(rich(text)); list.append(item); }
+      words.append(list);
+    }
+
+    const head = el("div", "sheet-head");
+    head.append(gallery, words);
+    const nodes = [close, head];
+
+    if (problem) {
+      const note = el("p", "hint", `${problem} `);
+      const link = el("a", "quiet", "Download what Picnic sent");
+      link.href = `api/raw-page/product-details-page-root?product=${encodeURIComponent(product.id)}`;
+      link.download = "";
+      note.append(link, " to help get it fixed.");
+      nodes.push(note);
+    } else if (!info) {
+      nodes.push(el("p", "hint", "Fetching the description and ingredients."));
+    } else {
+      if (info.description) {
+        const text = el("p", "description");
+        text.append(rich(info.description));
+        nodes.push(text);
+      }
+      if (info.allergens.length) {
+        const box = el("p", "allergens");
+        info.allergens.forEach((group, index) => {
+          if (index) box.append(document.createElement("br"));
+          box.append(el("b", "", `${group.label || "Allergens"}: `), group.items.join(", "));
+        });
+        nodes.push(box);
+      }
+      info.sections.forEach((section, index) => {
+        const fold = el("details", "fold");
+        fold.open = index === 0;
+        const body = el("div");
+        body.append(rich(section.text));
+        fold.append(el("summary", "", section.title), body);
+        nodes.push(fold);
+      });
+      if (!info.description && !info.sections.length && !info.allergens.length) {
+        const note = el("p", "hint", "Picnic's page for this product came without a description or ingredients this add-on can read. ");
+        const link = el("a", "quiet", "Download what Picnic sent");
+        link.href = `api/raw-page/product-details-page-root?product=${encodeURIComponent(product.id)}`;
+        link.download = "";
+        note.append(link, " to help get it fixed.");
+        nodes.push(note);
+      } else if (!info.sections.length) {
+        nodes.push(el("p", "hint", "Picnic lists no ingredients for this product."));
+      }
+    }
+    sheet.replaceChildren(...nodes);
+  }
+
+  async function openProduct(product) {
+    sheet.dataset.id = product.id;
+    renderProduct(product, null);
+    if (!sheet.open) sheet.showModal();
+    try {
+      const info = await api(`api/products/${encodeURIComponent(product.id)}`);
+      if (sheet.dataset.id !== product.id || !sheet.open) return;
+      renderProduct(product, info);
+    } catch (err) {
+      if (err instanceof SignedOut) { sheet.close(); return; }
+      if (sheet.dataset.id === product.id && sheet.open) renderProduct(product, null, err.message);
+    }
+  }
+
+  sheet.addEventListener("click", (event) => { if (event.target === sheet) sheet.close(); });
 
   // ---------------------------------------------------------------------- saved
 
@@ -378,7 +537,8 @@
     const hint = el("p", "hint");
     hint.append(
       "Type to search, or pick a shortcut. Press ", el("strong", "", "/"), " to jump to the search box and ",
-      el("strong", "", "Enter"), " to move into the results. On a product, ",
+      el("strong", "", "Enter"), " to move into the results. Click a product, or press ",
+      el("strong", "", "Enter"), " on it, for its description and ingredients. On a product, ",
       el("strong", "", "+"), " and ", el("strong", "", "−"), " change the amount, ",
       el("strong", "", "s"), " saves it, and the arrow keys move around. Separate words with a comma to search for several things at once.",
     );
@@ -611,11 +771,62 @@
       img.addEventListener("error", () => img.remove());
       picture.append(img);
     }
-    button.append(picture, el("span", "name", recipe.name || "Recipe without a name"));
+    const cost = el("span", "cost");
+    button.append(picture, el("span", "name", recipe.name || "Recipe without a name"), cost);
     button.addEventListener("click", () => openRecipe(recipe.id));
     item.append(button);
+    if (recipe.price_text) {
+      cost.textContent = recipe.price_text;  // the price Picnic prints on the tile
+    } else if (recipeCosts.has(recipe.id)) {
+      paintCost(cost, recipeCosts.get(recipe.id));
+    } else {
+      cost.dataset.recipe = recipe.id;
+      costWatcher.observe(cost);
+    }
     return item;
   }
+
+  // Price indications: one request per recipe, only for cards that are in view,
+  // two at a time. The server remembers each answer for a day.
+  const recipeCosts = new Map();
+  const costQueue = [];
+  let costsRunning = 0;
+
+  function costText(cost) {
+    if (!cost || cost.price == null) return "";
+    const portions = cost.portions === 1 ? "1 portion" : `${cost.portions} portions`;
+    return `${cost.complete ? "about" : "at least"} ${money(cost.price)} for ${portions}`;
+  }
+
+  function paintCost(node, cost) {
+    node.textContent = costText(cost);
+    if (cost && cost.price != null && cost.portions > 1) {
+      node.title = `${money(Math.round(cost.price / cost.portions))} per portion, for the products Picnic adds by default`;
+    }
+  }
+
+  function pumpCosts() {
+    while (costsRunning < 2 && costQueue.length) {
+      const node = costQueue.shift();
+      const id = node.dataset.recipe;
+      if (!node.isConnected) continue;
+      if (recipeCosts.has(id)) { paintCost(node, recipeCosts.get(id)); continue; }
+      costsRunning += 1;
+      api(`api/recipes/${id}/price`)
+        .then((cost) => { recipeCosts.set(id, cost); paintCost(node, cost); })
+        .catch(() => { /* a missing indication is not worth an error message */ })
+        .finally(() => { costsRunning -= 1; pumpCosts(); });
+    }
+  }
+
+  const costWatcher = new IntersectionObserver((entries) => {
+    for (const entry of entries) {
+      if (!entry.isIntersecting) continue;
+      costWatcher.unobserve(entry.target);
+      costQueue.push(entry.target);
+    }
+    pumpCosts();
+  }, { rootMargin: "150px" });
 
   async function openRecipe(id, portions) {
     const run = ++recipeRun;
@@ -694,7 +905,8 @@
       const chosen = recipe.ingredients.filter((item) => recipe.ticked.has(item.id));
       const sum = chosen.reduce((cents, item) => cents + (item.price || 0) * item.qty, 0);
       const priced = chosen.every((item) => item.price != null);
-      total.textContent = chosen.length ? `${priced ? "" : "At least "}${money(sum)} for what is ticked` : "";
+      const each = recipe.portions > 1 ? `, ${money(Math.round(sum / recipe.portions))} per portion` : "";
+      total.textContent = chosen.length ? `${priced ? "" : "At least "}${money(sum)} for what is ticked${each}` : "";
       add.textContent = chosen.length === 1 ? "Add 1 ingredient to the basket" : `Add ${chosen.length} ingredients to the basket`;
       add.disabled = chosen.length === 0;
     };
@@ -725,6 +937,13 @@
       else if (item.unit) what.append(el("span", "", item.unit));
       const have = state.qty.get(item.id) || 0;
       if (have) what.append(el("span", "have", `${have} already in the basket`));
+      const more = el("button", "quiet", "Description and ingredients");
+      more.type = "button";
+      more.addEventListener("click", (event) => {
+        event.preventDefault();
+        openProduct({ id: item.id, name: item.name, unit: item.unit, price: item.price, image: item.image });
+      });
+      what.append(more);
       label.append(
         tick, thumb, what,
         el("span", "times", `${item.qty} ×`),
@@ -1026,7 +1245,7 @@
 
   document.addEventListener("keydown", (event) => {
     const typing = /^(INPUT|TEXTAREA)$/.test(event.target.tagName);
-    if (event.key === "/" && !typing && !$("#desk").hidden) {
+    if (event.key === "/" && !typing && !$("#desk").hidden && !sheet.open) {
       event.preventDefault();
       $("#q").focus();
       $("#q").select();

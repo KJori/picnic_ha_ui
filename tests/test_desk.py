@@ -126,11 +126,27 @@ class Search(DeskCase):
                 "tiers": [],
                 "base_price": None,
                 "unavailable": None,
-                "image": "cde78c1e46da90d2406c017c372833cd131384c6dddee7772d33aa047c767b4d",
+                # The tile's sellingUnitImageConfiguration.id, not sellingUnit.image_id (they differ here).
+                "image": "d5d9672b5577e31e8a87d44a72954132e441ccab2ca7213b8e712cc7c3143375",
                 "max": 99,
             },
         )
         self.assertEqual(self.api.calls[0][:2], ("GET", "/pages/search-page-results?search_term=koffie"))
+
+    def test_tile_pictures_are_tried_the_way_the_tile_names_them(self):
+        self.api.replies["/pages/search-page-results"] = sample("search_page_nl.json")
+        tiles = self.desk.search("koffie")
+        first = self.desk.pictures.candidates(tiles[0]["image"])
+        self.assertEqual(first[0], ("d5d9672b5577e31e8a87d44a72954132e441ccab2ca7213b8e712cc7c3143375", "padded.webp"))
+        # ... and the product's other picture id is the last resort.
+        self.assertEqual(first[-1][0], "cde78c1e46da90d2406c017c372833cd131384c6dddee7772d33aa047c767b4d")
+        same = self.desk.pictures.candidates(tiles[1]["image"])  # this tile names one id only
+        self.assertEqual({ref for ref, _ in same}, {"c689a8a13efd839245607d38d8cf40e6031d7022310db9bc0ae2b9f2f8ac723a"})
+
+    def test_tile_without_picture_configuration_uses_image_id(self):
+        self.api.replies["/pages/search-page-results"] = search_page(
+            {"id": "s9", "name": "X", "display_price": 100, "image_id": "a" * 64})
+        self.assertEqual(self.desk.search("x")[0]["image"], "a" * 64)
 
     def test_search_term_is_url_encoded(self):
         self.api.replies["/pages/search-page-results"] = search_page()
@@ -587,7 +603,7 @@ class Extras(DeskCase):
         self.api.calls.clear()
         report = self.desk.selfcheck()
         self.assertEqual([c["name"] for c in report["checks"] if not c["ok"]], [], report)
-        self.assertEqual(len(report["checks"]), 8)
+        self.assertEqual(len(report["checks"]), 9)
         changing = [c for c in self.api.calls if c[0] == "POST" and c[1] != "/deliveries/summary"]
         self.assertEqual(changing, [], "the self-check must not change anything")
 
@@ -612,79 +628,237 @@ class Extras(DeskCase):
         self.assertEqual(sorted(p.name for p in self.dir.iterdir()), [])
 
 
-class Pictures(DeskCase):
-    """The real fetch path, with the session's GET replaced by canned answers."""
+class Answer:
+    def __init__(self, status, content=b""):
+        self.status_code, self.content, self.headers = status, content, {}
 
-    PNG = b"\x89PNG\r\n\x1a\n" + b"0" * 64
 
-    class Answer:
-        def __init__(self, status, content=b""):
-            self.status_code, self.content, self.headers = status, content, {}
+PNG = b"\x89PNG\r\n\x1a\n" + b"0" * 64
+WEBP = b"RIFF" + b"\x00" * 4 + b"WEBP" + b"0" * 64
 
-    def serve(self, answers):
+
+class PicturesThroughDesk(DeskCase):
+    """Picture loading from the Desk's point of view (the loader itself is
+    covered in test_pictures.py)."""
+
+    def serve(self, answer):
         asked = []
 
         def get(url, **kwargs):
             asked.append(url)
-            answer = answers[url.rsplit("/", 1)[1]]
-            if isinstance(answer, Exception):
-                raise answer
-            return answer
+            return answer(url)
 
         self.api.session.get = get
         return asked
 
-    def test_product_picture_address_and_cache(self):
-        asked = self.serve({"medium.png": self.Answer(200, self.PNG)})
-        self.assertEqual(self.desk.image("a" * 64), self.PNG)
-        self.assertEqual(self.desk.image("a" * 64), self.PNG)
-        self.assertEqual(asked, ["https://storefront-prod.nl.picnicinternational.com/static/images/" + "a" * 64 + "/medium.png"])
-
-    def test_smaller_size_when_the_first_is_missing(self):
-        asked = self.serve({"medium.png": self.Answer(404), "small.png": self.Answer(200, self.PNG)})
-        self.assertEqual(self.desk.image("b" * 64), self.PNG)
-        self.assertEqual([url.rsplit("/", 1)[1] for url in asked], ["medium.png", "small.png"])
-
-    def test_recipe_picture_address(self):
-        asked = self.serve({"medium.png": self.Answer(404), "large.png": self.Answer(200, self.PNG)})
-        self.assertEqual(self.desk.image("recipes/abc12345"), self.PNG)
-        self.assertEqual(asked[-1], "https://storefront-prod.nl.picnicinternational.com/static/images/recipes/abc12345/large.png")
-
-    def test_country_picks_the_host(self):
+    def test_uses_the_signed_in_session_and_the_country_host(self):
+        asked = self.serve(lambda url: Answer(200, WEBP))
+        self.assertEqual(self.desk.image("a" * 64), WEBP)
+        self.assertEqual(asked, ["https://storefront-prod.nl.picnicinternational.com/static/images/" + "a" * 64 + "/padded.webp"])
         german = Desk(str(self.dir), "DE", api_class=ScriptedAPI)
-        asked = []
-        german.api.session.get = lambda url, **kwargs: asked.append(url) or self.Answer(200, self.PNG)
+        seen = []
+        german.api.session.get = lambda url, **kwargs: seen.append(url) or Answer(200, PNG)
         german.image("c" * 64)
-        self.assertTrue(asked[0].startswith("https://storefront-prod.de.picnicinternational.com/static/images/"))
+        self.assertTrue(seen[0].startswith("https://storefront-prod.de.picnicinternational.com/static/images/"))
 
-    def test_no_picture_is_not_an_error_and_is_not_cached(self):
-        asked = self.serve({"medium.png": self.Answer(404), "small.png": self.Answer(200, b"")})
-        self.assertIsNone(self.desk.image("d" * 64))
-        self.assertIsNone(self.desk.image("d" * 64))
-        self.assertEqual(len(asked), 4)
-        self.serve({"medium.png": OSError("network down")})
-        self.assertIsNone(self.desk.image("e" * 64))
+    def test_signed_out_loads_nothing(self):
+        self.desk.logout()
+        self.assertIsNone(self.desk.image("a" * 64))
 
-    def test_selfcheck_flags_pictures_that_do_not_load(self):
+    def selfcheck_replies(self):
         self.api.replies.update({
             "/user": sample("user_de.json"),
             "/pages/search-page-results": sample("search_page_nl.json"),
+            "/pages/product-details-page-root": sample("product_details_page_nl.json"),
             "/cart": sample("cart_de.json"),
             "/deliveries/summary": sample("current_deliveries_de.json"),
             "/deliveries/": sample("delivery_de.json"),
             "/pages/": {"error": {"code": "NOT_FOUND", "message": "page-template was not found"}},
         })
-        self.serve({"medium.png": self.Answer(403), "small.png": self.Answer(403), "large.png": self.Answer(403)})
+
+    def test_selfcheck_says_which_address_form_worked(self):
+        self.selfcheck_replies()
+        self.serve(lambda url: Answer(200, WEBP) if url.endswith("/padded.webp") else Answer(404))
+        report = {c["name"]: c for c in self.desk.selfcheck()["checks"]}
+        self.assertTrue(report["Product pictures"]["ok"], report["Product pictures"])
+        self.assertEqual(report["Product pictures"]["detail"], "3 of 3 pictures loaded. Worked as: padded.webp (3).")
+
+    def test_selfcheck_spells_out_a_picture_that_failed(self):
+        self.selfcheck_replies()
+        first = "d5d9672b5577e31e8a87d44a72954132e441ccab2ca7213b8e712cc7c3143375"
+        self.serve(lambda url: Answer(403) if first in url or "cde78c1e" in url else Answer(200, PNG))
         report = {c["name"]: c for c in self.desk.selfcheck()["checks"]}
         self.assertEqual(
             {name: c["ok"] for name, c in report.items()},
-            {"Account": True, "Search": True, "Product pictures": False, "Basket": True, "Past deliveries": True,
-             "Recipe overview": False, "Opening a recipe": False, "Recipe pictures": False},
+            {"Account": True, "Search": True, "Product pictures": False, "Product page": True, "Basket": True,
+             "Past deliveries": True, "Recipe overview": False, "Opening a recipe": False, "Recipe pictures": False},
         )
-        self.assertIn("did not return a picture", report["Product pictures"]["detail"])
+        detail = report["Product pictures"]["detail"]
+        self.assertTrue(detail.startswith("2 of 3 pictures loaded. Worked as: padded.webp (2). Picture d5d9672b5577e31e… failed; tried padded.webp: 403, medium.png: 403"), detail)
+        self.assertIn("cde78c1e46…/padded.webp: 403", detail)
         self.assertIn("page-template was not found", report["Recipe overview"]["detail"])
-        self.serve({"medium.png": self.Answer(200, self.PNG)})
-        self.assertTrue({c["name"]: c for c in self.desk.selfcheck()["checks"]}["Product pictures"]["ok"])
+        self.assertIn("description found", report["Product page"]["detail"])
+
+
+class ProductPage(DeskCase):
+    PATH = "/pages/product-details-page-root?id=s1016222&show_category_action=true"
+
+    def test_sample_page_through_the_library_reader(self):
+        self.api.replies["/pages/product-details-page-root"] = sample("product_details_page_nl.json")
+        info = self.desk.product("s1016222")
+        self.assertEqual(
+            info,
+            {
+                "id": "s1016222", "name": "Picnic Aromatico filterkoffie", "brand": "Picnic", "unit": "500 gram",
+                "price": 799, "was": None, "price_per_unit": "€15.98/kg", "multipack": False,
+                "images": ["1be1d07e57ea3991445a91960535a2b4593caf75c7e157a42a19ba61aaf00000"],
+                "description": "Onze aromatische filterkoffie met een volle smaak en een aangenaam aroma.",
+                "highlights": ["**Volle** smaak", "Snelfiltermaling"], "allergens": [], "sections": [],
+            },
+        )
+        # Same request as the library's get_article; asked again as the newer app version
+        # because the first answer had no fold-out sections.
+        self.assertEqual([(c[1], c[3]) for c in self.api.calls], [(self.PATH, LIBRARY_AGENT), (self.PATH, PAGE_AGENT)])
+        self.assertEqual(picnic_client._HEADERS["x-picnic-agent"], LIBRARY_AGENT)
+
+    def test_fold_out_sections_from_the_newer_app_version_are_merged_in(self):
+        older = sample("product_details_page_nl.json")
+        newer = sample("product_details_page_nl.json")
+        newer["body"]["child"]["child"]["children"] += [
+            {"type": "PML", "id": "product-page-allergies", "pml": {"component": {"children": [
+                {"type": "RICH_TEXT", "markdown": "Bevat"}, {"type": "RICH_TEXT", "markdown": "#(#333333)Soja#(#333333)"}]}}},
+            {"type": "PML", "id": "accordion-list", "pml": {"component": {"items": [
+                {"header": {"type": "RICH_TEXT", "markdown": "**Ingrediënten**"},
+                 "body": {"type": "RICH_TEXT", "markdown": "Gemalen **koffie**."}}]}}},
+        ]
+        self.api.replies["/pages/product-details-page-root"] = (
+            lambda api, path, body: newer if picnic_client._HEADERS["x-picnic-agent"] == PAGE_AGENT else older)
+        info = self.desk.product("s1016222")
+        self.assertEqual(info["sections"], [{"title": "Ingrediënten", "text": "Gemalen **koffie**."}])
+        self.assertEqual(info["allergens"], [{"label": "Bevat", "items": ["Soja"]}])
+        self.assertEqual(info["name"], "Picnic Aromatico filterkoffie")
+
+    def test_remembered_for_a_while(self):
+        self.api.replies["/pages/product-details-page-root"] = sample("product_details_page_nl.json")
+        self.desk.product("s1016222")
+        requests = len(self.api.calls)
+        self.desk.product("s1016222")
+        self.assertEqual(len(self.api.calls), requests)
+        self.desk.product("s1016222", refresh=True)
+        self.assertGreater(len(self.api.calls), requests)
+
+    def test_errors_and_unreadable_pages(self):
+        self.api.replies["/pages/product-details-page-root"] = {"error": {"code": "X", "message": "Niet gevonden"}}
+        with self.assertRaisesRegex(DeskError, "Niet gevonden"):
+            self.desk.product("s100")
+        self.api.replies["/pages/product-details-page-root"] = {"body": {"something": "else"}}
+        with self.assertRaisesRegex(DeskError, "cannot read yet"):
+            self.desk.product("s123")
+        requests = len(self.api.calls)
+        for bad in ("", "abc", "s1; drop", "../x", "s" + "1" * 20):
+            with self.assertRaises(DeskError):
+                self.desk.product(bad)
+        self.assertEqual(len(self.api.calls), requests)
+
+    def test_second_request_failing_does_not_lose_the_first(self):
+        def answer(api, path, body):
+            if picnic_client._HEADERS["x-picnic-agent"] == PAGE_AGENT:
+                raise ValueError("not JSON")
+            return sample("product_details_page_nl.json")
+
+        self.api.replies["/pages/product-details-page-root"] = answer
+        self.assertEqual(self.desk.product("s1016222")["price"], 799)
+        self.assertEqual(picnic_client._HEADERS["x-picnic-agent"], LIBRARY_AGENT)
+
+    def test_raw_page_for_a_product(self):
+        self.api.replies["/pages/product-details-page-root"] = sample("product_details_page_nl.json")
+        self.desk.raw_page("product-details-page-root", product_id="s1016222")
+        self.assertEqual(self.api.calls[0][1], self.PATH)
+        with self.assertRaises(DeskError):
+            self.desk.raw_page("product-details-page-root", product_id="nope")
+
+
+class ProductPageInDemo(DeskCase):
+    api_class = RecordingDemo
+
+    def setUp(self):
+        super().setUp()
+        self.api.login("demo@example.nl", "x")
+
+    def test_food_product(self):
+        info = self.desk.product("s1004")
+        self.assertEqual((info["name"], info["brand"], info["unit"], info["price"]), ("Picnic Tofu naturel", "Picnic", "375 gram", 179))
+        self.assertEqual([section["title"] for section in info["sections"]], ["Ingrediënten", "Voedingswaarde", "Extra informatie"])
+        self.assertIn("**soja**bonen", info["sections"][0]["text"])
+        self.assertEqual(info["allergens"], [{"label": "Bevat", "items": ["Soja"]}])
+        self.assertEqual(len(info["images"]), 2)
+
+    def test_sale_price_and_may_contain(self):
+        coffee = self.desk.product("s1027")
+        self.assertEqual((coffee["price"], coffee["was"]), (799, 999))
+        peanut = self.desk.product("s1022")
+        self.assertEqual(peanut["allergens"], [{"label": "Bevat", "items": ["Pinda's"]}, {"label": "Bevat mogelijk", "items": ["Noten", "Sesam"]}])
+
+    def test_household_product_has_no_ingredients(self):
+        info = self.desk.product("s1032")
+        self.assertEqual((info["sections"], info["allergens"]), ([], []))
+        self.assertTrue(info["description"])
+
+
+class RecipePrices(DeskCase):
+    api_class = RecordingDemo
+
+    def setUp(self):
+        super().setUp()
+        self.api.login("demo@example.nl", "x")
+        self.api.calls.clear()
+
+    def test_price_of_what_picnic_ticks_by_default(self):
+        # penne 0,99 + paprika 1,69 + kikkererwten 0,79 + 2 x tomatenblokjes 0,69; cupboard items left out
+        self.assertEqual(self.desk.recipe_price(RECIPE), {"price": 485, "portions": 2, "complete": True})
+
+    def test_remembered_on_disk_for_a_day(self):
+        self.desk.recipe_price(RECIPE)
+        requests = len(self.api.calls)
+        self.desk.recipe_price(RECIPE)
+        self.assertEqual(len(self.api.calls), requests)
+        again = Desk(str(self.dir), "NL", api_class=RecordingDemo)
+        self.assertEqual(again.recipe_price(RECIPE)["price"], 485)
+        self.assertEqual(again.api.calls, [])
+        stored = json.loads((self.dir / "recipe_prices.json").read_text())
+        stored[RECIPE]["at"] -= 25 * 3600
+        (self.dir / "recipe_prices.json").write_text(json.dumps(stored))
+        older = Desk(str(self.dir), "NL", api_class=RecordingDemo)
+        older.api.login("demo@example.nl", "x")
+        older.api.calls.clear()
+        older.recipe_price(RECIPE)
+        self.assertEqual(len(older.api.calls), 1)
+
+    def test_opening_a_recipe_fills_in_its_price(self):
+        self.desk.recipe(RECIPE)
+        requests = len(self.api.calls)
+        self.assertEqual(self.desk.recipe_price(RECIPE)["price"], 485)
+        self.assertEqual(len(self.api.calls), requests)
+        self.desk.recipe(RECIPE, 6)  # other portions do not overwrite the default-portions price
+        self.assertEqual(self.desk.recipe_price(RECIPE), {"price": 485, "portions": 2, "complete": True})
+
+    def test_unavailable_product_is_left_out_of_the_price(self):
+        # havermout 0,75 + havermelk 1,39; the unavailable bananas and the cupboard item do not count
+        self.assertEqual(self.desk.recipe_price(OATS), {"price": 214, "portions": 2, "complete": True})
+
+    def test_missing_prices_are_flagged(self):
+        cost = Desk._recipe_cost({"portions": 4, "ingredients": [
+            {"checked": True, "available": True, "price": 100, "qty": 2},
+            {"checked": True, "available": True, "price": None, "qty": 1},
+            {"checked": False, "available": True, "price": 999, "qty": 1},
+        ]})
+        self.assertEqual(cost, {"price": 200, "portions": 4, "complete": False})
+        nothing = Desk._recipe_cost({"portions": 2, "ingredients": [{"checked": True, "available": True, "price": None, "qty": 1}]})
+        self.assertEqual(nothing, {"price": None, "portions": 2, "complete": False})
+
+    def test_input_is_checked(self):
+        with self.assertRaises(DeskError):
+            self.desk.recipe_price("nope")
 
 
 class Constants(unittest.TestCase):
@@ -697,13 +871,6 @@ class Constants(unittest.TestCase):
         bad = ["../x", "recipes/../../etc", "a/b/c", "x" * 200, "recipes/", "http://evil/x", "short"]
         self.assertTrue(all(desk_module.IMAGE_REF.match(ref) for ref in ok))
         self.assertFalse(any(desk_module.IMAGE_REF.match(ref) for ref in bad))
-
-    def test_image_address(self):
-        # Same pattern as python-picnic-api2's helper.get_image / get_recipe_image.
-        self.assertEqual(
-            desk_module.IMAGE_URL.format(cc="nl", id="recipes/abc", size="medium"),
-            "https://storefront-prod.nl.picnicinternational.com/static/images/recipes/abc/medium.png",
-        )
 
 
 if __name__ == "__main__":

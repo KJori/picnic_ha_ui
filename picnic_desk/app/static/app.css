@@ -294,6 +294,51 @@ button { cursor: pointer; }
 .recipe-total { margin: 0; color: var(--soft); font-variant-numeric: tabular-nums; }
 .primary:disabled { background: var(--rule); border-color: var(--rule); color: var(--soft); cursor: not-allowed; }
 
+/* ----------------------------------------------------------- product page */
+
+.product { cursor: pointer; }
+.line .what .name {
+  display: block; padding: 0; background: none; border: 0; text-align: left;
+  font: inherit; font-weight: 600; color: inherit; overflow-wrap: anywhere; cursor: pointer;
+}
+.line .what .name:hover { text-decoration: underline; text-underline-offset: .2em; }
+
+.sheet {
+  width: min(52rem, calc(100vw - 2rem)); max-height: calc(100vh - 2rem);
+  padding: 1.5rem; overflow-y: auto;
+  background: var(--board); color: var(--ink);
+  border: 2px solid var(--ink); border-radius: 4px;
+}
+.sheet::backdrop { background: rgb(15 30 24 / .55); }
+.sheet .close { float: right; margin: -.4rem 0 .5rem 1rem; }
+.sheet-head { display: grid; grid-template-columns: 16rem minmax(0, 1fr); gap: 1.5rem; align-items: start; clear: both; }
+.sheet .gallery > .picture { aspect-ratio: 1; background: var(--shelf); border-radius: 3px; overflow: hidden; }
+.sheet .picture img { width: 100%; height: 100%; object-fit: contain; display: block; }
+.sheet .thumbs { display: flex; flex-wrap: wrap; gap: .4rem; margin-top: .5rem; }
+.sheet .thumb { width: 3.25rem; height: 3.25rem; padding: 0; background: var(--shelf); border: 1px solid var(--rule); border-radius: 3px; overflow: hidden; }
+.sheet .thumb[aria-pressed="true"] { border: 2px solid var(--ink); }
+.sheet .thumb .picture { width: 100%; height: 100%; }
+.sheet .brand { margin: 0; color: var(--soft); }
+.sheet h2 { margin: 0; font-size: 1.6rem; line-height: 1.2; }
+.sheet .words .hint { margin: .3rem 0 0; }
+.sheet .buy { display: flex; align-items: center; justify-content: space-between; gap: 1rem; margin-top: 1rem; }
+.sheet .price { font-size: 1.6rem; }
+.pricing { display: inline-flex; align-items: baseline; gap: .5rem; }
+.pricing s { color: var(--soft); font-variant-numeric: tabular-nums; }
+.sheet .highlights { margin: 1rem 0 0; padding-left: 1.1rem; }
+.sheet .highlights li + li { margin-top: .2rem; }
+.sheet .description { max-width: 65ch; margin: 1.25rem 0 0; }
+.sheet .allergens { margin: 1rem 0 0; padding: .6rem .8rem; background: var(--tag); color: var(--tag-ink); border-radius: 3px; }
+.sheet > .hint { margin: 1.25rem 0 0; }
+.fold { margin-top: 1rem; border-top: 1px solid var(--rule); }
+.fold + .fold { margin-top: 0; }
+.fold:last-of-type { border-bottom: 1px solid var(--rule); }
+.fold summary { padding: .7rem 0; font-weight: 700; cursor: pointer; }
+.fold > div { max-width: 65ch; padding: 0 0 .9rem; line-height: 1.5; }
+
+.recipe .cost { padding: 0 .8rem .8rem; margin-top: -.45rem; min-height: 1.3rem; font-size: .875rem; color: var(--soft); font-variant-numeric: tabular-nums; }
+.ingredient .what .quiet { display: inline; padding: 0; font-size: .875rem; color: var(--soft); }
+
 /* ---------------------------------------------------------------- buttons */
 
 .primary, .secondary {
@@ -416,6 +461,9 @@ button { cursor: pointer; }
   .views button { white-space: nowrap; }
   .products { grid-template-columns: repeat(auto-fill, minmax(16rem, 1fr)); }
   .recipe-head { grid-template-columns: minmax(0, 1fr); }
+  .sheet { padding: 1rem; }
+  .sheet-head { grid-template-columns: minmax(0, 1fr); }
+  .sheet .gallery > .picture { max-width: 14rem; }
   .recipe-head .picture { max-width: 20rem; }
   .ingredient { grid-template-columns: 1.4rem 2.5rem minmax(0, 1fr) auto; row-gap: .1rem; }
   .ingredient .picture { width: 2.5rem; height: 2.5rem; }

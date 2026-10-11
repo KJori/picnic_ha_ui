@@ -22,7 +22,8 @@ from pathlib import Path
 
 from flask import Flask, Response, abort, jsonify, request, send_from_directory
 
-from desk import IMAGE_REF, Desk, DeskError, NotLoggedIn
+from desk import Desk, DeskError, NotLoggedIn
+from pictures import IMAGE_REF, kind_of
 
 INGRESS_GATEWAY = "172.30.32.2"
 STATIC = Path(__file__).parent / "static"
@@ -149,6 +150,10 @@ def create_app() -> Flask:
     def toggle_saved():
         return jsonify(products=desk.toggle_saved(body()))
 
+    @app.get("/api/products/<product_id>")
+    def product(product_id):
+        return jsonify(desk.product(product_id, refresh=request.args.get("refresh") == "1"))
+
     @app.get("/api/shortcuts")
     def shortcuts():
         return jsonify(shortcuts=desk.shortcuts())
@@ -177,6 +182,10 @@ def create_app() -> Flask:
     def recipe_detail(recipe_id):
         return jsonify(desk.recipe(recipe_id, portions_arg(request.args.get("portions"))))
 
+    @app.get("/api/recipes/<recipe_id>/price")
+    def recipe_price(recipe_id):
+        return jsonify(desk.recipe_price(recipe_id))
+
     @app.post("/api/recipes/<recipe_id>/add")
     def recipe_add(recipe_id):
         data = body()
@@ -193,7 +202,8 @@ def create_app() -> Flask:
     def raw_page(page_id):
         """Download a page exactly as Picnic sent it, to diagnose a reading problem."""
         page = desk.raw_page(
-            page_id, request.args.get("recipe") or None, portions_arg(request.args.get("portions"))
+            page_id, request.args.get("recipe") or None, portions_arg(request.args.get("portions")),
+            request.args.get("product") or None,
         )
         response = Response(json.dumps(page, ensure_ascii=False, indent=1), mimetype="application/json")
         response.headers["Content-Disposition"] = f'attachment; filename="picnic-{page_id}.json"'
@@ -208,15 +218,8 @@ def create_app() -> Flask:
         data = desk.image(image_id)
         if not data:
             abort(404)
-        if data[:4] == b"\x89PNG":
-            kind = "image/png"
-        elif data[:3] == b"\xff\xd8\xff":
-            kind = "image/jpeg"
-        elif data[:4] == b"RIFF":
-            kind = "image/webp"
-        elif data.lstrip()[:4] == b"<svg":
-            kind = "image/svg+xml"
-        else:
+        kind = kind_of(data)
+        if kind is None:
             abort(404)
         response = Response(data, mimetype=kind)
         response.headers["Cache-Control"] = "private, max-age=2592000, immutable"
