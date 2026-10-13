@@ -1,0 +1,37 @@
+{
+  "name": "picnic-desk",
+  "version": "1.0.0",
+  "private": true,
+  "description": "A desktop Picnic shop for the Home Assistant sidebar",
+  "license": "AGPL-3.0-only",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "check": "tsc -p tsconfig.json && node scripts/routes.mjs --check && node scripts/build.mjs --check",
+    "test": "node --import tsx --import ./tests/setup.ts --test \"tests/**/*.test.ts\"",
+    "start": "node picnic_desk/dist/server.mjs",
+    "vendor": "node scripts/vendor.mjs",
+    "test:browser": "node --test --test-concurrency=1 tests/browser/desk.browser.mjs"
+  },
+  "dependencies": {
+    "picnic-api": "4.10.0",
+    "react": "19.2.8",
+    "react-dom": "19.2.8"
+  },
+  "devDependencies": {
+    "@types/node": "^24",
+    "@types/react": "^19.2.0",
+    "@types/react-dom": "^19.2.0",
+    "esbuild": "0.28.2",
+    "tsx": "4.23.12",
+    "typescript": "6.0.3",
+    "playwright": "1.56.0"
+  },
+  "overrides": {
+    "jsonpath-plus": "10.4.0",
+    "scheduler": "0.27.0"
+  }
+}

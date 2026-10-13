@@ -1,7 +1,7 @@
 name: Picnic Desk
-version: "0.3.0"
+version: "1.0.0"
 slug: picnic_desk
-description: Fill your Picnic basket from a desktop browser, in the Home Assistant sidebar
+description: A desktop Picnic shop in the Home Assistant sidebar
 url: https://github.com/KJori/picnic_ha_ui
 arch:
   - amd64
@@ -12,5 +12,7 @@ panel_icon: mdi:basket
 panel_title: Picnic
 options:
   country_code: NL
+  language: en
 schema:
   country_code: list(NL|DE|FR)
+  language: list(en|nl|de|fr)

@@ -1,4 +1,4 @@
-FROM python:3.13-slim
+FROM node:24-alpine
 
 # The labels the Home Assistant docs ask for when an image is not built by
 # their GitHub builder. BUILD_VERSION and BUILD_ARCH are supplied by Supervisor.
@@ -8,16 +8,17 @@ LABEL io.hass.version="${BUILD_VERSION}" \
       io.hass.type="app" \
       io.hass.arch="${BUILD_ARCH}"
 
-ENV PYTHONUNBUFFERED=1 \
-    PIP_NO_CACHE_DIR=1 \
-    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+# Delivery times are shown in the local time zone, which Supervisor passes as TZ.
+RUN apk add --no-cache tzdata
+
+ENV NODE_ENV=production \
     PORT=8099 \
     DATA_DIR=/data \
     INGRESS_ONLY=1
 
+# dist/ is built from the sources in this repository (npm run build) and
+# committed, so installing needs no package downloads.
 WORKDIR /app
-COPY requirements.txt .
-RUN pip install -r requirements.txt
-COPY app/ .
+COPY dist/ ./
 
-CMD ["python", "server.py"]
+CMD ["node", "server.mjs"]

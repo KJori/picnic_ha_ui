@@ -1,97 +1,106 @@
 # Picnic Desk
 
-A desktop screen for filling your Picnic basket. Picnic only has a phone app;
-this talks to the same service through the unofficial `python-picnic-api2`
-library that Home Assistant's own Picnic integration uses.
+A desktop Picnic shop in the Home Assistant sidebar: Picnic's categories and
+search, product pages, the basket as a till receipt, delivery times, checkout
+and payment, orders with live tracking, the cookbook with meal planning, and a
+few things of its own (a pasted shopping list, what you bought before, starred
+products).
 
-It fills the basket. Choosing a delivery slot and paying still happen in the
-Picnic app, where the basket you filled here is waiting.
+The Picnic side is the code of [picnic-web](https://github.com/MRVDH/picnic-web)
+by MRVDH, which talks to Picnic through the unofficial
+[picnic-api](https://github.com/MRVDH/picnic-api). Picnic Desk runs that code
+unchanged and puts its own desktop screen on top. Neither is affiliated with
+Picnic.
 
 ## First use
 
 1. Turn on **Show in sidebar**, start the app and open **Picnic** in the sidebar.
-2. Sign in with your Picnic account. If Picnic asks for a verification code,
-   choose text message or email and enter the code.
-3. Select **Check what works with Picnic** at the bottom of the basket. It
-   tries the account, search, pictures, basket, deliveries and recipes against
-   the real service and lists what works. Nothing in your basket changes.
+2. Sign in with your Picnic e-mail address and password. If Picnic asks for a
+   verification code, it sends one by text message; **No code? Send it again**
+   can send it by e-mail instead. You can also sign in with a Picnic auth token.
+3. Open **Account** and select **Run the check**. It tries your account,
+   search, a product page, pictures, the basket, delivery times, categories,
+   recipes and orders against the real service. Nothing in your basket changes.
 
-For Germany or France, set `country_code` on the Configuration tab and restart.
+On the Configuration tab:
+
+- `country_code`: NL, DE or FR.
+- `language`: the language of the screens: `en`, `nl`, `de` or `fr`. Product
+  names and texts are always Picnic's own.
 
 ## Using it
 
-- **Search**: type in the box. Words separated by commas are searched one
-  after the other.
-- **Product page**: click a product, in the results, the basket or a recipe,
-  for its pictures, description, allergens, ingredients and nutrition.
-- **Shortcuts**: the labels under the search box are saved searches. Use
-  **Edit shortcuts** to add your own or remove one. They are not Picnic's own
-  categories, so adjust the search words until a shortcut shows what you want.
+- **Shop**: Picnic's own category tree and promotions, your shortcuts (one
+  click runs a search; change them under Account), and search with Picnic's
+  suggestions while you type.
+- **Products**: click one for its page: pictures, description, allergens,
+  ingredients, nutrition, "more for less" offers and similar products. ☆
+  stars a product.
+- **Basket**: the receipt on the right. It follows the real Picnic basket, so
+  changes made in the phone app show when you come back to this tab. Clicks
+  show at once and go to Picnic in the background; if Picnic refuses one, the
+  receipt is fetched again and shows what Picnic has.
+- **Delivery time**: the bar at the top of the receipt.
+- **Check out**: needs the minimum order value. Picnic may ask an age check.
+  **Pay at the bank** opens the bank in a new tab. Keep the Picnic tab open:
+  it watches the payment and confirms the order as soon as Picnic says the
+  payment is done.
+- **Cooking**: Picnic's recipes by category, search, saved recipes (♥ saves
+  one on your Picnic account), and a price per person on every card. Open a
+  recipe to choose portions, untick what you have, swap an ingredient (✎), and
+  add the rest. They go into the basket as that recipe, as in the app.
+  **Make a plan** picks recipes for the number of days so that packs are
+  shared; tick the ones to keep and **plan further**; **Show shopping list**
+  adds everything at once.
+- **Bought before**: everything from your last 10 orders, most often bought
+  first. Rebuilt at most every 12 hours; **Refresh** rebuilds it now.
+- **Starred**: products you starred, kept by this app.
 - **Paste a list**: one product per line. Start a line with a number
   (`2 havermelk`, `3x tomatenblokjes`) and the first click adds that many.
-- **Bought before**: everything from your last 10 deliveries, most frequent
-  first, rebuilt at most every 12 hours. Prices there are what you paid then.
-- **Saved**: products you starred.
-- **Recipes**: Picnic's recipes. Open one, set the portions, untick what you
-  already have, and add the rest. The second list holds what Picnic assumes is
-  in your cupboard; tick anything you need from it. The price on a card is
-  what the products Picnic adds by default cost, as whole packs, for the
-  recipe's standard portions. It is worked out once per recipe and kept for a
-  day.
-- **Basket**: the receipt on the right. It follows the real Picnic basket, so
-  changes made in the phone app show up when you return to this tab.
+- **Orders**: current, completed and cancelled orders. An order on its way
+  shows the van's route and expected arrival. Cancel an order, e-mail the
+  invoice again, rate a delivery, or put an old order in the basket again.
+  The parcel service is linked from there.
 
-Keyboard: `/` jumps to the search box and `Enter` moves into the results.
-On a product, `Enter` opens its page, `+` and `-` change the amount, `s` saves
-it and the arrow keys move around. `Esc` closes a product page or clears the
-search.
-
-## How recipes are added
-
-The recipe goes into the basket with the same call the phone app makes. That
-adds everything Picnic ticks by default. The app then compares the basket with
-how it was before and removes the products you unticked; cupboard items you
-ticked are added as ordinary products.
-
-Picnic has no documentation for this. The call itself is described by two
-other open-source Picnic clients, but whether the recipe email still arrives
-after part of a recipe is removed is not known. If it matters, check the
-recipe in the phone app before you pay.
+Keyboard: `/` jumps to the search box and `Enter` moves into the results. On a
+product, `+` and `-` change the amount, `s` stars it and the arrow keys move
+around. `Esc` closes a product page or clears the search.
 
 ## What is stored
 
 In the app's own data folder, which Home Assistant includes in backups:
 
-- `auth.json`: the Picnic session token, readable only by the app. Your
-  password is sent to Picnic once at sign-in and is never written anywhere.
-  **Sign out** deletes the token.
-- `saved.json`, `shortcuts.json`: your starred products and shortcuts.
-- `history.json`, `recipe_prices.json`: the cached "Bought before" list and
-  recipe price indications. **Sign out** deletes both.
+- `auth.json`: the Picnic session, readable only by the app. Your password
+  goes to Picnic once at sign-in and is never written anywhere. The token
+  never reaches a browser: every browser in the household uses the one
+  session. **Sign out** deletes it.
+- `saved.json`, `shortcuts.json`: starred products and shortcuts.
+- `history.json`, `recipe_prices.json`: "Bought before" and the recipe card
+  prices. **Sign out** deletes both.
+
+Meal plans and a pasted list are kept in the browser.
 
 The app has no open network port. It only accepts connections from Home
-Assistant's ingress gateway, behind your Home Assistant login.
+Assistant's ingress gateway, behind your Home Assistant login. The page loads
+nothing from other sites except Picnic's pictures.
 
 ## If something does not work
 
-- Run **Check what works with Picnic** and note which part fails.
-- When recipes fail to load, or a product page comes without description or
-  ingredients, the screen offers **Download what Picnic sent**. That file
-  shows exactly what needs fixing. It can contain your name and address, so
-  look through it before sharing.
-- Pictures: the check lists how many of a sample loaded, which address form
-  worked, and for a picture that failed every form that was tried with
-  Picnic's answer to each.
-- The Log tab shows the underlying error.
+- Run the check under **Account** and note which part fails; the details say
+  what Picnic answered.
+- A product page and the account page have **Download what Picnic sent**: the
+  page as Picnic sent it, which shows what needs fixing. It can contain your
+  name and address, so look through it before sharing.
+- Picnic limits how many requests it answers in a short time. When that
+  happens, parts of the page fail for a minute or two; the session stays
+  signed in.
+- The Log tab shows the underlying errors.
 
 ## Limits
 
-- Unofficial: Picnic can change its service at any time, which can break
-  search, the basket, recipes or sign-in.
-- No slot picking, checkout or payment.
-- Recipe names, pack sizes and prices are read from the text on Picnic's
-  recipe pages and can be incomplete. A recipe's price indication says "at
-  least" when a product's price could not be read.
-- Ingredients, allergens and nutrition come from fold-out sections that only
-  one other open-source client describes. When Picnic's page differs, the
-  product page shows less.
+- Unofficial: Picnic can change its service at any time, which can break any
+  part. Updates of Picnic Desk take in picnic-web's fixes.
+- After paying, the bank sends the browser back to Picnic Desk. Behind Home
+  Assistant that page may ask you to log in or show an error; the order is
+  confirmed by the Picnic tab you kept open, so close the bank's tab.
+- Not here: wallet, Family account, friend discount, shopping reminder.

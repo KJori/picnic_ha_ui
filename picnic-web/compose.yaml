@@ -1,0 +1,60 @@
+# Picnic web (https://github.com/MRVDH/picnic-web) as one self-contained stack.
+#
+# Paste this file into a new Dockge stack and deploy. No other files are
+# needed: the image is built on this machine from the upstream source.
+#
+# To update to the newest picnic-web, run this in the stack's folder:
+#   docker compose build --no-cache && docker compose up -d
+#
+# Nothing is published on the host. The container is only reachable by other
+# containers on the "pangolin" network, at http://picnic-web:3000.
+
+services:
+  picnic-web:
+    build:
+      context: .
+      args:
+        # What to build: "main" is the newest picnic-web at the moment of
+        # building. Put a commit id here instead to stay on one version.
+        PICNIC_WEB_REF: main
+      # "$$" is how a compose file writes a literal "$".
+      dockerfile_inline: |
+        FROM node:24-slim
+        ARG PICNIC_WEB_REF
+        ENV NEXT_TELEMETRY_DISABLED=1
+        USER node
+        RUN mkdir -p /home/node/app
+        WORKDIR /home/node/app
+        ADD --chown=node:node https://github.com/MRVDH/picnic-web/archive/$${PICNIC_WEB_REF}.tar.gz /tmp/picnic-web.tar.gz
+        RUN tar -xzf /tmp/picnic-web.tar.gz --strip-components=1 \
+         && npm ci --no-audit --no-fund \
+         && npm run build
+        ENV NODE_ENV=production PORT=3000
+        EXPOSE 3000
+        CMD ["npm", "run", "start"]
+    image: picnic-web:local
+    container_name: picnic-web
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - pangolin
+    # Only if Pangolin reaches this machine by address instead of by container
+    # name. This also opens the port to your whole network, without a login in
+    # front of it.
+    # ports:
+    #   - "3000:3000"
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:3000/login').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+networks:
+  pangolin:
+    external: true

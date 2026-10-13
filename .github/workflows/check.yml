@@ -9,11 +9,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-node@v4
         with:
-          python-version: "3.13"
-      - run: pip install -r picnic_desk/requirements.txt
-      - run: python -m unittest discover tests
+          node-version: "24"
+      - run: npm install --no-audit --no-fund
+      # Types, the route table, and the committed build all match the sources.
+      - run: npm run check
+      - run: npm test
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:browser
 
   image:
     # The same build Home Assistant does on your machine when you install.
@@ -21,12 +25,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: docker build --build-arg BUILD_VERSION=ci --build-arg BUILD_ARCH=amd64 -t picnic-desk picnic_desk
-      - name: Start it in demo mode and load the page
+      - name: Start it with the demo shop and load the page
         run: |
           docker run -d --name desk -p 8099:8099 -e PICNIC_DEMO=1 -e INGRESS_ONLY=0 picnic-desk
           for attempt in 1 2 3 4 5 6 7 8 9 10; do
-            curl -fsS http://localhost:8099/api/state && exit 0
+            if curl -fsS http://localhost:8099/api/desk/state && curl -fsS http://localhost:8099/ | grep -q 'id="root"'; then
+              exit 0
+            fi
             sleep 2
           done
           docker logs desk
           exit 1
+      - name: With ingress only, nobody but Home Assistant gets in
+        run: |
+          docker run -d --name guarded -p 8100:8099 picnic-desk
+          sleep 3
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8100/api/desk/state)" = 403
