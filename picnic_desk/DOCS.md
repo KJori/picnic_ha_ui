@@ -28,6 +28,8 @@ On the Configuration tab:
 - `country_code`: NL, DE or FR.
 - `language`: the language of the screens: `en`, `nl`, `de` or `fr`. Product
   names and texts are always Picnic's own.
+- `picture_cache_mb`: how much room the product and recipe pictures may take
+  (500 MB unless you change it, from 50 to 10000).
 
 ## Using it
 
@@ -83,17 +85,24 @@ In the app's own data folder, which Home Assistant includes in backups:
 - `saved.json`, `shortcuts.json`: saved products and shortcuts.
 - `history.json`, `recipe_prices.json`: "Bought before" and the recipe card
   prices. **Sign out** deletes both.
+- `picture-cache/`: Picnic's product and recipe pictures. Each is fetched from
+  Picnic the first time it is shown and kept, so it keeps showing when
+  Picnic's picture server is slow or down. When the folder reaches
+  `picture_cache_mb`, the pictures shown longest ago make room. It is left out
+  of backups; deleting it is harmless.
 
 Meal plans and a pasted list are kept in the browser.
 
 The app has no open network port. It only accepts connections from Home
 Assistant's ingress gateway, behind your Home Assistant login. The page loads
-nothing from other sites except Picnic's pictures.
+nothing from other sites: Picnic's pictures come through the app.
 
 ## If something does not work
 
 - Run **Check what works with Picnic** and note which part fails; the details
-  say what Picnic answered.
+  say what Picnic answered. Under "Pictures" it fetches a few pictures from
+  Picnic again, says which kind of address worked, and how many pictures are
+  kept.
 - A product page and the check page have **Download what Picnic sent**: the
   page as Picnic sent it, which shows what needs fixing. It can contain your
   name and address, so look through it before sharing.

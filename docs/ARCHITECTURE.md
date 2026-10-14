@@ -67,9 +67,13 @@ one already shown, and fetches the basket again after a failure.
 - A time limit on every call to Picnic (picnic-api has none).
 - A route that throws gives a 502 instead of a crash; any 401 marks the
   session as expired.
-- Pictures load straight from Picnic like picnic-web; when one fails, the
-  server tries the other known variants and keeps track of what works
-  (`src/server/pictures.ts`), and refuses anything that is not a picture.
+- Pictures come only through the server (`src/server/pictures.ts`), which
+  fetches each one from Picnic once, tries the other known variants when the
+  first fails, refuses anything that is not a picture, and keeps it on disk
+  (`/data/picture-cache`, left out of backups, the least recently shown going
+  first when it is full). At most six go to Picnic at a time, and many cells
+  asking for one picture cause one fetch. picnic-web loads pictures straight
+  from Picnic in the browser instead.
 - Recipe card prices are worked out two at a time and kept for a day.
 - Request bodies are capped; static files cannot leave their folder.
 

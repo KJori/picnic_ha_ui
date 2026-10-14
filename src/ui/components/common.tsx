@@ -13,10 +13,9 @@ import {
   useState,
 } from "react";
 
-import { buildImageUrl, buildRecipeImageUrl } from "@/lib/core/image-url";
 import type { Badge as BadgeData } from "@/lib/core/types";
 
-import { useSession, useT } from "../state/session";
+import { useT } from "../state/session";
 
 // ─── Money and dates ─────────────────────────────────────────────────────────
 
@@ -85,42 +84,32 @@ export function Badge({ badge }: { badge: BadgeData }) {
 // ─── Pictures ────────────────────────────────────────────────────────────────
 
 /**
- * A Picnic picture inside a `.picture` box. Loads from Picnic's image server
- * like picnic-web; when that fails, asks the app's server, which tries the
- * other variants. With nothing left, the box shows the name's first letter.
+ * A Picnic picture inside a `.picture` box, from the app's server, which keeps
+ * every picture once it has fetched it from Picnic. Without one, the box shows
+ * the name's first letter.
  */
 export function Img({
   id,
   kind = "product",
   name = "",
   className = "",
-  size,
 }: {
   id: string | null | undefined;
   kind?: "product" | "recipe";
   name?: string;
   className?: string;
-  size?: string;
 }) {
-  const { country, demo } = useSession();
-  const sources = id
-    ? [
-        ...(demo ? [] : [kind === "recipe" ? buildRecipeImageUrl(id, country) : buildImageUrl(id, country, size)]),
-        `api/desk/image?${new URLSearchParams({ id, kind })}`,
-      ]
-    : [];
-  const [attempt, setAttempt] = useState(0);
-  useEffect(() => setAttempt(0), [id]);
+  const [failed, setFailed] = useState<string | null>(null);
+  const ok = Boolean(id) && failed !== id;
   return (
     <span className={`picture ${className}`} aria-hidden="true">
-      {attempt < sources.length ? (
+      {ok ? (
         <img
-          src={sources[attempt]}
+          src={`api/desk/image?${new URLSearchParams({ id: id!, kind })}`}
           alt=""
           loading="lazy"
           decoding="async"
-          referrerPolicy="no-referrer"
-          onError={() => setAttempt((n) => n + 1)}
+          onError={() => setFailed(id ?? null)}
         />
       ) : (
         kind === "product" && name.charAt(0).toUpperCase()

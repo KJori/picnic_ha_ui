@@ -5,7 +5,7 @@
  */
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { readFileSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { after, afterEach, beforeEach, describe, test } from "node:test";
 
@@ -48,6 +48,7 @@ describe("the door", () => {
     const page = await desk.get("/");
     assert.equal(page.status, 200);
     assert.match(page.headers.get("content-security-policy") ?? "", /default-src 'self'.*frame-ancestors 'self'/);
+    assert.match(page.headers.get("content-security-policy") ?? "", /img-src 'self' data:;/, "no pictures from outside");
     assert.equal(page.headers.get("x-content-type-options"), "nosniff");
     assert.equal(page.headers.get("referrer-policy"), "no-referrer");
     for (const path of ["/..%2Fpackage.json", "/%2e%2e/%2e%2e/etc/passwd", "/app.css%00.html", "/nope.js"]) {
@@ -331,6 +332,20 @@ describe("pictures", () => {
       assert.equal((await FAKE_SAFE_FETCH(`${desk.base}/api/desk/image?id=${encodeURIComponent(bad)}`)).status, 404, bad);
     }
     assert.equal(picnic.seen.every((s) => s.url.hostname === "storefront-prod.nl.picnicinternational.com"), true);
+  });
+
+  test("a picture is fetched from Picnic once and then served from the app's folder", async () => {
+    const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGO4/+IOAAVNAqRW9JQaAAAAAElFTkSuQmCC", "base64");
+    const id = "b".repeat(64);
+    picnic.on("GET", new RegExp(`/static/images/${id}/medium.png`), new Response(png, { status: 200 }));
+    const before = picnic.seen.length;
+    for (let i = 0; i < 3; i++) {
+      const picture = await FAKE_SAFE_FETCH(`${desk.base}/api/desk/image?id=${id}`);
+      assert.equal(picture.status, 200);
+      assert.deepEqual(Buffer.from(await picture.arrayBuffer()), png);
+    }
+    assert.equal(picnic.seen.length - before, 1, "Picnic asked once");
+    assert.ok(existsSync(join(desk.dataDir, "picture-cache", "NL", "product", `${id}.png`)));
   });
 });
 

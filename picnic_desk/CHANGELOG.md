@@ -21,6 +21,10 @@ it does what picnic-web does, with the same handling of Picnic's answers.
 - New: sign in with a Picnic auth token; the verification code can also come
   by e-mail.
 - New: screens in English, Dutch, German or French (`language` option).
+- New: pictures are kept by the app: fetched from Picnic once, then shown from
+  the app's folder, also when Picnic's picture server is down. The folder has
+  a size limit (`picture_cache_mb`, 500 MB) and is left out of backups. The
+  page no longer loads anything from outside Home Assistant.
 - Kept: the desk layout (search box, tabs, shelf, receipt), shortcuts, several
   searches at once, a pasted list, bought before, saved products, the
   self-check, the keyboard, prices on recipe cards. picnic-web's screens are

@@ -3,6 +3,9 @@
  * rules of their own.
  */
 import assert from "node:assert/strict";
+import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { test } from "node:test";
 
 import { packs, packsPrice, recipePrice } from "../src/shared/recipe-price";
@@ -137,31 +140,137 @@ test("only real pictures are passed on", () => {
   assert.equal(pictureType(Buffer.concat([Buffer.from("RIFF"), Buffer.alloc(4), Buffer.from("WEBP")])), "image/webp");
 });
 
-test("pictures: what worked is tried first next time, and a missing one is not asked again for a while", async () => {
+const PNG = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGO4/+IOAAVNAqRW9JQaAAAAAElFTkSuQmCC", "base64");
+
+/** A stand-in for Picnic's image server: `answer` decides per address. */
+function imageServer(answer: (url: string) => Response | Promise<Response>) {
   const asked: string[] = [];
-  const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGO4/+IOAAVNAqRW9JQaAAAAAElFTkSuQmCC", "base64");
+  const fetchImpl = (async (input: string | URL | Request) => {
+    const url = String(input instanceof Request ? input.url : input);
+    asked.push(url.split("/static/images/")[1] ?? url);
+    return answer(url);
+  }) as typeof fetch;
+  return { asked, fetchImpl };
+}
+
+test("pictures: what worked is tried first next time, and a missing one is not asked again for a while", async () => {
   let now = 0;
-  const pictures = new Pictures(
-    async (url) => {
-      asked.push(String(url).split("/").pop()!);
-      if (String(url).includes("missing")) return new Response("", { status: 404 });
-      return String(url).endsWith("large.png") ? new Response(png) : new Response("", { status: 403 });
-    },
-    () => now,
-    async () => {}
+  const server = imageServer((url) =>
+    url.includes("missing")
+      ? new Response("", { status: 404 })
+      : url.endsWith("large.png")
+        ? new Response(PNG)
+        : new Response("", { status: 403 })
   );
+  const pictures = new Pictures({ fetch: server.fetchImpl, now: () => now, pause: async () => {} });
   const first = await pictures.load("abcdefgh1", "product", "NL");
   assert.equal(first.picture?.variant, "large.png");
-  asked.length = 0;
+  server.asked.length = 0;
   await pictures.load("abcdefgh2", "product", "NL");
-  assert.equal(asked[0], "large.png", "the variant that worked goes first");
-  asked.length = 0;
+  assert.equal(server.asked[0], "abcdefgh2/large.png", "the variant that worked goes first");
+  server.asked.length = 0;
   assert.equal((await pictures.load("missing01", "product", "NL")).picture, null);
-  const tries = asked.length;
+  const tries = server.asked.length;
   await pictures.load("missing01", "product", "NL");
-  assert.equal(asked.length, tries, "not asked again straight away");
+  assert.equal(server.asked.length, tries, "not asked again straight away");
   now += 11 * 60 * 1000;
   await pictures.load("missing01", "product", "NL");
-  assert.ok(asked.length > tries, "asked again later");
+  assert.ok(server.asked.length > tries, "asked again later");
   assert.equal(pictures.failures.at(-1)?.id, "missing01");
+});
+
+test("pictures are kept on disk: asked from Picnic once, still there after a restart and when Picnic is down", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "pictures-"));
+  let picnicUp = true;
+  const server = imageServer(() => (picnicUp ? new Response(PNG) : Promise.reject(new TypeError("fetch failed"))));
+  const first = new Pictures({ dir, fetch: server.fetchImpl, pause: async () => {} });
+  const loaded = await first.load("abcdefgh1", "product", "NL");
+  assert.equal(loaded.from, "picnic");
+  assert.deepEqual(loaded.picture?.data, PNG);
+  assert.equal((await first.load("abcdefgh1", "product", "NL")).from, "disk");
+  assert.equal(server.asked.length, 1, "asked once");
+  assert.deepEqual(readdirSync(join(dir, "NL", "product")), ["abcdefgh1.png"]);
+
+  picnicUp = false;
+  const restarted = new Pictures({ dir, fetch: server.fetchImpl, pause: async () => {} });
+  assert.deepEqual(restarted.stored.count, 1);
+  const again = await restarted.load("abcdefgh1", "product", "NL");
+  assert.equal(again.from, "disk");
+  assert.deepEqual(again.picture?.data, PNG);
+  assert.equal(again.picture?.type, "image/png");
+  assert.equal(server.asked.length, 1, "Picnic not asked after the restart");
+  assert.equal((await restarted.load("abcdefgh2", "product", "NL")).picture, null, "a new one needs Picnic");
+});
+
+test("pictures: the same picture asked by many cells at once is fetched once, and at most six go to Picnic together", async () => {
+  let open = 0;
+  let most = 0;
+  const server = imageServer(async () => {
+    open++;
+    most = Math.max(most, open);
+    await new Promise((r) => setTimeout(r, 5));
+    open--;
+    return new Response(PNG);
+  });
+  const pictures = new Pictures({ dir: mkdtempSync(join(tmpdir(), "pictures-")), fetch: server.fetchImpl });
+  const same = await Promise.all(Array.from({ length: 10 }, () => pictures.load("samesame1", "product", "NL")));
+  assert.ok(same.every((r) => r.picture));
+  assert.equal(server.asked.length, 1);
+  await Promise.all(Array.from({ length: 30 }, (_, i) => pictures.load(`different${i}`, "product", "NL")));
+  assert.ok(most <= 6, `at most six at once, saw ${most}`);
+  assert.equal(pictures.stored.count, 31);
+});
+
+test("pictures: the folder keeps to its size, dropping what was used longest ago", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "pictures-"));
+  const big = Buffer.concat([PNG, Buffer.alloc(1000)]); // still starts like a png
+  let now = 1_000_000;
+  const server = imageServer(() => new Response(big));
+  const pictures = new Pictures({ dir, maxBytes: big.length * 3, fetch: server.fetchImpl, now: () => now });
+  for (const id of ["picture01", "picture02", "picture03"]) {
+    now += 1000;
+    await pictures.load(id, "product", "NL");
+  }
+  now += 1000;
+  await pictures.load("picture01", "product", "NL"); // used again: now the most recent
+  now += 1000;
+  await pictures.load("picture04", "product", "NL");
+  const kept = readdirSync(join(dir, "NL", "product")).sort();
+  assert.ok(!kept.includes("picture02.png"), "the one used longest ago went");
+  assert.ok(kept.includes("picture01.png") && kept.includes("picture04.png"));
+  assert.ok(pictures.stored.bytes <= big.length * 3);
+});
+
+test("pictures: a damaged or removed file is fetched again, leftovers of a cut-off write are cleared", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "pictures-"));
+  mkdirSync(join(dir, "NL", "product"), { recursive: true });
+  writeFileSync(join(dir, "NL", "product", "damaged01.png"), "<svg onload=alert(1)>");
+  writeFileSync(join(dir, "NL", "product", "halfway01.png.1.abc.tmp"), "x");
+  const server = imageServer(() => new Response(PNG));
+  const pictures = new Pictures({ dir, fetch: server.fetchImpl });
+  const damaged = await pictures.load("damaged01", "product", "NL");
+  assert.equal(damaged.from, "picnic");
+  assert.deepEqual(damaged.picture?.data, PNG);
+  await pictures.load("removed01", "product", "NL");
+  rmSync(join(dir, "NL", "product", "removed01.png"));
+  assert.equal((await pictures.load("removed01", "product", "NL")).from, "picnic");
+  await new Promise((r) => setTimeout(r, 20));
+  assert.ok(!readdirSync(join(dir, "NL", "product")).some((name) => name.endsWith(".tmp")));
+});
+
+test("pictures: a folder that cannot be written to still serves pictures", async () => {
+  const blocked = join(mkdtempSync(join(tmpdir(), "pictures-")), "file");
+  writeFileSync(blocked, "not a folder");
+  const server = imageServer(() => new Response(PNG));
+  const errors: unknown[] = [];
+  const log = console.error;
+  console.error = (...args: unknown[]) => errors.push(args);
+  try {
+    const pictures = new Pictures({ dir: blocked, fetch: server.fetchImpl });
+    assert.ok((await pictures.load("abcdefgh1", "product", "NL")).picture);
+    assert.ok((await pictures.load("abcdefgh2", "product", "NL")).picture);
+  } finally {
+    console.error = log;
+  }
+  assert.ok(errors.length >= 1 && errors.length <= 2, "said once on start and once for writing, not per picture");
 });

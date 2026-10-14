@@ -3495,12 +3495,12 @@ var require_lib = __commonJS({
 // src/server/main.ts
 import { readFileSync as readFileSync2 } from "node:fs";
 import { createServer } from "node:http";
-import { dirname, join as join3 } from "node:path";
+import { dirname, join as join5 } from "node:path";
 import { fileURLToPath } from "node:url";
 
 // src/server/app.ts
-import { readFile } from "node:fs/promises";
-import { extname, join as join2, normalize, sep } from "node:path";
+import { readFile as readFile2 } from "node:fs/promises";
+import { extname, join as join4, normalize, sep } from "node:path";
 
 // src/server/next-server.ts
 var RequestCookies = class {
@@ -5357,13 +5357,30 @@ function recipeIngredients(recipe, portions) {
   });
 }
 
+// src/server/desk-routes.ts
+import { join as join3 } from "node:path";
+
 // src/server/pictures.ts
+import { mkdirSync, readdirSync, statSync } from "node:fs";
+import { readFile, rename, rm, utimes, writeFile } from "node:fs/promises";
+import { join } from "node:path";
 var IMAGE_ID = /^(?:[a-z][a-z0-9_-]{1,30}\/)?[A-Za-z0-9_-]{8,128}$/;
 var PRODUCT_VARIANTS = ["medium.png", "padded.webp", "small.png", "large.png", "tile-medium.webp", "regular.png"];
 var RECIPE_VARIANTS = ["filled-600x600.webp", "large.png", "medium.png", "padded.webp"];
-var CACHE_ITEMS = 400;
+var DEFAULT_CACHE_MB = 500;
 var MISSING_FOR_MS = 10 * 60 * 1e3;
 var RETRY_STATUSES = /* @__PURE__ */ new Set([429, 500, 502, 503, 504]);
+var AT_ONCE = 6;
+var AFTER_EVICTION = 0.9;
+var TOUCH_EVERY_MS = 60 * 60 * 1e3;
+var TYPES = {
+  png: "image/png",
+  jpg: "image/jpeg",
+  webp: "image/webp",
+  avif: "image/avif",
+  gif: "image/gif"
+};
+var EXTENSIONS = Object.fromEntries(Object.entries(TYPES).map(([ext, type]) => [type, ext]));
 function pictureType(data) {
   if (data.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))) return "image/png";
   if (data[0] === 255 && data[1] === 216 && data[2] === 255) return "image/jpeg";
@@ -5376,55 +5393,82 @@ function pictureType(data) {
   return null;
 }
 var Pictures = class {
-  constructor(fetchImpl = (...args) => fetch(...args), now = Date.now, pause = (ms) => new Promise((r) => setTimeout(r, ms))) {
-    this.fetchImpl = fetchImpl;
-    this.now = now;
-    this.pause = pause;
-  }
-  fetchImpl;
-  now;
-  pause;
-  #cache = /* @__PURE__ */ new Map();
+  #dir;
+  #maxBytes;
+  #fetch;
+  #now;
+  #pause;
+  /** What is on disk, by key; Map order is not relied on, `used` is. */
+  #entries = /* @__PURE__ */ new Map();
+  #bytes = 0;
   #missing = /* @__PURE__ */ new Map();
+  #loading = /* @__PURE__ */ new Map();
+  #running = 0;
+  #queue = [];
+  #writeTrouble = false;
   worked = /* @__PURE__ */ new Map();
   failures = [];
+  constructor(options = {}) {
+    this.#fetch = options.fetch ?? ((...args) => fetch(...args));
+    this.#now = options.now ?? Date.now;
+    this.#pause = options.pause ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
+    this.#maxBytes = options.maxBytes ?? DEFAULT_CACHE_MB * 1024 * 1024;
+    this.#dir = options.dir ?? null;
+    if (this.#dir) this.#scan(this.#dir);
+  }
+  /** How much is kept: for the self-check. */
+  get stored() {
+    return { count: this.#entries.size, bytes: this.#bytes, maxBytes: this.#maxBytes, enabled: this.#dir !== null };
+  }
   variants(kind) {
     const base = kind === "recipe" ? RECIPE_VARIANTS : PRODUCT_VARIANTS;
     return [...base].sort((a, b) => (this.worked.get(b) ?? 0) - (this.worked.get(a) ?? 0));
   }
+  /**
+   * The picture from disk, or from Picnic when it is not there yet. `fresh`
+   * asks Picnic even so (the self-check uses it to test Picnic itself).
+   */
   async load(id, kind, country, fresh = false) {
-    const tried = [];
-    if (!IMAGE_ID.test(id)) return { picture: null, tried };
-    const key = `${country}:${id}`;
-    const cached = this.#cache.get(key);
-    if (cached && !fresh) {
-      this.#cache.delete(key);
-      this.#cache.set(key, cached);
-      return { picture: cached, tried };
+    if (!IMAGE_ID.test(id)) return { picture: null, tried: [] };
+    const key = `${country}/${kind}/${encodeURIComponent(id)}`;
+    if (!fresh) {
+      const kept = await this.#read(key);
+      if (kept) return { picture: kept, tried: [], from: "disk" };
+      if ((this.#missing.get(key) ?? 0) > this.#now()) return { picture: null, tried: [] };
     }
-    if (!fresh && (this.#missing.get(key) ?? 0) > this.now()) return { picture: null, tried };
+    const running = this.#loading.get(key);
+    if (running) return running;
+    const loading = this.#limit(() => this.#fromPicnic(key, id, kind, country)).finally(() => this.#loading.delete(key));
+    this.#loading.set(key, loading);
+    return loading;
+  }
+  /** Forget which pictures were missing, so they are asked again. Kept pictures stay. */
+  forget() {
+    this.#missing.clear();
+  }
+  // ─── Picnic ────────────────────────────────────────────────────────────────
+  async #fromPicnic(key, id, kind, country) {
+    const tried = [];
     for (const variant of this.variants(kind)) {
-      const outcome = await this.#fetch(`${getImageCdnBase(country)}/${id}/${variant}`);
+      const outcome = await this.#get(`${getImageCdnBase(country)}/${id}/${variant}`);
       tried.push({ variant, outcome: typeof outcome === "object" ? 200 : outcome });
       if (typeof outcome !== "object") continue;
-      const picture = { ...outcome, variant };
       this.worked.set(variant, (this.worked.get(variant) ?? 0) + 1);
       this.#missing.delete(key);
-      this.#cache.set(key, picture);
-      while (this.#cache.size > CACHE_ITEMS) this.#cache.delete(this.#cache.keys().next().value);
-      return { picture, tried };
+      await this.#write(key, outcome.data, outcome.type);
+      return { picture: { ...outcome, variant }, tried, from: "picnic" };
     }
-    this.#missing.set(key, this.now() + MISSING_FOR_MS);
+    this.#missing.set(key, this.#now() + MISSING_FOR_MS);
     if (this.#missing.size > 5e3) this.#missing.clear();
     this.failures.push({ id, tried });
     if (this.failures.length > 40) this.failures.shift();
     return { picture: null, tried };
   }
-  async #fetch(url) {
+  async #get(url) {
     for (let attempt = 1; attempt <= 2; attempt++) {
       let response;
       try {
-        response = await this.fetchImpl(url, { headers: { "User-Agent": "okhttp/4.9.0" } });
+        response = await this.#fetch(url, { headers: { "User-Agent": "okhttp/4.9.0" } });
       } catch (error2) {
         return error2 instanceof Error ? error2.name : "network";
       }
@@ -5436,44 +5480,157 @@ var Pictures = class {
       }
       response.body?.cancel().catch(() => void 0);
       if (attempt === 1 && RETRY_STATUSES.has(response.status)) {
-        await this.pause(600);
+        await this.#pause(600);
         continue;
       }
       return response.status;
     }
     return "no answer";
   }
-  forget() {
-    this.#cache.clear();
-    this.#missing.clear();
+  /** A shelf of 60 new products should not become 60 requests to Picnic at once. */
+  async #limit(job) {
+    if (this.#running >= AT_ONCE) await new Promise((resolve) => this.#queue.push(resolve));
+    this.#running++;
+    try {
+      return await job();
+    } finally {
+      this.#running--;
+      this.#queue.shift()?.();
+    }
+  }
+  // ─── Disk ──────────────────────────────────────────────────────────────────
+  /** What is already in the folder, from an earlier run. */
+  #scan(dir) {
+    try {
+      mkdirSync(dir, { recursive: true });
+      for (const country of readdirSync(dir)) {
+        if (!/^[A-Z]{2}$/.test(country)) continue;
+        for (const kind of ["product", "recipe"]) {
+          let names;
+          try {
+            names = readdirSync(join(dir, country, kind));
+          } catch {
+            continue;
+          }
+          for (const name of names) {
+            const match = /^(.+)\.([a-z]+)$/.exec(name);
+            const file = join(dir, country, kind, name);
+            if (!match || !TYPES[match[2]]) {
+              void rm(file, { force: true }).catch(() => void 0);
+              continue;
+            }
+            const key = `${country}/${kind}/${match[1]}`;
+            const stat = statSync(file);
+            const used = stat.mtimeMs;
+            const twin = this.#entries.get(key);
+            if (twin) {
+              this.#drop(key);
+              void rm(twin.file, { force: true }).catch(() => void 0);
+            }
+            this.#entries.set(key, { file, size: stat.size, used, touched: used });
+            this.#bytes += stat.size;
+          }
+        }
+      }
+    } catch (error2) {
+      console.error("[pictures] cannot use the picture folder:", error2 instanceof Error ? error2.message : error2);
+    }
+    void this.#evict();
+  }
+  async #read(key) {
+    const entry = this.#entries.get(key);
+    if (!entry) return null;
+    let data;
+    try {
+      data = await readFile(entry.file);
+    } catch {
+      this.#drop(key);
+      return null;
+    }
+    const type = pictureType(data);
+    if (!type) {
+      this.#drop(key);
+      void rm(entry.file, { force: true }).catch(() => void 0);
+      return null;
+    }
+    const now = this.#now();
+    entry.used = now;
+    if (now - entry.touched > TOUCH_EVERY_MS) {
+      entry.touched = now;
+      void utimes(entry.file, new Date(now), new Date(now)).catch(() => void 0);
+    }
+    return { data, type, variant: "kept" };
+  }
+  async #write(key, data, type) {
+    if (!this.#dir || data.length > this.#maxBytes) return;
+    const ext = EXTENSIONS[type];
+    const [country, kind, name] = key.split("/");
+    const folder = join(this.#dir, country, kind);
+    const file = join(folder, `${name}.${ext}`);
+    const temporary = `${file}.${process.pid}.${Math.random().toString(36).slice(2)}.tmp`;
+    try {
+      mkdirSync(folder, { recursive: true });
+      await writeFile(temporary, data);
+      await rename(temporary, file);
+      const old = this.#entries.get(key);
+      if (old) {
+        this.#bytes -= old.size;
+        if (old.file !== file) void rm(old.file, { force: true }).catch(() => void 0);
+      }
+      const now = this.#now();
+      this.#entries.set(key, { file, size: data.length, used: now, touched: now });
+      this.#bytes += data.length;
+      this.#writeTrouble = false;
+    } catch (error2) {
+      void rm(temporary, { force: true }).catch(() => void 0);
+      if (!this.#writeTrouble) console.error("[pictures] cannot keep a picture:", error2 instanceof Error ? error2.message : error2);
+      this.#writeTrouble = true;
+      return;
+    }
+    await this.#evict();
+  }
+  #drop(key) {
+    const entry = this.#entries.get(key);
+    if (!entry) return;
+    this.#entries.delete(key);
+    this.#bytes -= entry.size;
+  }
+  async #evict() {
+    if (this.#bytes <= this.#maxBytes) return;
+    const oldestFirst = [...this.#entries].sort((a, b) => a[1].used - b[1].used);
+    for (const [key, entry] of oldestFirst) {
+      if (this.#bytes <= this.#maxBytes * AFTER_EVICTION) break;
+      this.#drop(key);
+      await rm(entry.file, { force: true }).catch(() => void 0);
+    }
   }
 };
 
 // src/server/store.ts
-import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { mkdirSync as mkdirSync2, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { join as join2 } from "node:path";
 var Store = class {
   constructor(dir) {
     this.dir = dir;
-    mkdirSync(dir, { recursive: true, mode: 448 });
+    mkdirSync2(dir, { recursive: true, mode: 448 });
   }
   dir;
   read(name, fallback, check) {
     try {
-      const value = JSON.parse(readFileSync(join(this.dir, name), "utf8"));
+      const value = JSON.parse(readFileSync(join2(this.dir, name), "utf8"));
       return check(value) ? value : fallback;
     } catch {
       return fallback;
     }
   }
   write(name, value) {
-    const path = join(this.dir, name);
+    const path = join2(this.dir, name);
     const temporary = `${path}.${process.pid}.tmp`;
     writeFileSync(temporary, JSON.stringify(value, null, 1), { mode: 384 });
     renameSync(temporary, path);
   }
   remove(name) {
-    rmSync(join(this.dir, name), { force: true });
+    rmSync(join2(this.dir, name), { force: true });
   }
 };
 var isObject = (value) => typeof value === "object" && value !== null && !Array.isArray(value);
@@ -5534,7 +5691,12 @@ var signedOut = () => NextResponse.json({ error: "Sign in to Picnic first.", cod
 var DeskRoutes = class {
   constructor(desk) {
     this.desk = desk;
-    this.pictures = new Pictures(void 0, desk.options.now);
+    this.pictures = new Pictures({
+      // The demo shop draws its own pictures and keeps none.
+      dir: desk.options.demo ? void 0 : join3(desk.options.dataDir, "picture-cache"),
+      maxBytes: (desk.options.pictureCacheMb ?? DEFAULT_CACHE_MB) * 1024 * 1024,
+      now: desk.options.now
+    });
   }
   desk;
   pictures;
@@ -5605,7 +5767,8 @@ var DeskRoutes = class {
     return new NextResponse(new Uint8Array(picture.data), {
       headers: {
         "content-type": picture.type,
-        "cache-control": "private, max-age=86400",
+        // The browser may keep it too; a picture's id stays with that picture.
+        "cache-control": "private, max-age=2592000",
         "content-security-policy": "default-src 'none'"
       }
     });
@@ -5841,8 +6004,11 @@ var DeskRoutes = class {
       const variants = [...new Set(loaded.map((r) => r.picture.variant))].join(", ");
       const failed = results.find((r) => !r.picture);
       const failure = failed ? `; failed: ${failed.tried.map((t) => `${t.variant} → ${t.outcome}`).join(", ")}` : "";
-      if (!loaded.length) throw new Error(`none of ${sample.length} loaded${failure}`);
-      return `${loaded.length} of ${sample.length} loaded (${variants})${failure}`;
+      const kept = this.pictures.stored;
+      const mb = (bytes) => `${Math.round(bytes / 1024 / 1024)} MB`;
+      const store = kept.enabled ? `; ${kept.count} kept on this computer (${mb(kept.bytes)} of ${mb(kept.maxBytes)})` : "";
+      if (!loaded.length) throw new Error(`none of ${sample.length} loaded from Picnic${failure}${store}`);
+      return `${loaded.length} of ${sample.length} loaded from Picnic (${variants})${failure}${store}`;
     });
     await run("Basket", async () => {
       const cart2 = await get("cart");
@@ -6067,7 +6233,7 @@ var Session = class {
 var INGRESS_GATEWAY = "172.30.32.2";
 var MAX_BODY_BYTES = 1024 * 1024;
 var INTERNAL_BASE = "http://picnic-desk.internal";
-var TYPES = {
+var TYPES2 = {
   ".html": "text/html; charset=utf-8",
   ".js": "text/javascript; charset=utf-8",
   ".css": "text/css; charset=utf-8",
@@ -6080,7 +6246,7 @@ var TYPES = {
 };
 var PAGE_POLICY = [
   "default-src 'self'",
-  "img-src 'self' data: https://*.picnicinternational.com",
+  "img-src 'self' data:",
   "style-src 'self' 'unsafe-inline'",
   "script-src 'self'",
   "connect-src 'self'",
@@ -6148,20 +6314,20 @@ var Desk = class {
   }
   async #static(res, file, headOnly) {
     const root = normalize(this.options.publicDir + sep);
-    const path = normalize(join2(root, file));
+    const path = normalize(join4(root, file));
     if (!path.startsWith(root)) {
       send(res, 404, text2("Not found."));
       return;
     }
     let data;
     try {
-      data = await readFile(path);
+      data = await readFile2(path);
     } catch {
       send(res, 404, text2("Not found."));
       return;
     }
     const headers = {
-      "content-type": TYPES[extname(path)] ?? "application/octet-stream",
+      "content-type": TYPES2[extname(path)] ?? "application/octet-stream",
       // The files change with every app update and are small; always ask.
       "cache-control": "no-cache"
     };
@@ -12366,7 +12532,7 @@ var VENDORED_ROUTES = [
 // src/server/main.ts
 function appOptions(dataDir) {
   try {
-    return JSON.parse(readFileSync2(join3(dataDir, "options.json"), "utf8"));
+    return JSON.parse(readFileSync2(join5(dataDir, "options.json"), "utf8"));
   } catch {
     return {};
   }
@@ -12381,15 +12547,18 @@ function startDesk(env = process.env) {
   const demo = env.PICNIC_DEMO === "1";
   const wantedLanguage = String(env.DESK_LANGUAGE || options.language || "en").toLowerCase();
   const language = LANGUAGES.includes(wantedLanguage) ? wantedLanguage : "en";
+  const wantedCache = Number(env.PICTURE_CACHE_MB || options.picture_cache_mb || DEFAULT_CACHE_MB);
+  const pictureCacheMb = Number.isFinite(wantedCache) && wantedCache >= 0 ? wantedCache : DEFAULT_CACHE_MB;
   installFetchTimeout();
   process.on("unhandledRejection", (reason) => {
     console.error("[desk] unhandled:", reason instanceof Error ? reason.stack : reason);
   });
   const desk = new Desk({
     dataDir,
-    publicDir: env.PUBLIC_DIR || join3(here, "public"),
+    publicDir: env.PUBLIC_DIR || join5(here, "public"),
     country,
     language,
+    pictureCacheMb,
     ingressOnly: env.INGRESS_ONLY === "1",
     version: true ? "1.0.0" : "dev",
     routes: VENDORED_ROUTES,

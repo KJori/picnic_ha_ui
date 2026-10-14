@@ -9,6 +9,7 @@
  *   INGRESS_ONLY  "1": only Home Assistant's ingress gateway may connect
  *   COUNTRY_CODE  NL, DE or FR; overrides the app option
  *   DESK_LANGUAGE en, nl, de or fr; overrides the app option
+ *   PICTURE_CACHE_MB  size limit of the picture folder; overrides the app option
  *   PICNIC_DEMO   "1": a built-in demo shop instead of Picnic
  */
 import { readFileSync } from "node:fs";
@@ -20,6 +21,7 @@ import { Desk } from "./app";
 import { installFetchTimeout } from "./fetch-timeout";
 import { LANGUAGES, type Language } from "./desk-routes";
 import { demoShop } from "./demo/shop";
+import { DEFAULT_CACHE_MB } from "./pictures";
 import { VENDORED_ROUTES } from "./routes.generated";
 import { isCountry } from "./session";
 
@@ -44,6 +46,9 @@ export function startDesk(env: NodeJS.ProcessEnv = process.env) {
   const wantedLanguage = String(env.DESK_LANGUAGE || options.language || "en").toLowerCase();
   const language = (LANGUAGES as readonly string[]).includes(wantedLanguage) ? (wantedLanguage as Language) : "en";
 
+  const wantedCache = Number(env.PICTURE_CACHE_MB || options.picture_cache_mb || DEFAULT_CACHE_MB);
+  const pictureCacheMb = Number.isFinite(wantedCache) && wantedCache >= 0 ? wantedCache : DEFAULT_CACHE_MB;
+
   installFetchTimeout();
   // An app that runs for months logs a stray failure instead of stopping on it.
   process.on("unhandledRejection", (reason) => {
@@ -54,6 +59,7 @@ export function startDesk(env: NodeJS.ProcessEnv = process.env) {
     publicDir: env.PUBLIC_DIR || join(here, "public"),
     country,
     language,
+    pictureCacheMb,
     ingressOnly: env.INGRESS_ONLY === "1",
     version: typeof DESK_VERSION === "string" ? DESK_VERSION : "dev",
     routes: VENDORED_ROUTES,

@@ -32,13 +32,13 @@ const TYPES: Record<string, string> = {
 };
 
 /**
- * The page may load pictures from Picnic's servers and nothing else from
- * outside. Under ingress the page sits in a frame of Home Assistant's own
- * page, which has the same origin.
+ * The page loads nothing from outside, pictures included: those come through
+ * this server (src/server/pictures.ts). Under ingress the page sits in a frame
+ * of Home Assistant's own page, which has the same origin.
  */
 const PAGE_POLICY = [
   "default-src 'self'",
-  "img-src 'self' data: https://*.picnicinternational.com",
+  "img-src 'self' data:",
   "style-src 'self' 'unsafe-inline'",
   "script-src 'self'",
   "connect-src 'self'",
@@ -57,6 +57,8 @@ export type DeskOptions = {
   routes: RouteEntry[];
   /** Answers instead of picnic-web's routes; the demo shop. */
   demo?: (request: NextRequest, segments: string[]) => Promise<NextResponse<unknown> | null>;
+  /** The size limit of the picture folder; DEFAULT_CACHE_MB when left out. */
+  pictureCacheMb?: number;
   now?: () => number;
 };
 

@@ -4,7 +4,7 @@
  *
  *   GET  state            signed in?, country, demo, version
  *   POST code             send the verification code again {channel: "SMS"|"EMAIL"}
- *   GET  image            ?id=&kind=product|recipe  a picture, trying several variants
+ *   GET  image            ?id=&kind=product|recipe  a picture, kept on disk after the first time
  *   GET  saved            starred products;  POST saved {product} toggles one
  *   GET  shortcuts        the search shortcuts;  PUT shortcuts {shortcuts}
  *   GET  history          "bought before", from the last deliveries  (?refresh=1)
@@ -37,7 +37,9 @@ import type { RscPageModel } from "@/lib/rsc/rsc-page-types";
 import { recipePrice } from "../shared/recipe-price";
 import type { Desk } from "./app";
 import { L1_CATEGORIES, productById } from "./demo/data";
-import { Pictures } from "./pictures";
+import { join } from "node:path";
+
+import { DEFAULT_CACHE_MB, Pictures } from "./pictures";
 import { isObject } from "./store";
 
 export type DeskState = {
@@ -140,7 +142,12 @@ export class DeskRoutes {
   #historyBuild: Promise<HistoryData> | null = null;
 
   constructor(private readonly desk: Desk) {
-    this.pictures = new Pictures(undefined, desk.options.now);
+    this.pictures = new Pictures({
+      // The demo shop draws its own pictures and keeps none.
+      dir: desk.options.demo ? undefined : join(desk.options.dataDir, "picture-cache"),
+      maxBytes: (desk.options.pictureCacheMb ?? DEFAULT_CACHE_MB) * 1024 * 1024,
+      now: desk.options.now,
+    });
   }
 
   async handle(request: NextRequest, segments: string[]): Promise<Response> {
@@ -216,7 +223,8 @@ export class DeskRoutes {
     return new NextResponse(new Uint8Array(picture.data), {
       headers: {
         "content-type": picture.type,
-        "cache-control": "private, max-age=86400",
+        // The browser may keep it too; a picture's id stays with that picture.
+        "cache-control": "private, max-age=2592000",
         "content-security-policy": "default-src 'none'",
       },
     });
@@ -469,8 +477,13 @@ export class DeskRoutes {
       const variants = [...new Set(loaded.map((r) => r.picture!.variant))].join(", ");
       const failed = results.find((r) => !r.picture);
       const failure = failed ? `; failed: ${failed.tried.map((t) => `${t.variant} → ${t.outcome}`).join(", ")}` : "";
-      if (!loaded.length) throw new Error(`none of ${sample.length} loaded${failure}`);
-      return `${loaded.length} of ${sample.length} loaded (${variants})${failure}`;
+      const kept = this.pictures.stored;
+      const mb = (bytes: number) => `${Math.round(bytes / 1024 / 1024)} MB`;
+      const store = kept.enabled
+        ? `; ${kept.count} kept on this computer (${mb(kept.bytes)} of ${mb(kept.maxBytes)})`
+        : "";
+      if (!loaded.length) throw new Error(`none of ${sample.length} loaded from Picnic${failure}${store}`);
+      return `${loaded.length} of ${sample.length} loaded from Picnic (${variants})${failure}${store}`;
     });
     await run("Basket", async () => {
       const cart = (await get("cart")) as CartData;
