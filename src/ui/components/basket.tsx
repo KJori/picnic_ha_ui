@@ -1,233 +1,171 @@
 /**
- * The basket as a till receipt: always on the right of the shelf, and as a
- * page of its own at #/cart.
+ * The basket as a till receipt on the right of the desk, the bill used on
+ * order pages, and the delivery-time picker as a week grid.
  */
-import { type ReactNode, useEffect, useMemo, useState } from "react";
+import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 
 import { isMinimumOrderMet } from "@/lib/cart/minimum-order";
 import type { DeliverySlotData, DeliverySlotPickerData } from "@/lib/core/delivery-slot-types";
-import type {
-  CartData,
-  CartFooterData,
-  CartFooterText,
-  CartItem,
-  CartRecipeGroup,
-  DepositEntry,
-  FeeEntry,
-} from "@/lib/core/types";
-import { formatTime } from "@/lib/delivery/format-delivery-window";
+import type { CartData, CartFooterData, CartItem, CartRecipeGroup, DepositEntry, FeeEntry } from "@/lib/core/types";
+import type { ProfileData } from "@/lib/core/user-types";
 
 import { api } from "../lib/api";
 import { href, navigate } from "../lib/router";
-import { useCart } from "../state/cart";
-import { useT } from "../state/session";
-import {
-  Badge,
-  Confirm,
-  Dialog,
-  ErrorView,
-  Img,
-  Loaded,
-  Price,
-  Spinner,
-  Stepper,
-  useLoad,
-  useMoney,
-  useToast,
-} from "./common";
-import { MiniRow, useOpenProduct } from "./products";
+import { cartModel, useCart } from "../state/cart";
+import { forgetSaved } from "../state/saved";
+import { useSession, useT } from "../state/session";
+import { Dialog, ErrorView, Loaded, Spinner, Stepper, useDates, useLoad, useMoney, useToast } from "./common";
+import { useOpenProduct } from "./products";
 
 // ─── Lines ───────────────────────────────────────────────────────────────────
 
-export function BasketLine({ item, editable = true }: { item: CartItem; editable?: boolean }) {
+function Line({ item, editable }: { item: CartItem; editable: boolean }) {
   const { d } = useT();
   const cart = useCart();
   const open = useOpenProduct();
+  const money = useMoney();
   const quantity = editable ? cart.quantity(item.productId) : item.quantity;
+  if (editable && !item.isUnavailable && quantity === 0) return null;
+  const detail = [item.unitQuantity, item.basketGroupId ? d.forARecipe : ""].filter(Boolean).join(", ");
   return (
-    <li className={`line ${item.isUnavailable ? "line-unavailable" : ""}`} data-product={item.productId}>
-      <div className="line-main">
-        {editable && !item.isUnavailable ? (
-          <Stepper
-            quantity={quantity}
-            maxCount={item.maxCount}
-            name={item.name}
-            onAdd={() => cart.add(item.productId, item.maxCount)}
-            onRemove={() => cart.remove(item.productId)}
-          />
-        ) : (
-          <span className="line-qty">{item.isUnavailable ? "–" : `${item.quantity}×`}</span>
-        )}
-        <button type="button" className="line-name link-like" onClick={() => open(item.productId)}>
-          <Img id={item.imageId} className="line-picture" alt="" />
-          <span>
-            {item.name}
-            <small>{item.unitQuantity}</small>
-          </span>
+    <li className={`line ${item.isUnavailable ? "unavailable" : ""}`} data-product={item.productId}>
+      {editable && !item.isUnavailable ? (
+        <Stepper
+          quantity={quantity}
+          maxCount={item.maxCount}
+          name={item.name}
+          onAdd={() => cart.add(item.productId, item.maxCount)}
+          onRemove={() => cart.remove(item.productId)}
+        />
+      ) : (
+        <span className="count">{item.isUnavailable ? "–" : `${item.quantity}×`}</span>
+      )}
+      <div className="what">
+        <button type="button" className="name" onClick={() => open(item.productId)} title={d.openProduct}>
+          {item.name}
         </button>
-        {!item.isUnavailable && <Price cents={item.displayPrice} was={item.originalPrice} className="line-price" />}
-      </div>
-      {item.badges.length > 0 && (
-        <p className="line-badges">
-          {item.badges.map((badge, i) => (
-            <Badge key={i} badge={badge} />
-          ))}
-        </p>
-      )}
-      {item.isUnavailable && (
-        <div className="line-problem">
-          <p>{item.unavailableExplanation ?? d.unavailable}</p>
-          {editable && item.replacements.length > 0 && <MiniRow title={d.replacements} products={item.replacements} />}
-          {editable && (
-            <button type="button" className="button quiet small" onClick={() => cart.remove(item.productId, item.quantity)}>
-              {d.removeLine}
-            </button>
-          )}
-        </div>
-      )}
-    </li>
-  );
-}
-
-function RecipeGroup({ group, items, editable }: { group: CartRecipeGroup; items: CartItem[]; editable: boolean }) {
-  return (
-    <li className="line-group">
-      <a className="line-group-head" href={href(`/recipe/${encodeURIComponent(group.id)}`)}>
-        <Img id={group.imageId} kind="recipe" className="line-group-picture" alt="" />
-        <span>{group.title}</span>
-      </a>
-      <ul className="lines">
-        {items.map((item) => (
-          <BasketLine key={item.id} item={item} editable={editable} />
+        {detail && <span>{detail}</span>}
+        {item.badges.map((badge, i) => (
+          <span key={i} className="line-offer">
+            {badge.text}
+          </span>
         ))}
-      </ul>
+        {item.isUnavailable && (
+          <>
+            <span className="gone">{item.unavailableExplanation ?? d.unavailable}</span>
+            {editable && item.replacements.length > 0 && (
+              <span className="instead">
+                {d.replacements}:{" "}
+                {item.replacements.slice(0, 3).map((r, i) => (
+                  <span key={r.id}>
+                    {i > 0 && ", "}
+                    <button type="button" className="quiet" onClick={() => open(r.id)}>
+                      {r.name}
+                    </button>
+                  </span>
+                ))}
+              </span>
+            )}
+            {editable && (
+              <button type="button" className="quiet" onClick={() => cart.remove(item.productId, item.quantity)}>
+                {d.removeLine}
+              </button>
+            )}
+          </>
+        )}
+      </div>
+      <span className="cost">{item.isUnavailable ? "" : money.plain(item.displayPrice)}</span>
     </li>
   );
 }
 
-export function BasketLines({ cart, editable = true }: { cart: Pick<CartData, "items" | "recipeGroups">; editable?: boolean }) {
-  const { t } = useT();
-  const { groups, others } = useMemo(() => {
+/** Lines, with a recipe's lines together under its name. */
+export function Lines({ cart, editable = true }: { cart: Pick<CartData, "items" | "recipeGroups">; editable?: boolean }) {
+  const groups = useMemo(() => {
+    const known = new Map(cart.recipeGroups.map((g) => [g.id, g]));
+    const out: { group: CartRecipeGroup | null; items: CartItem[] }[] = [];
     const byGroup = new Map<string, CartItem[]>();
-    const others: CartItem[] = [];
+    const loose: CartItem[] = [];
     for (const item of cart.items) {
-      if (item.basketGroupId) byGroup.set(item.basketGroupId, [...(byGroup.get(item.basketGroupId) ?? []), item]);
-      else others.push(item);
+      if (item.basketGroupId && known.has(item.basketGroupId)) {
+        byGroup.set(item.basketGroupId, [...(byGroup.get(item.basketGroupId) ?? []), item]);
+      } else loose.push(item);
     }
-    const known = new Set(cart.recipeGroups.map((g) => g.id));
-    // Lines of a group Picnic did not describe are shown as ordinary lines.
-    for (const [id, items] of byGroup) if (!known.has(id)) others.push(...items);
-    const groups = cart.recipeGroups
-      .filter((g) => byGroup.get(g.id)?.length)
-      .map((group) => ({ group, items: byGroup.get(group.id)! }));
-    return { groups, others };
+    for (const [id, items] of byGroup) out.push({ group: known.get(id)!, items });
+    out.push({ group: null, items: loose });
+    return out;
   }, [cart.items, cart.recipeGroups]);
   return (
     <ul className="lines">
-      {groups.map(({ group, items }) => (
-        <RecipeGroup key={group.id} group={group} items={items} editable={editable} />
-      ))}
-      {groups.length > 0 && others.length > 0 && <li className="lines-heading">{t.cartOtherItems}</li>}
-      {others.map((item) => (
-        <BasketLine key={item.id} item={item} editable={editable} />
-      ))}
+      {groups.flatMap(({ group, items }) => [
+        ...(group
+          ? [
+              <li key={`g-${group.id}`} className="line-head">
+                <a href={href(`/recipe/${encodeURIComponent(group.id)}`)}>{group.title}</a>
+              </li>,
+            ]
+          : []),
+        ...items.map((item) => <Line key={item.id} item={item} editable={editable} />),
+      ])}
     </ul>
   );
 }
 
-// ─── Totals ──────────────────────────────────────────────────────────────────
+// ─── Sums ────────────────────────────────────────────────────────────────────
 
-const coloured = (text: CartFooterText) => <span style={text.color ? { color: text.color } : undefined}>{text.text}</span>;
-
-export function Totals({
+/** Savings, deposits and fees above the total, then the total, as on a till receipt. */
+export function Sums({
   totalPrice,
-  totalCount,
   depositBreakdown,
   membershipSavings,
   promoSavings,
   fees,
-  minimumOrderValue,
-  loyaltyPoints,
+  loyalty,
 }: {
   totalPrice: number;
-  totalCount: number;
   depositBreakdown: DepositEntry[];
   membershipSavings: number;
   promoSavings: number;
   fees: FeeEntry[];
-  minimumOrderValue: number | null;
-  loyaltyPoints?: CartFooterData["loyaltyPoints"];
+  loyalty?: CartFooterData["loyaltyPoints"];
 }) {
   const { t } = useT();
   const money = useMoney();
   const deposit = (type: string) =>
     type.toUpperCase() === "BAG" ? t.depositBag : type.toUpperCase() === "BOTTLE" ? t.depositBottle : t.depositGeneric;
-  const hasDeliveryFee = fees.some((fee) => fee.type.toUpperCase().includes("DELIVERY"));
-  const row = (label: ReactNode, value: ReactNode, className = "") => (
-    <div className={`sum-row ${className}`}>
-      <dt>{label}</dt>
-      <dd>{value}</dd>
+  const row = (label: ReactNode, value: string, key: string) => (
+    <div className="sum-row" key={key}>
+      <span>{label}</span>
+      <span>{value}</span>
     </div>
   );
   return (
-    <dl className="sum">
-      {row(`${t.itemsLabel} (${totalCount})`, "")}
-      {membershipSavings > 0 && row(<span className="pill pill-family">{t.accountFamilyBadge}</span>, `−${money(membershipSavings)}`)}
-      {promoSavings > 0 && row(<span className="pill pill-promo">{t.cartPromoLabel}</span>, `−${money(promoSavings)}`)}
-      {depositBreakdown.filter((e) => e.total > 0).map((e) => row(deposit(e.type), money(e.total)))}
-      {fees.map((fee) => row(fee.name, fee.amount < 0 ? `−${money(-fee.amount)}` : money(fee.amount)))}
-      {!hasDeliveryFee && row(t.cartDeliveryLabel, t.cartDeliveryFree)}
-      {minimumOrderValue !== null &&
-        minimumOrderValue > 0 &&
-        row(
-          t.minimumOrderLabel,
-          <span className={totalPrice >= minimumOrderValue ? "met" : "unmet"}>
-            {totalPrice >= minimumOrderValue ? "✓ " : ""}
-            {money(minimumOrderValue)}
-          </span>
-        )}
-      {row(t.totalLabel, money(totalPrice), "sum-total")}
-      {loyaltyPoints && row(coloured(loyaltyPoints.label), coloured(loyaltyPoints.value), "sum-points")}
-    </dl>
-  );
-}
-
-// ─── Delivery time ───────────────────────────────────────────────────────────
-
-export function SlotBanner({ cart, onChosen }: { cart: CartData; onChosen?: (cart: CartData) => void }) {
-  const { t } = useT();
-  const [open, setOpen] = useState(false);
-  const model = useCart();
-  return (
     <>
-      <button type="button" className="slot-banner" onClick={() => setOpen(true)}>
-        <span className="slot-icon" aria-hidden="true">
-          ⏱
-        </span>
-        <span>
-          <strong>{cart.deliveryBannerText}</strong>
-          {!cart.selectedSlot?.isExplicitSelection && <small>{t.tapToChoose}</small>}
-        </span>
-        <span aria-hidden="true">›</span>
-      </button>
-      {open && (
-        <SlotPicker
-          onClose={() => setOpen(false)}
-          onChosen={(next) => {
-            model.accept(next);
-            onChosen?.(next);
-            setOpen(false);
-          }}
-        />
+      {promoSavings > 0 && row(t.cartPromoLabel, `−${money.plain(promoSavings)}`, "promo")}
+      {membershipSavings > 0 && row(t.accountFamilyBadge, `−${money.plain(membershipSavings)}`, "family")}
+      {depositBreakdown.filter((e) => e.total > 0).map((e) => row(deposit(e.type), money.plain(e.total), `d-${e.type}`))}
+      {fees.map((fee) => row(fee.name, fee.amount < 0 ? `−${money.plain(-fee.amount)}` : money.plain(fee.amount), `f-${fee.type}`))}
+      <div className="total">
+        <span>{t.totalLabel}</span>
+        <span>{money.plain(totalPrice)}</span>
+      </div>
+      {loyalty && (
+        <div className="sum-row points">
+          <span style={loyalty.label.color ? { color: loyalty.label.color } : undefined}>{loyalty.label.text}</span>
+          <span style={loyalty.value.color ? { color: loyalty.value.color } : undefined}>{loyalty.value.text}</span>
+        </div>
       )}
     </>
   );
 }
 
+// ─── Delivery time ───────────────────────────────────────────────────────────
+
+/** The week at a glance: a column per day, a button per delivery time. */
 export function SlotPicker({ onClose, onChosen }: { onClose: () => void; onChosen: (cart: CartData) => void }) {
-  const { t } = useT();
+  const { t, d } = useT();
+  const dates = useDates();
   const [load, reload] = useLoad<DeliverySlotPickerData>("slots", (signal) => api("cart/delivery-slots", { signal }));
-  const [day, setDay] = useState(0);
   const [choosing, setChoosing] = useState<string | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
 
@@ -241,58 +179,80 @@ export function SlotPicker({ onClose, onChosen }: { onClose: () => void; onChose
   };
 
   return (
-    <Dialog title={t.pickerTitle} onClose={onClose} className="slot-dialog">
-      <p className="free">{t.freeDeliveryLabel}</p>
+    <Dialog title={t.pickerTitle} onClose={onClose} wide>
+      <p className="hint">
+        {t.freeDeliveryLabel} {d.greenHint}
+      </p>
+      {problem && <ErrorView message={problem} />}
       <Loaded load={load} retry={reload}>
         {(data) => {
-          if (!data.dayGroups.length) return <p className="empty">{t.noSlotsLabel}</p>;
-          const current = data.dayGroups[Math.min(day, data.dayGroups.length - 1)];
-          const all = [...current.greenSlots, ...current.regularSlots].sort((a, b) =>
-            a.windowStart.localeCompare(b.windowStart)
-          );
-          const selectedId = data.selectedSlot?.isExplicitSelection ? data.selectedSlot.slotId : null;
+          if (!data.dayGroups.length) return <p className="hint">{t.noSlotsLabel}</p>;
+          const chosen = data.selectedSlot?.isExplicitSelection ? data.selectedSlot.slotId : null;
           return (
-            <>
-              <div className="day-tabs" role="tablist">
-                {data.dayGroups.map((group, index) => (
-                  <button
-                    key={group.date}
-                    type="button"
-                    role="tab"
-                    aria-selected={index === day}
-                    onClick={() => setDay(index)}
-                  >
-                    <strong>{group.dayLabel}</strong>
-                    <span>{group.dateLabel}</span>
-                  </button>
-                ))}
-              </div>
-              {problem && <p className="problem">{problem}</p>}
-              <ul className="slots">
-                {all.map((slot) => (
-                  <li key={slot.slotId}>
-                    <button
-                      type="button"
-                      className={`slot ${slot.slotId === selectedId ? "slot-chosen" : ""}`}
-                      disabled={!slot.isAvailable || choosing !== null}
-                      onClick={() => void choose(slot)}
-                      aria-pressed={slot.slotId === selectedId}
-                    >
-                      <span>
-                        {formatTime(new Date(slot.windowStart))} – {formatTime(new Date(slot.windowEnd))}
-                      </span>
-                      {slot.isGreenChoice && <span className="green">🌿 {t.greenChoiceLabel}</span>}
-                      {choosing === slot.slotId && <span className="spinner small" aria-hidden="true" />}
-                      {slot.slotId === selectedId && <span aria-hidden="true">✓</span>}
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            </>
+            <div className="week" style={{ gridTemplateColumns: `repeat(${data.dayGroups.length}, minmax(7.5rem, 1fr))` }}>
+              {data.dayGroups.map((day) => {
+                const slots = [...day.greenSlots, ...day.regularSlots].sort((a, b) => a.windowStart.localeCompare(b.windowStart));
+                return (
+                  <section key={day.date} className="day" aria-label={`${day.dayLabel} ${day.dateLabel}`}>
+                    <h3>
+                      {/^\d{4}-\d{2}-\d{2}$/.test(day.date) ? dates.weekday(`${day.date}T12:00:00`) : day.dayLabel}{" "}
+                      <small>{/^\d{4}-\d{2}-\d{2}$/.test(day.date) ? dates.short(`${day.date}T12:00:00`) : day.dateLabel}</small>
+                    </h3>
+                    {slots.map((slot) => (
+                      <button
+                        key={slot.slotId}
+                        type="button"
+                        className={`slot ${slot.slotId === chosen ? "chosen" : ""} ${slot.isGreenChoice ? "green" : ""}`}
+                        disabled={!slot.isAvailable || choosing !== null}
+                        aria-pressed={slot.slotId === chosen}
+                        title={slot.isGreenChoice ? t.greenChoiceLabel : undefined}
+                        onClick={() => void choose(slot)}
+                      >
+                        {dates.clock(slot.windowStart)}–{dates.clock(slot.windowEnd)}
+                        {slot.isGreenChoice && <span aria-label={t.greenChoiceLabel}> 🌿</span>}
+                        {choosing === slot.slotId && <span className="spinner small" aria-hidden="true" />}
+                      </button>
+                    ))}
+                  </section>
+                );
+              })}
+            </div>
           );
         }}
       </Loaded>
     </Dialog>
+  );
+}
+
+/** "Delivery: Thu 15 Oct, 17:00 to 18:00. Change" */
+export function SlotLine({ cart }: { cart: CartData }) {
+  const { d } = useT();
+  const dates = useDates();
+  const [open, setOpen] = useState(false);
+  const slot = cart.selectedSlot;
+  const window = slot?.windowStart ? dates.window(slot.windowStart, slot.windowEnd, d.to) : null;
+  return (
+    <>
+      <p className={`slot-line ${slot?.isExplicitSelection ? "" : "unchosen"}`}>
+        {slot?.isExplicitSelection && window
+          ? d.deliveryAt.replace("{window}", window)
+          : window
+            ? d.deliveryPicked.replace("{window}", window)
+            : d.noDeliveryYet}{" "}
+        <button type="button" className="quiet" onClick={() => setOpen(true)}>
+          {slot?.isExplicitSelection ? d.change : d.chooseTime}
+        </button>
+      </p>
+      {open && (
+        <SlotPicker
+          onClose={() => setOpen(false)}
+          onChosen={(next) => {
+            cartModel.accept(next);
+            setOpen(false);
+          }}
+        />
+      )}
+    </>
   );
 }
 
@@ -317,113 +277,119 @@ function useFooter(totalPrice: number | undefined): CartFooterData | null {
   return footer;
 }
 
-export function Receipt({ full = false }: { full?: boolean }) {
+let profileName: string | null = null;
+
+export function Receipt() {
   const { t, d } = useT();
+  const session = useSession();
   const cart = useCart();
   const toast = useToast();
-  const [confirmClear, setConfirmClear] = useState(false);
-  const footer = useFooter(cart.cart?.totalPrice);
   const money = useMoney();
+  const footer = useFooter(cart.cart?.totalPrice);
+  const [armed, setArmed] = useState(false);
+  const armTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
+  const [name, setName] = useState(profileName);
 
-  if (cart.status === "loading" && !cart.cart) return <Spinner />;
-  if (!cart.cart) return <ErrorView message={cart.error ?? t.cartLoadError} onRetry={() => void cart.refresh()} />;
+  useEffect(() => {
+    if (profileName) return;
+    void api<ProfileData>("user/profile").then((result) => {
+      if (result.ok && result.data.name) setName((profileName = result.data.name));
+    });
+  }, []);
+
+  const signOut = async () => {
+    await api("auth/logout", { method: "POST" });
+    profileName = null;
+    cartModel.reset();
+    forgetSaved();
+    await session.refresh();
+  };
+
   const data = cart.cart;
-  const empty = data.items.length === 0;
-  const canCheckout = !empty && isMinimumOrderMet(data.totalPrice, data.minimumOrderValue) && data.totalCount > 0;
+  const count = cart.count;
+  const total = data?.totalPrice ?? 0;
+  const minimum = data?.minimumOrderValue ?? null;
+  const short = minimum ? minimum - total : 0;
 
   return (
-    <div className={`receipt ${full ? "receipt-full" : ""}`} aria-busy={cart.busy}>
-      <header className="receipt-head">
+    <div className="receipt" aria-busy={cart.busy}>
+      <div className="receipt-head">
         <h2>{t.cartTitle}</h2>
-        <span className="receipt-count">
-          {cart.count} · {money(data.totalPrice)}
-        </span>
-      </header>
-      <SlotBanner cart={data} />
-      {empty ? (
-        <p className="receipt-empty">{d.emptyBasket}</p>
+        <span>{count === 1 ? d.oneItem : d.items.replace("{n}", String(count))}</span>
+      </div>
+      {cart.status === "loading" && !data ? (
+        <Spinner />
+      ) : !data ? (
+        <ErrorView message={cart.error ?? t.cartLoadError} onRetry={() => void cart.refresh()} />
       ) : (
-        <BasketLines cart={data} />
-      )}
-      {!empty && (
-        <Totals
-          totalPrice={data.totalPrice}
-          totalCount={data.totalCount}
-          depositBreakdown={data.depositBreakdown}
-          membershipSavings={data.membershipSavings}
-          promoSavings={data.promoSavings}
-          fees={data.fees}
-          minimumOrderValue={data.minimumOrderValue}
-          loyaltyPoints={footer?.loyaltyPoints}
-        />
-      )}
-      {!empty && (
-        <div className="receipt-actions">
-          <button type="button" className="button primary wide" disabled={!canCheckout} onClick={() => navigate("/checkout")}>
-            {t.checkoutLabel}
-          </button>
-          {!isMinimumOrderMet(data.totalPrice, data.minimumOrderValue) && <p className="hint">{t.checkoutMinimumNotMet}</p>}
-          <button type="button" className="button quiet small" onClick={() => setConfirmClear(true)}>
-            {t.clearCartButton}
-          </button>
-        </div>
-      )}
-      {full && footer?.recommendations && (
-        <section className="mini-row">
-          <h3>
-            <a
-              href={href(
-                `/pages?${new URLSearchParams({ pageId: footer.recommendations.pageId, title: footer.recommendations.title })}`
-              )}
-            >
-              {footer.recommendations.title} ›
-            </a>
-          </h3>
-          <div className="tiles">
-            {footer.recommendations.tiles.map((tile) => (
-              <RecommendationTile key={tile.productId} productId={tile.productId} imageId={tile.imageId} background={tile.backgroundColor} promo={tile.hasPromo} />
-            ))}
+        <>
+          {data.items.length > 0 ? <Lines cart={data} /> : <p className="empty-basket">{d.emptyBasket}</p>}
+          <div className="sum">
+            <Sums
+              totalPrice={total}
+              depositBreakdown={data.depositBreakdown}
+              membershipSavings={data.membershipSavings}
+              promoSavings={data.promoSavings}
+              fees={data.fees}
+              loyalty={footer?.loyaltyPoints}
+            />
+            {minimum !== null && minimum > 0 && (
+              <div className={`minimum ${short <= 0 ? "met" : ""}`}>
+                <div className="bar">
+                  <i style={{ width: `${Math.min(100, Math.max(0, (total / minimum) * 100))}%` }} />
+                </div>
+                <p>
+                  {short > 0
+                    ? d.toGo.replace("{short}", money(short)).replace("{minimum}", money(minimum))
+                    : d.aboveMinimum.replace("{minimum}", money(minimum))}
+                </p>
+              </div>
+            )}
+            <SlotLine cart={data} />
+            {data.items.length > 0 && (
+              <button
+                type="button"
+                className="primary wide"
+                disabled={!isMinimumOrderMet(total, minimum) || data.totalCount === 0}
+                onClick={() => navigate("/checkout")}
+              >
+                {t.checkoutLabel}
+              </button>
+            )}
           </div>
-        </section>
+        </>
       )}
-      {full && !footer?.recommendations && <MiniRow title={t.nothingForgotten} products={data.suggestions} />}
-      {confirmClear && (
-        <Confirm
-          title={t.clearCartConfirmTitle}
-          message={t.clearCartConfirmMessage}
-          onCancel={() => setConfirmClear(false)}
-          onConfirm={() => {
-            setConfirmClear(false);
-            void cart.clear().then((ok) => !ok && toast(t.clearCartError, "error"));
-          }}
-        />
-      )}
+      <div className="receipt-foot">
+        {data && data.items.length > 0 && (
+          <button
+            type="button"
+            className="quiet"
+            onClick={() => {
+              if (!armed) {
+                setArmed(true);
+                clearTimeout(armTimer.current);
+                armTimer.current = setTimeout(() => setArmed(false), 4000);
+                return;
+              }
+              setArmed(false);
+              void cart.clear().then((ok) => !ok && toast(t.clearCartError, "error"));
+            }}
+          >
+            {armed ? d.clickAgainToEmpty : t.clearCartButton}
+          </button>
+        )}
+        <span className="who">
+          {name ? d.signedInAs.replace("{name}", name) : ""}{" "}
+          <button type="button" className="quiet" onClick={() => void signOut()}>
+            {t.signOut}
+          </button>
+        </span>
+      </div>
+      <div className="receipt-foot plain">
+        <a className="quiet" href={href("/check")}>
+          {d.selfCheck}
+        </a>
+      </div>
     </div>
-  );
-}
-
-function RecommendationTile({
-  productId,
-  imageId,
-  background,
-  promo,
-}: {
-  productId: string;
-  imageId: string;
-  background: string | null;
-  promo: boolean;
-}) {
-  const open = useOpenProduct();
-  const { d } = useT();
-  return (
-    <button
-      type="button"
-      className={`tile ${promo ? "tile-promo" : ""}`}
-      style={{ backgroundColor: background ?? undefined }}
-      onClick={() => open(productId)}
-      aria-label={d.openProduct}
-    >
-      <Img id={imageId} alt="" />
-    </button>
   );
 }

@@ -1,20 +1,20 @@
 /**
- * The desk: the shelf on the left, the basket as a till receipt on the right,
- * product pages over the top.
+ * The desk: the shelf on the left under a big search box and a row of tabs,
+ * the basket as a till receipt on the right, product pages as a sheet on top.
  */
 import { Component, type ReactNode, useEffect } from "react";
 
 import { Receipt } from "./components/basket";
-import { ToastProvider, useMoney, useToast } from "./components/common";
+import { ToastProvider, useToast } from "./components/common";
 import { ProductDialog } from "./components/product-dialog";
 import { href, navigate, type Route, useRoute, withQuery } from "./lib/router";
 import { CheckoutPage } from "./pages/checkout";
 import { LoginPage } from "./pages/login";
-import { AccountPage, BasketPage, HistoryPage, ListPage, StarredPage } from "./pages/mine";
-import { DeliveriesPage, DeliveryPage, ParcelPage, ParcelsPage } from "./pages/orders";
-import { CookbookPage, RecipePage } from "./pages/recipes";
-import { CategoryPage, PickedPage, SearchBox, SearchPage, SubcategoryPage } from "./pages/shop";
-import { cartModel, useCart } from "./state/cart";
+import { CheckView, HistoryView, ListView, SavedView } from "./pages/mine";
+import { OrdersView, OrderView, ParcelsView, ParcelView } from "./pages/orders";
+import { RecipesView, RecipeView } from "./pages/recipes";
+import { CategoriesView, SearchBox, SearchView } from "./pages/shop";
+import { cartModel } from "./state/cart";
 import { SessionProvider, useSession, useT } from "./state/session";
 
 export function App() {
@@ -29,16 +29,36 @@ export function App() {
 
 function Gate() {
   const { state } = useSession();
-  if (!state?.signedIn) return <LoginPage />;
-  return <Desk />;
+  const { d } = useT();
+  return (
+    <>
+      {state?.signedIn ? <Desk /> : <LoginPage />}
+      {state?.demo && <p className="demo">{d.demoBadge}</p>}
+    </>
+  );
 }
 
 const REFRESH_AFTER_MS = 10_000;
+
+/** Old and picnic-web paths that Picnic's deep links and older bookmarks use. */
+function canonical(route: Route): string | null {
+  const [first, second] = route.segments;
+  if (first === "deliveries") return second ? `/orders/${encodeURIComponent(second)}` : "/orders";
+  if (first === "favorites") return "/saved";
+  if (first === "product" && second) return `/search?${new URLSearchParams({ product: second })}`;
+  if (first === "discover" || first === "cart" || first === "account" || route.path === "/") return "/search";
+  return null;
+}
 
 function Desk() {
   const route = useRoute();
   const toast = useToast();
   const { t } = useT();
+
+  useEffect(() => {
+    const to = canonical(route);
+    if (to) navigate(to, true);
+  }, [route]);
 
   useEffect(() => {
     cartModel.onError = () => toast(t.cartMutationError, "error");
@@ -59,7 +79,7 @@ function Desk() {
     };
   }, [toast, t.cartMutationError]);
 
-  // "/" jumps to the search box, as on the old desk.
+  // "/" jumps to the search box.
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement | null;
@@ -75,128 +95,97 @@ function Desk() {
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
-  const productId = route.segments[0] === "product" ? route.segments[1] : route.query.get("product");
-  const fullBasket = route.path === "/cart" || route.path.startsWith("/checkout");
+  const productId = route.query.get("product");
 
   return (
-    <div className={`desk ${fullBasket ? "desk-wide" : ""}`}>
-      <header className="top">
-        <a className="brand" href={href("/search")} aria-label="Picnic Desk">
-          Picnic
-        </a>
-        <SearchBox route={route} />
-        <Nav route={route} />
-      </header>
+    <div className="desk">
       <main className="shelf" id="main">
-        <Boundary key={route.path}>
-          <Page route={route} />
-        </Boundary>
-      </main>
-      {!fullBasket && (
-        <aside className="till" aria-label={t.cartTitle}>
-          <Boundary>
-            <Receipt />
+        <header className="top">
+          <SearchBox route={route} />
+          <Tabs route={route} />
+        </header>
+        <section className="view">
+          <Boundary key={route.path}>
+            <View route={route} />
           </Boundary>
-        </aside>
-      )}
-      {productId && (
-        <ProductDialog
-          id={productId}
-          onClose={() =>
-            route.segments[0] === "product" ? navigate("/search", true) : navigate(withQuery(route, { product: null }), true)
-          }
-        />
-      )}
+        </section>
+      </main>
+      <aside className="till" aria-label={t.cartTitle}>
+        <Boundary>
+          <Receipt />
+        </Boundary>
+      </aside>
+      {productId && <ProductDialog id={productId} onClose={() => navigate(withQuery(route, { product: null }), true)} />}
     </div>
   );
 }
 
-function Nav({ route }: { route: Route }) {
+function Tabs({ route }: { route: Route }) {
   const { t, d } = useT();
-  const cart = useCart();
-  const money = useMoney();
-  const items: { to: string; label: string; match: string[] }[] = [
-    { to: "/search", label: d.shop, match: ["/search", "/categories", "/pages", "/product"] },
-    { to: "/cookbook", label: t.navCooking, match: ["/cookbook", "/recipe"] },
+  const tabs: { to: string; label: string; match: string[] }[] = [
+    { to: "/search", label: d.search, match: ["/search"] },
+    { to: "/categories", label: d.categories, match: ["/categories", "/pages"] },
+    { to: "/list", label: d.pasteList, match: ["/list"] },
     { to: "/history", label: d.boughtBefore, match: ["/history"] },
     { to: "/saved", label: d.starred, match: ["/saved"] },
-    { to: "/list", label: d.pasteList, match: ["/list"] },
-    { to: "/deliveries", label: t.deliveriesNavLabel, match: ["/deliveries", "/parcels"] },
-    { to: "/account", label: t.navAccount, match: ["/account"] },
+    { to: "/cookbook", label: d.recipes, match: ["/cookbook", "/recipe"] },
+    { to: "/orders", label: t.deliveriesNavLabel, match: ["/orders", "/parcels", "/checkout"] },
   ];
   return (
     <nav className="views" aria-label={t.navMainAriaLabel}>
-      {items.map((item) => (
+      {tabs.map((tab) => (
         <a
-          key={item.to}
-          href={href(item.to)}
-          aria-current={item.match.some((m) => route.path === m || route.path.startsWith(`${m}/`)) ? "page" : undefined}
+          key={tab.to}
+          href={href(tab.to)}
+          aria-current={tab.match.some((m) => route.path === m || route.path.startsWith(`${m}/`)) ? "page" : undefined}
         >
-          {item.label}
+          {tab.label}
         </a>
       ))}
-      <a className="nav-basket" href={href("/cart")} aria-current={route.path === "/cart" ? "page" : undefined}>
-        {t.navCart}
-        {cart.cart && cart.count > 0 && (
-          <span className="nav-total">
-            {cart.count} · {money(cart.cart.totalPrice)}
-          </span>
-        )}
-      </a>
     </nav>
   );
 }
 
-function Page({ route }: { route: Route }) {
-  const [first, second, third] = route.segments;
+function View({ route }: { route: Route }) {
+  const [first, second] = route.segments;
   switch (first) {
-    case undefined:
     case "search":
-    case "discover":
-    case "product":
-      return <SearchPage route={first === "search" ? route : { ...route, query: new URLSearchParams() }} />;
+      return <SearchView route={route} />;
     case "categories":
-      if (second && third) return <SubcategoryPage categoryId={second} subcategoryId={third} />;
-      if (second) return <CategoryPage categoryId={second} />;
-      break;
     case "pages":
-      return <PickedPage route={route} />;
+      return <CategoriesView route={route} />;
+    case "list":
+      return <ListView />;
+    case "history":
+      return <HistoryView />;
+    case "saved":
+      return <SavedView />;
     case "cookbook":
-      return <CookbookPage />;
+      return <RecipesView route={route} />;
     case "recipe":
-      if (second) return <RecipePage key={second} recipeId={second} />;
-      break;
-    case "cart":
-      return <BasketPage />;
+      return second ? <RecipeView key={second} recipeId={second} /> : <RecipesView route={route} />;
+    case "orders":
+      return second ? <OrderView key={second} deliveryId={second} /> : <OrdersView route={route} />;
+    case "parcels":
+      return second ? <ParcelView parcelId={second} /> : <ParcelsView />;
     case "checkout":
       return <CheckoutPage returning={second === "return"} />;
-    case "deliveries":
-      return second ? <DeliveryPage key={second} deliveryId={second} /> : <DeliveriesPage route={route} />;
-    case "parcels":
-      return second ? <ParcelPage parcelId={second} /> : <ParcelsPage />;
-    case "history":
-      return <HistoryPage />;
-    case "saved":
-    case "favorites":
-      return <StarredPage />;
-    case "list":
-      return <ListPage />;
-    case "account":
-      return <AccountPage />;
+    case "check":
+      return <CheckView />;
   }
-  return <NotFound />;
+  return canonical(route) ? null : <NotFound />;
 }
 
 function NotFound() {
   const { d } = useT();
   return (
-    <p className="empty">
-      {d.notFound} <a href={href("/search")}>{d.shop} ›</a>
+    <p className="hint">
+      {d.notFound} <a href={href("/search")}>{d.search}</a>
     </p>
   );
 }
 
-/** A screen that breaks shows a message and a way back, not a blank page. */
+/** A view that breaks shows a message and a way back, not a blank shelf. */
 class Boundary extends Component<{ children: ReactNode }, { error: Error | null }> {
   state = { error: null as Error | null };
   static getDerivedStateFromError(error: Error) {
@@ -208,9 +197,9 @@ class Boundary extends Component<{ children: ReactNode }, { error: Error | null 
   render() {
     if (!this.state.error) return this.props.children;
     return (
-      <div className="error-view" role="alert">
-        <p>Something went wrong on this screen: {this.state.error.message}</p>
-        <button type="button" className="button" onClick={() => this.setState({ error: null })}>
+      <div className="trouble" role="alert">
+        <p>Something went wrong here: {this.state.error.message}</p>
+        <button type="button" className="secondary" onClick={() => this.setState({ error: null })}>
           Try again
         </button>
       </div>

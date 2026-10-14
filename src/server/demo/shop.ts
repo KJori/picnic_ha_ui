@@ -375,7 +375,7 @@ function slots(state: DemoState): DeliverySlotPickerData {
     days.set(date, [...(days.get(date) ?? []), s]);
   }
   const dayGroups: SlotDayGroup[] = [...days].map(([date, list]) => {
-    const { dayLabel, dateLabel } = formatDayTabLabel(list[0].windowStart, "NL");
+    const { dayLabel, dateLabel } = formatDayTabLabel(date, "NL");
     return {
       date,
       dayLabel,

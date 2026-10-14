@@ -1,15 +1,17 @@
 /**
- * Products on the shelf: one cell per product, in a grid or in sections.
+ * The shelf: products in square cells that share their edges, as on the
+ * original desk. Every list of products on the page (search, categories,
+ * bought before, starred, similar products, replacements) uses these.
  */
-import { useEffect, useMemo } from "react";
+import type { KeyboardEvent } from "react";
 
-import { buildSectionId, type BundleThreshold, type Product, type SearchSection, type SliderProduct } from "@/lib/core/types";
+import type { CartItem, Product, SearchSection, SliderProduct } from "@/lib/core/types";
 
 import type { SavedProduct } from "../../server/desk-routes";
 import { navigate, useRoute, withQuery } from "../lib/router";
 import { useCart } from "../state/cart";
-import { useT } from "../state/session";
 import { toggleStar, useStarred } from "../state/saved";
+import { useT } from "../state/session";
 import { Badge, Img, Price, Stepper, useMoney, useToast } from "./common";
 
 /** Open a product's page over the current screen. */
@@ -18,11 +20,57 @@ export function useOpenProduct(): (id: string) => void {
   return (id: string) => navigate(withQuery(route, { product: id }));
 }
 
-/** The price per unit at the current amount, when a "more for less" tier applies. */
-export function bundlePrice(ranges: BundleThreshold[] | null | undefined, quantity: number): number | null {
+/** The price per unit at an amount, when a "more for less" tier applies. */
+export function bundlePrice(ranges: Product["priceRanges"], quantity: number): number | null {
   if (!ranges?.length || quantity === 0) return null;
   return ranges.filter((tier) => tier.quantity <= quantity).at(-1)?.pricePerUnit ?? null;
 }
+
+// ─── Other shapes as shelf products ──────────────────────────────────────────
+
+const blank: Omit<Product, "id" | "name" | "imageId" | "displayPrice" | "unitQuantity" | "maxCount"> = {
+  namePrefix: null,
+  subtitle: null,
+  subtitleColor: null,
+  subtitleLeadingIcon: null,
+  subtitleTrailingIcon: null,
+  brand: null,
+  highlight: null,
+  flagIconKey: null,
+  flagFallbackImageId: null,
+  originalPrice: null,
+  displayPriceColor: null,
+  priceRanges: null,
+  badges: [],
+  promoBadge: null,
+  promoPlacement: null,
+  isUnavailable: false,
+  unavailableReason: null,
+};
+
+/** A line of a past order; its price is what was paid per unit then. */
+export const fromCartItem = (item: CartItem): Product => ({
+  ...blank,
+  id: item.productId,
+  name: item.name,
+  imageId: item.imageId,
+  unitQuantity: item.unitQuantity,
+  displayPrice: item.quantity ? Math.round(item.displayPrice / item.quantity) : item.displayPrice,
+  maxCount: item.maxCount || 99,
+  badges: item.badges,
+});
+
+export const fromSaved = (saved: SavedProduct): Product => ({
+  ...blank,
+  ...saved,
+  maxCount: 99,
+});
+
+export const fromSlider = (slider: SliderProduct): Product => ({ ...blank, ...slider, maxCount: slider.maxCount || 99 });
+
+// ─── One product ─────────────────────────────────────────────────────────────
+
+const STAR_PATH = "M12 2.8l2.8 5.9 6.4.8-4.7 4.4 1.2 6.4L12 17.2l-5.7 3.1 1.2-6.4-4.7-4.4 6.4-.8z";
 
 export function StarButton({ product }: { product: SavedProduct }) {
   const { d } = useT();
@@ -32,7 +80,7 @@ export function StarButton({ product }: { product: SavedProduct }) {
   return (
     <button
       type="button"
-      className={`star ${on ? "star-on" : ""}`}
+      className="star"
       aria-pressed={on}
       aria-label={`${on ? d.unstar : d.star}: ${product.name}`}
       title={on ? d.unstar : d.star}
@@ -41,22 +89,21 @@ export function StarButton({ product }: { product: SavedProduct }) {
         void toggleStar(product, (message) => toast(message, "error"));
       }}
     >
-      {on ? "★" : "☆"}
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path d={STAR_PATH} />
+      </svg>
     </button>
   );
 }
 
-export function ProductCell({ product }: { product: Product }) {
+export function ProductCell({ product, want = 1, note }: { product: Product; want?: number; note?: string }) {
   const { t, d } = useT();
   const cart = useCart();
   const open = useOpenProduct();
+  const toast = useToast();
   const money = useMoney();
   const quantity = cart.quantity(product.id);
   const tierPrice = bundlePrice(product.priceRanges, quantity);
-  const shownPrice = tierPrice ?? product.displayPrice;
-  const nextTier = product.priceRanges?.find((tier) => tier.quantity > quantity);
-
-  const toast = useToast();
   const snapshot: SavedProduct = {
     id: product.id,
     name: product.name,
@@ -64,188 +111,109 @@ export function ProductCell({ product }: { product: Product }) {
     unitQuantity: product.unitQuantity,
     displayPrice: product.displayPrice,
   };
-  // Keys on a product, as on the old desk: + and - change the amount, s stars it.
-  const onKeyDown = (event: React.KeyboardEvent) => {
-    if (event.ctrlKey || event.metaKey || event.altKey) return;
-    if ((event.key === "+" || event.key === "=") && !product.isUnavailable) cart.add(product.id, product.maxCount);
-    else if (event.key === "-") cart.remove(product.id);
-    else if (event.key === "s") void toggleStar(snapshot, (message) => toast(message, "error"));
-    else return;
+  const add = () => cart.add(product.id, product.maxCount, quantity === 0 ? want : 1);
+  const remove = () => cart.remove(product.id);
+
+  // Keys on a product, as on the old desk.
+  const onKeyDown = (event: KeyboardEvent<HTMLLIElement>) => {
+    if (event.target !== event.currentTarget || event.ctrlKey || event.metaKey || event.altKey) return;
+    const key = event.key;
+    if (key === "Enter" || key === "i") open(product.id);
+    else if ((key === "+" || key === "=") && !product.isUnavailable) add();
+    else if (key === "-" || key === "_") remove();
+    else if (key === "s") void toggleStar(snapshot, (message) => toast(message, "error"));
+    else if (key.startsWith("Arrow")) {
+      const cells = [...(event.currentTarget.parentElement?.querySelectorAll<HTMLElement>(":scope > .product") ?? [])];
+      const index = cells.indexOf(event.currentTarget);
+      const columns = Math.max(1, cells.filter((cell) => cell.offsetTop === cells[0].offsetTop).length);
+      const step = { ArrowLeft: -1, ArrowRight: 1, ArrowUp: -columns, ArrowDown: columns }[key] ?? 0;
+      cells[index + step]?.focus();
+    } else return;
     event.preventDefault();
   };
+
+  const tiers = (product.priceRanges ?? []).map((tier) => d.eachFrom.replace("{price}", money(tier.pricePerUnit)).replace("{n}", String(tier.quantity)));
+  const meta = [product.brand, product.unitQuantity, ...tiers, note].filter(Boolean).join(", ");
+
   return (
-    <article
-      className={`cell ${product.isUnavailable ? "cell-unavailable" : ""} ${quantity ? "cell-in-basket" : ""}`}
+    <li
+      className={`product ${quantity ? "in-basket" : ""} ${product.isUnavailable ? "unavailable" : ""}`}
       data-product={product.id}
+      tabIndex={0}
       onKeyDown={onKeyDown}
+      onClick={(event) => {
+        if (!(event.target as HTMLElement).closest("button")) open(product.id);
+      }}
+      aria-label={product.name}
     >
-      <button type="button" className="cell-open" onClick={() => open(product.id)} aria-label={`${d.openProduct}: ${product.name}`}>
-        <span className="cell-picture">
-          <Img id={product.imageId} alt="" />
-          {product.promoBadge && product.promoPlacement === "image" && <Badge badge={product.promoBadge} />}
-        </span>
-      </button>
-      <div className="cell-text">
-        {product.subtitle && (
-          <p className="cell-subtitle" style={product.subtitleColor ? { color: product.subtitleColor } : undefined}>
-            {product.subtitleLeadingIcon && "« "}
-            {product.subtitle}
-            {product.subtitleTrailingIcon && " »"}
-          </p>
-        )}
-        <h3 className="cell-name">
-          <button type="button" className="link-like" onClick={() => open(product.id)}>
-            {product.namePrefix && <span className="name-prefix">{product.namePrefix} </span>}
-            {product.name}
-          </button>
-        </h3>
-        {(product.brand || product.highlight) && (
-          <p className="cell-brand">
-            {product.flagFallbackImageId && <Img id={product.flagFallbackImageId} size="small" className="flag" />}
-            {product.brand}
-            {product.highlight && (
-              <span className="highlight" style={{ color: product.highlight.color }}>
-                {" "}
-                {product.highlight.text}
-              </span>
-            )}
-          </p>
-        )}
-        <p className="cell-unit">
-          {product.badges.map((badge, i) => (
-            <Badge key={`${badge.variant}-${i}`} badge={badge} />
-          ))}
-          {product.unitQuantity}
-        </p>
+      <Img id={product.imageId} name={product.name} />
+      <h3 className="name">
+        {product.namePrefix && <span className="prefix">{product.namePrefix} </span>}
+        {product.name}
+      </h3>
+      <p className="meta">
+        {product.promoBadge && <Badge badge={product.promoBadge} />}
+        {product.badges.map((badge, i) => (
+          <Badge key={i} badge={badge} />
+        ))}
+        {product.highlight && <span style={{ color: product.highlight.color }}>{product.highlight.text} </span>}
+        {meta}
+      </p>
+      <div className="buy">
         {product.isUnavailable ? (
-          <p className="cell-reason">{product.unavailableReason ?? d.unavailable}</p>
+          <span className="gone">{product.unavailableReason ?? t.recipeEditUnavailable}</span>
         ) : (
-          <div className="cell-buy">
+          <>
             <Price
-              cents={shownPrice}
+              cents={tierPrice ?? product.displayPrice}
               was={tierPrice !== null && tierPrice < product.displayPrice ? product.displayPrice : product.originalPrice}
               color={product.displayPriceColor}
             />
-            {product.promoBadge && product.promoPlacement === "inline" && <Badge badge={product.promoBadge} />}
-            <Stepper
-              quantity={quantity}
-              maxCount={product.maxCount}
-              name={product.name}
-              onAdd={() => cart.add(product.id, product.maxCount)}
-              onRemove={() => cart.remove(product.id)}
-            />
-          </div>
-        )}
-        {nextTier && !product.isUnavailable && (
-          <p className="cell-tier">
-            {t.bundleFromLabel} {nextTier.quantity}: {money(nextTier.pricePerUnit)}
-          </p>
+            <Stepper quantity={quantity} maxCount={product.maxCount} name={product.name} want={want} onAdd={add} onRemove={remove} />
+          </>
         )}
       </div>
       <StarButton product={snapshot} />
-    </article>
+    </li>
   );
 }
 
-/** Arrow keys move between products; the grid's columns are read from the layout. */
-function moveInGrid(event: React.KeyboardEvent<HTMLDivElement>) {
-  const keys: Record<string, number> = { ArrowLeft: -1, ArrowRight: 1, ArrowUp: 0, ArrowDown: 0 };
-  if (!(event.key in keys) || (event.target as HTMLElement).tagName === "INPUT") return;
-  const cells = [...event.currentTarget.querySelectorAll<HTMLElement>(":scope > .cell")];
-  const current = cells.findIndex((cell) => cell.contains(document.activeElement));
-  if (current < 0) return;
-  const columns = Math.max(1, cells.filter((cell) => cell.offsetTop === cells[0].offsetTop).length);
-  const step = event.key === "ArrowUp" ? -columns : event.key === "ArrowDown" ? columns : keys[event.key];
-  const next = cells[current + step];
-  if (!next) return;
-  event.preventDefault();
-  next.querySelector<HTMLElement>(".cell-open")?.focus();
-}
-
-export function ProductGrid({ products }: { products: Product[] }) {
+export function ProductGrid({ products, want, notes }: { products: Product[]; want?: (p: Product) => number; notes?: (p: Product) => string | undefined }) {
+  const seen = new Set<string>();
+  const unique = products.filter((p) => !seen.has(p.id) && seen.add(p.id));
   return (
-    <div className="cells" onKeyDown={moveInGrid}>
-      {products.map((product) => (
-        <ProductCell key={product.id} product={product} />
+    <ul className="products">
+      {unique.map((product) => (
+        <ProductCell key={product.id} product={product} want={want?.(product)} note={notes?.(product)} />
       ))}
-    </div>
+    </ul>
   );
 }
 
-/** Search results or a category page: sections with a jump bar, or one grid. */
+/** Results in Picnic's sections ("Cherrytomaten", "Biologisch"), with a row of jumps when there are several. */
 export function ProductSections({ products, sections }: { products: Product[]; sections: SearchSection[] }) {
-  const { t } = useT();
   if (sections.length <= 1) return <ProductGrid products={sections[0]?.products ?? products} />;
+  const id = (index: number) => `section-${index}`;
   return (
     <>
-      <nav className="section-jump" aria-label={t.sectionNavGoTo}>
+      <div className="chips jumps">
         {sections.map((section, index) => (
-          <a
+          <button
             key={index}
-            href={`#${buildSectionId(index)}`}
-            onClick={(event) => {
-              event.preventDefault();
-              document.getElementById(buildSectionId(index))?.scrollIntoView({ behavior: "smooth", block: "start" });
-            }}
+            type="button"
+            className="chip"
+            onClick={() => document.getElementById(id(index))?.scrollIntoView({ behavior: "smooth", block: "start" })}
           >
             {section.title}
-          </a>
+          </button>
         ))}
-      </nav>
+      </div>
       {sections.map((section, index) => (
-        <section key={index} id={buildSectionId(index)} className="shelf-section">
+        <section key={index} id={id(index)} className="group">
           <h3>{section.title}</h3>
           <ProductGrid products={section.products} />
         </section>
       ))}
     </>
   );
-}
-
-/** A compact product (similar products, suggestions, replacements). */
-export function MiniProduct({ product }: { product: SliderProduct }) {
-  const cart = useCart();
-  const open = useOpenProduct();
-  const quantity = cart.quantity(product.id);
-  return (
-    <article className="mini" data-product={product.id}>
-      <button type="button" className="mini-open" onClick={() => open(product.id)}>
-        <Img id={product.imageId} alt="" />
-        <span className="mini-name">{product.name}</span>
-        <span className="mini-unit">{product.unitQuantity}</span>
-      </button>
-      <div className="mini-buy">
-        <Price cents={product.displayPrice} />
-        <Stepper
-          quantity={quantity}
-          maxCount={product.maxCount}
-          name={product.name}
-          onAdd={() => cart.add(product.id, product.maxCount)}
-          onRemove={() => cart.remove(product.id)}
-        />
-      </div>
-    </article>
-  );
-}
-
-export function MiniRow({ title, products }: { title: string; products: SliderProduct[] }) {
-  const unique = useMemo(() => products.filter((p, i) => products.findIndex((q) => q.id === p.id) === i), [products]);
-  if (!unique.length) return null;
-  return (
-    <section className="mini-row">
-      <h3>{title}</h3>
-      <div className="mini-list">
-        {unique.map((product) => (
-          <MiniProduct key={product.id} product={product} />
-        ))}
-      </div>
-    </section>
-  );
-}
-
-/** Keeps the page title in step with the screen. */
-export function useTitle(title: string | null | undefined) {
-  useEffect(() => {
-    document.title = title ? `${title} · Picnic` : "Picnic";
-  }, [title]);
 }

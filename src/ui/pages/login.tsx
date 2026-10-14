@@ -105,106 +105,101 @@ export function LoginPage() {
   };
 
   return (
-    <main className="login">
-      <form className="login-card" onSubmit={(event) => void submit(event)}>
-        <h1>
-          Picnic <span>Desk</span>
-        </h1>
-        <h2>{step === "code" ? t.enter2FACode : t.loginTitle}</h2>
+    <main className="door">
+      <form className="signin" onSubmit={(event) => void submit(event)}>
+        {step === "code" ? (
+          <>
+            <h1>{d.codeTitle}</h1>
+            <p>{info ?? t.smsSent}</p>
+          </>
+        ) : (
+          <>
+            <h1>{d.signInTitle}</h1>
+            <p>{state?.demo ? d.demoLogin : d.privacy}</p>
+          </>
+        )}
         {message && (
-          <p className="problem" role="alert">
+          <p className="gone" role="alert">
             {message}
           </p>
         )}
-        {info && step === "code" && <p className="hint">{info}</p>}
 
         {step === "credentials" && (
           <>
-            <label>
-              {t.emailLabel}
-              <input type="email" autoComplete="username" value={email} placeholder={t.emailPlaceholder} onChange={(e) => setEmail(e.target.value)} required />
-            </label>
-            <label>
-              {t.passwordLabel}
-              <input
-                type="password"
-                autoComplete="current-password"
-                value={password}
-                placeholder={t.passwordPlaceholder}
-                onChange={(e) => setPassword(e.target.value)}
-                required
-              />
-            </label>
+            <label htmlFor="email">{t.emailLabel}</label>
+            <input id="email" type="email" autoComplete="username" value={email} onChange={(e) => setEmail(e.target.value)} required />
+            <label htmlFor="password">{t.passwordLabel}</label>
+            <input
+              id="password"
+              type="password"
+              autoComplete="current-password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              required
+            />
           </>
         )}
 
         {step === "code" && (
           <>
-            <label>
-              {t.verificationCodeLabel}
-              <input
-                inputMode="numeric"
-                autoComplete="one-time-code"
-                value={code}
-                placeholder={t.verificationCodePlaceholder}
-                onChange={(e) => setCode(e.target.value)}
-                autoFocus
-                required
-              />
-            </label>
-            <p className="resend">
-              {d.sendAgain}{" "}
-              <button type="button" className="link-like" disabled={busy} onClick={() => void resend("SMS")}>
+            <div className="channels">
+              <button type="button" className="secondary" disabled={busy} onClick={() => void resend("SMS")}>
                 {d.bySms}
-              </button>{" "}
-              ·{" "}
-              <button type="button" className="link-like" disabled={busy} onClick={() => void resend("EMAIL")}>
+              </button>
+              <button type="button" className="secondary" disabled={busy} onClick={() => void resend("EMAIL")}>
                 {d.byEmail}
               </button>
-            </p>
+            </div>
+            <label htmlFor="code">{t.verificationCodeLabel}</label>
+            <input
+              id="code"
+              inputMode="numeric"
+              autoComplete="one-time-code"
+              value={code}
+              onChange={(e) => setCode(e.target.value)}
+              autoFocus
+              required
+            />
           </>
         )}
 
         {step === "token" && (
-          <label>
-            {t.authTokenLabel}
-            <input type="password" value={token} placeholder={t.tokenPlaceholder} onChange={(e) => setToken(e.target.value)} required />
-          </label>
+          <>
+            <label htmlFor="token">{t.authTokenLabel}</label>
+            <input id="token" type="password" value={token} placeholder={t.tokenPlaceholder} onChange={(e) => setToken(e.target.value)} required />
+          </>
         )}
 
         {step !== "code" && (
-          <label>
-            {d.country}
-            <select value={country} onChange={(e) => setCountry(e.target.value as CountryCode)}>
+          <>
+            <label htmlFor="country">{d.country}</label>
+            <select id="country" value={country} onChange={(e) => setCountry(e.target.value as CountryCode)}>
               {SUPPORTED_COUNTRY_CODES.map((code) => (
                 <option key={code} value={code}>
                   {code}
                 </option>
               ))}
             </select>
-          </label>
+          </>
         )}
 
-        <button type="submit" className="button primary wide" disabled={busy}>
+        <button type="submit" className="primary" disabled={busy}>
           {busy ? t.checkoutProcessing : step === "code" ? t.verifyButton : t.loginButton}
         </button>
 
-        <p className="login-switch">
-          {step === "token" ? (
-            <button type="button" className="link-like" onClick={() => setStep("credentials")}>
-              {d.useCredentials}
-            </button>
-          ) : step === "credentials" ? (
-            <button type="button" className="link-like" onClick={() => setStep("token")}>
-              {d.useToken}
-            </button>
-          ) : (
-            <button type="button" className="link-like" onClick={() => setStep("credentials")}>
-              ‹ {t.backButton}
-            </button>
-          )}
-        </p>
-        <p className="hint">{state?.demo ? d.demoLogin : d.privacy}</p>
+        {step === "token" ? (
+          <button type="button" className="quiet" onClick={() => setStep("credentials")}>
+            {d.useCredentials}
+          </button>
+        ) : step === "credentials" ? (
+          <button type="button" className="quiet" onClick={() => setStep("token")}>
+            {d.useToken}
+          </button>
+        ) : (
+          <button type="button" className="quiet" onClick={() => setStep("credentials")}>
+            {d.otherAccount}
+          </button>
+        )}
       </form>
     </main>
   );

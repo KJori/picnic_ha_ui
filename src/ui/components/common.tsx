@@ -1,5 +1,6 @@
 /**
- * Small pieces used on every screen.
+ * Small pieces used on every screen, in the desk's look: square shelf cells,
+ * a filled green stepper, a sheet for dialogs, notices at the bottom left.
  */
 import {
   type ReactNode,
@@ -17,35 +18,56 @@ import type { Badge as BadgeData } from "@/lib/core/types";
 
 import { useSession, useT } from "../state/session";
 
-// ─── Prices ──────────────────────────────────────────────────────────────────
+// ─── Money and dates ─────────────────────────────────────────────────────────
 
-export const LOCALES = { en: "en-IE", nl: "nl-NL", de: "de-DE", fr: "fr-FR" } as const;
+/** Euro amounts are written the Picnic way for the country ("€ 1,39" in Dutch and English). */
+const MONEY_LOCALES = { en: "nl-NL", nl: "nl-NL", de: "de-DE", fr: "fr-FR" } as const;
+export const DATE_LOCALES = { en: "en-GB", nl: "nl-NL", de: "de-DE", fr: "fr-FR" } as const;
 
-export function useMoney(): (cents: number) => string {
+export function useMoney() {
   const { language } = useT();
-  const format = new Intl.NumberFormat(LOCALES[language], { style: "currency", currency: "EUR" });
-  return (cents: number) => format.format(cents / 100);
+  const currency = new Intl.NumberFormat(MONEY_LOCALES[language], { style: "currency", currency: "EUR" });
+  const number = new Intl.NumberFormat(MONEY_LOCALES[language], { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const money = (cents: number) => currency.format(cents / 100);
+  /** Without the euro sign, as on the receipt: "2,78". */
+  money.plain = (cents: number) => number.format(cents / 100);
+  return money;
 }
 
-export function Price({
-  cents,
-  was,
-  color,
-  className = "",
-}: {
-  cents: number;
-  was?: number | null;
-  color?: string | null;
-  className?: string;
-}) {
+export function useDates() {
+  const { language } = useT();
+  const locale = DATE_LOCALES[language];
+  const day = new Intl.DateTimeFormat(locale, { weekday: "short", day: "numeric", month: "short" });
+  const weekday = new Intl.DateTimeFormat(locale, { weekday: "short" });
+  const clock = new Intl.DateTimeFormat(locale, { hour: "2-digit", minute: "2-digit" });
+  const long = new Intl.DateTimeFormat(locale, { weekday: "long", day: "numeric", month: "long", year: "numeric" });
+  const short = new Intl.DateTimeFormat(locale, { day: "numeric", month: "short" });
+  const at = (value: string | number | null | undefined) => (value === null || value === undefined ? null : new Date(value));
+  return {
+    day: (v: string | number | null | undefined) => (at(v) ? day.format(at(v)!) : ""),
+    weekday: (v: string | number | null | undefined) => (at(v) ? weekday.format(at(v)!) : ""),
+    clock: (v: string | number | null | undefined) => (at(v) ? clock.format(at(v)!) : ""),
+    long: (v: string | number | null | undefined) => (at(v) ? long.format(at(v)!) : ""),
+    /** "15 Oct" */
+    short: (v: string | number | null | undefined) => (at(v) ? short.format(at(v)!) : ""),
+    /** "Thu 15 Oct, 17:00 to 18:00" */
+    window: (start: string | null | undefined, end: string | null | undefined, to: string) =>
+      start ? `${day.format(new Date(start))}, ${clock.format(new Date(start))}${end ? ` ${to} ${clock.format(new Date(end))}` : ""}` : "",
+  };
+}
+
+export function Price({ cents, was, color }: { cents: number; was?: number | null; color?: string | null }) {
   const money = useMoney();
-  const discounted = was != null && was > cents;
+  const price = (
+    <span className="price" style={color ? { color } : undefined}>
+      {money(cents)}
+    </span>
+  );
+  if (was == null || was <= cents) return price;
   return (
-    <span className={`price ${discounted ? "price-offer" : ""} ${className}`}>
-      <span className="price-now" style={color ? { color } : undefined}>
-        {money(cents)}
-      </span>
-      {discounted && <s className="price-was">{money(was)}</s>}
+    <span className="pricing">
+      {price}
+      <s>{money(was)}</s>
     </span>
   );
 }
@@ -54,7 +76,7 @@ export function Badge({ badge }: { badge: BadgeData }) {
   const style =
     badge.backgroundColor || badge.textColor ? { backgroundColor: badge.backgroundColor, color: badge.textColor } : undefined;
   return (
-    <span className={`badge badge-${badge.variant}`} style={style}>
+    <span className={`offer offer-${badge.variant}`} style={style}>
       {badge.text}
     </span>
   );
@@ -63,19 +85,20 @@ export function Badge({ badge }: { badge: BadgeData }) {
 // ─── Pictures ────────────────────────────────────────────────────────────────
 
 /**
- * A Picnic picture. Loads from Picnic's image server like picnic-web; when
- * that fails, asks the app's server, which tries the other variants.
+ * A Picnic picture inside a `.picture` box. Loads from Picnic's image server
+ * like picnic-web; when that fails, asks the app's server, which tries the
+ * other variants. With nothing left, the box shows the name's first letter.
  */
 export function Img({
   id,
   kind = "product",
-  alt = "",
+  name = "",
   className = "",
   size,
 }: {
   id: string | null | undefined;
   kind?: "product" | "recipe";
-  alt?: string;
+  name?: string;
   className?: string;
   size?: string;
 }) {
@@ -88,17 +111,21 @@ export function Img({
     : [];
   const [attempt, setAttempt] = useState(0);
   useEffect(() => setAttempt(0), [id]);
-  if (attempt >= sources.length) return <span className={`img img-missing ${className}`} aria-hidden="true" />;
   return (
-    <img
-      className={`img ${className}`}
-      src={sources[attempt]}
-      alt={alt}
-      loading="lazy"
-      decoding="async"
-      referrerPolicy="no-referrer"
-      onError={() => setAttempt((n) => n + 1)}
-    />
+    <span className={`picture ${className}`} aria-hidden="true">
+      {attempt < sources.length ? (
+        <img
+          src={sources[attempt]}
+          alt=""
+          loading="lazy"
+          decoding="async"
+          referrerPolicy="no-referrer"
+          onError={() => setAttempt((n) => n + 1)}
+        />
+      ) : (
+        kind === "product" && name.charAt(0).toUpperCase()
+      )}
+    </span>
   );
 }
 
@@ -107,20 +134,19 @@ export function Img({
 export function Spinner({ label }: { label?: string }) {
   const { t } = useT();
   return (
-    <div className="loading" role="status">
-      <span className="spinner" aria-hidden="true" />
-      <span className="visually-hidden">{label ?? t.loadingAriaLabel}</span>
-    </div>
+    <p className="hint loading" role="status">
+      <span className="spinner" aria-hidden="true" /> {label ?? t.loadingAriaLabel}
+    </p>
   );
 }
 
 export function ErrorView({ message, onRetry }: { message: string; onRetry?: () => void }) {
   const { t, d } = useT();
   return (
-    <div className="error-view" role="alert">
+    <div className="trouble" role="alert">
       <p>{message === "network" ? d.networkError : message}</p>
       {onRetry && (
-        <button type="button" className="button" onClick={onRetry}>
+        <button type="button" className="secondary" onClick={onRetry}>
           {t.retryButton}
         </button>
       )}
@@ -128,52 +154,54 @@ export function ErrorView({ message, onRetry }: { message: string; onRetry?: () 
   );
 }
 
-export function Empty({ children }: { children: ReactNode }) {
-  return <p className="empty">{children}</p>;
+export function Hint({ children }: { children: ReactNode }) {
+  return <p className="hint">{children}</p>;
 }
 
 // ─── Quantity ────────────────────────────────────────────────────────────────
 
+/**
+ * The desk's stepper: a green "+" while the product is not in the basket,
+ * a filled "− 2 +" pill once it is (an outlined one on the receipt).
+ */
 export function Stepper({
   quantity,
   maxCount,
   onAdd,
   onRemove,
   name,
-  large = false,
+  want = 1,
 }: {
   quantity: number;
   maxCount: number;
   onAdd: () => void;
   onRemove: () => void;
   name: string;
-  large?: boolean;
+  /** Shown on the "+" when the first click adds more than one (a pasted "2 havermelk"). */
+  want?: number;
 }) {
-  const { t } = useT();
-  if (quantity === 0) {
-    return (
-      <button
-        type="button"
-        className={`add ${large ? "add-large" : ""}`}
-        onClick={stop(onAdd)}
-        aria-label={`${t.addToCartAriaLabel}: ${name}`}
-        disabled={maxCount <= 0}
-      >
-        {large ? t.addToCartButton : "+"}
-      </button>
-    );
-  }
+  const { d } = useT();
+  const stop = (fn: () => void) => (event: { stopPropagation(): void; preventDefault(): void }) => {
+    event.stopPropagation();
+    event.preventDefault();
+    fn();
+  };
   return (
-    <span className={`stepper ${large ? "stepper-large" : ""}`} onClick={stop(() => {})}>
-      <button type="button" onClick={stop(onRemove)} aria-label={`${t.removeOneAriaLabel}: ${name}`}>
+    <span className={`stepper ${quantity === 0 ? "empty" : ""}`} onClick={(event) => event.stopPropagation()}>
+      <button type="button" className="less" onClick={stop(onRemove)} aria-label={d.oneFewer.replace("{name}", name)} tabIndex={quantity ? 0 : -1}>
         −
       </button>
-      <output aria-label={`${t.inCartLabel}: ${name}`}>{quantity}</output>
+      <output>{quantity}</output>
       <button
         type="button"
+        className="more"
         onClick={stop(onAdd)}
         disabled={quantity >= maxCount}
-        aria-label={`${t.addOneAriaLabel}: ${name}`}
+        aria-label={
+          quantity === 0
+            ? d.addToBasket.replace("{name}", want > 1 ? `${want} × ${name}` : name)
+            : d.oneMore.replace("{name}", name)
+        }
       >
         +
       </button>
@@ -181,15 +209,9 @@ export function Stepper({
   );
 }
 
-const stop = (fn: () => void) => (event: { preventDefault(): void; stopPropagation(): void }) => {
-  event.preventDefault();
-  event.stopPropagation();
-  fn();
-};
-
 // ─── Dialogs ─────────────────────────────────────────────────────────────────
 
-/** A modal dialog: Esc and the backdrop close it, focus stays inside. */
+/** A sheet over the desk: Esc and the backdrop close it, focus stays inside. */
 export function Dialog({
   title,
   onClose,
@@ -219,7 +241,7 @@ export function Dialog({
   return (
     <dialog
       ref={ref}
-      className={`dialog ${wide ? "dialog-wide" : ""} ${className}`}
+      className={`sheet ${wide ? "sheet-wide" : ""} ${className}`}
       aria-labelledby={titleId}
       onCancel={(event) => {
         event.preventDefault();
@@ -229,15 +251,13 @@ export function Dialog({
         if (event.target === ref.current) onClose();
       }}
     >
-      <div className="dialog-body">
-        <header className="dialog-head">
-          <h2 id={titleId}>{title}</h2>
-          <button type="button" className="icon-button" onClick={onClose} aria-label={t.closeAriaLabel}>
-            ×
-          </button>
-        </header>
-        {children}
-      </div>
+      <button type="button" className="quiet close" onClick={onClose}>
+        {t.closeLabel}
+      </button>
+      <h2 id={titleId} className="sheet-title">
+        {title}
+      </h2>
+      {children}
     </dialog>
   );
 }
@@ -259,13 +279,13 @@ export function Confirm({
 }) {
   const { t } = useT();
   return (
-    <Dialog title={title} onClose={onCancel}>
+    <Dialog title={title} onClose={onCancel} className="sheet-small">
       <p>{message}</p>
-      <div className="dialog-actions">
-        <button type="button" className="button quiet" onClick={onCancel}>
+      <div className="actions">
+        <button type="button" className="secondary" onClick={onCancel}>
           {t.cancelButton}
         </button>
-        <button type="button" className="button primary" onClick={onConfirm} disabled={busy}>
+        <button type="button" className="primary" onClick={onConfirm} disabled={busy}>
           {confirmLabel ?? t.confirmButton}
         </button>
       </div>
@@ -273,32 +293,29 @@ export function Confirm({
   );
 }
 
-// ─── Toasts ──────────────────────────────────────────────────────────────────
+// ─── Notices ─────────────────────────────────────────────────────────────────
 
-type Toast = { id: number; text: string; tone: "info" | "error" };
-const ToastContext = createContext<(text: string, tone?: "info" | "error") => void>(() => {});
+type Notice = { id: number; text: string; tone: "info" | "error" };
+const NoticeContext = createContext<(text: string, tone?: "info" | "error") => void>(() => {});
 
-export const useToast = () => useContext(ToastContext);
+export const useToast = () => useContext(NoticeContext);
 
+/** One notice at a time at the bottom left, as on the old desk. */
 export function ToastProvider({ children }: { children: ReactNode }) {
-  const [toasts, setToasts] = useState<Toast[]>([]);
+  const [notice, setNotice] = useState<Notice | null>(null);
   const counter = useRef(0);
   const show = useCallback((text: string, tone: "info" | "error" = "info") => {
     const id = ++counter.current;
-    setToasts((list) => [...list.filter((t) => t.text !== text), { id, text, tone }].slice(-3));
-    setTimeout(() => setToasts((list) => list.filter((t) => t.id !== id)), tone === "error" ? 7000 : 4000);
+    setNotice({ id, text, tone });
+    setTimeout(() => setNotice((current) => (current?.id === id ? null : current)), tone === "error" ? 7000 : 4500);
   }, []);
   return (
-    <ToastContext.Provider value={show}>
+    <NoticeContext.Provider value={show}>
       {children}
-      <div className="toasts" role="status" aria-live="polite">
-        {toasts.map((toast) => (
-          <p key={toast.id} className={`toast toast-${toast.tone}`}>
-            {toast.text}
-          </p>
-        ))}
+      <div className={`notice ${notice?.tone === "error" ? "error" : ""}`} role="status" aria-live="polite" hidden={!notice}>
+        {notice?.text}
       </div>
-    </ToastContext.Provider>
+    </NoticeContext.Provider>
   );
 }
 
@@ -351,4 +368,11 @@ export function Loaded<T>({
   if (load.status === "loading") return <Spinner />;
   if (load.status === "error") return <ErrorView message={load.message} onRetry={retry} />;
   return <>{children(load.data)}</>;
+}
+
+/** Keeps the browser tab's title in step with the screen. */
+export function useTitle(title: string | null | undefined) {
+  useEffect(() => {
+    document.title = title ? `${title} · Picnic` : "Picnic";
+  }, [title]);
 }

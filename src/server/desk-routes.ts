@@ -36,6 +36,7 @@ import type { RscPageModel } from "@/lib/rsc/rsc-page-types";
 
 import { recipePrice } from "../shared/recipe-price";
 import type { Desk } from "./app";
+import { L1_CATEGORIES, productById } from "./demo/data";
 import { Pictures } from "./pictures";
 import { isObject } from "./store";
 
@@ -534,14 +535,37 @@ class HistoryError extends Error {
   }
 }
 
-/** A plain coloured tile for the demo shop, as PNG, so pictures work offline. */
+/**
+ * Pictures for the demo shop, drawn here so it works offline: a product's
+ * first letter on a pale disc, and a few circles for a recipe.
+ */
 function demoPicture(id: string) {
   if (!/^demo-[a-z0-9-]{1,60}$/.test(id)) return null;
-  return { data: DEMO_PNG, type: "image/png", variant: "demo" };
+  const key = id.slice(5);
+  let hash = 0;
+  for (const char of key) hash = (hash * 31 + char.charCodeAt(0)) >>> 0;
+  // Mix, so names that differ in one letter look different.
+  hash = Math.imul(hash ^ (hash >>> 16), 0x45d9f3b) >>> 0;
+  hash = Math.imul(hash ^ (hash >>> 16), 0x45d9f3b) >>> 0;
+  const hue = hash % 360;
+  let svg: string;
+  if (key.startsWith("recipe-")) {
+    const circles = [0, 1, 2, 3]
+      .map((i) => {
+        const h = (hue + i * 47) % 360;
+        return `<circle cx="${30 + ((hash >>> (i * 3)) % 140)}" cy="${40 + ((hash >>> (i * 5)) % 70)}" r="${18 + ((hash >>> i) % 22)}" fill="hsl(${h} 55% 60%)"/>`;
+      })
+      .join("");
+    svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 150"><rect width="200" height="150" fill="hsl(${hue} 40% 90%)"/>${circles}</svg>`;
+  } else {
+    const product = productById(key);
+    const aisle = L1_CATEGORIES.find((c) => `l1-${c.id}` === key)?.name;
+    const name = product?.name ?? aisle ?? key.replace(/^cat-/, "");
+    const letter = (name.match(/[A-Za-zÀ-ž]/)?.[0] ?? "?").toUpperCase();
+    svg =
+      `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><rect width="100" height="100" fill="hsl(${hue} 45% 92%)"/>` +
+      `<circle cx="50" cy="50" r="32" fill="hsl(${hue} 50% 62%)"/>` +
+      `<text x="50" y="62" text-anchor="middle" font-family="sans-serif" font-size="34" font-weight="700" fill="hsl(${hue} 60% 22%)">${letter}</text></svg>`;
+  }
+  return { data: Buffer.from(svg), type: "image/svg+xml", variant: "demo" };
 }
-
-// A 1×1 pale grey-green PNG (#dfe8dc); the page scales it.
-const DEMO_PNG = Buffer.from(
-  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGO4/+IOAAVNAqRW9JQaAAAAAElFTkSuQmCC",
-  "base64"
-);

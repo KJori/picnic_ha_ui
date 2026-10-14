@@ -18,14 +18,12 @@ import type {
   CheckoutStatusData,
   PaymentProfileData,
 } from "@/lib/core/checkout-types";
-import type { CartData } from "@/lib/core/types";
 
-import { SlotBanner, Totals } from "../components/basket";
-import { Confirm, Dialog, ErrorView, LOCALES, Loaded, Price, Spinner, useLoad, useToast } from "../components/common";
-import { useTitle } from "../components/products";
+import { SlotLine } from "../components/basket";
+import { Confirm, Dialog, ErrorView, Price, Spinner, useDates, useLoad, useTitle, useToast } from "../components/common";
 import { api } from "../lib/api";
 import { href, navigate } from "../lib/router";
-import { cartModel } from "../state/cart";
+import { cartModel, useCart } from "../state/cart";
 import { useT } from "../state/session";
 
 const PENDING_KEY = "picnic_desk_payment";
@@ -82,16 +80,14 @@ async function claimConfirm(pending: Pending): Promise<boolean> {
 const FAILED_STATUS = /CANCEL|FAIL|EXPIR|ERROR|REJECT/i;
 
 export function CheckoutPage({ returning = false }: { returning?: boolean }) {
-  const { t, d, language } = useT();
+  const { t, d } = useT();
   const toast = useToast();
   useTitle(returning ? t.checkoutReturnTitle : t.checkoutPageTitle);
-  const [load, reload] = useLoad<{ cart: CartData; profile: PaymentProfileData | null }>("checkout", async (signal) => {
-    const [cart, profile] = await Promise.all([
-      api<CartData>("cart", { signal }),
-      api<PaymentProfileData>("cart/checkout/payment-profile", { signal }),
-    ]);
-    if (!cart.ok) return cart;
-    return { ok: true, data: { cart: cart.data, profile: profile.ok ? profile.data : null } };
+  const model = useCart();
+  const dates = useDates();
+  const [profile] = useLoad<PaymentProfileData | null>("payment-profile", async (signal) => {
+    const result = await api<PaymentProfileData>("cart/checkout/payment-profile", { signal });
+    return { ok: true, data: result.ok ? result.data : null };
   });
   const [started, setStarted] = useState<CheckoutStartData | null>(null);
   const [issue, setIssue] = useState<CheckoutIssueData | null>(null);
@@ -158,79 +154,78 @@ export function CheckoutPage({ returning = false }: { returning?: boolean }) {
       <div className="checkout">
         <h2>{t.checkoutReturnTitle}</h2>
         <p>{t.checkoutMissingSession}</p>
-        <a href={href("/deliveries")}>{t.deliveriesTitle} ›</a>
+        <a href={href("/orders")}>{t.deliveriesTitle}</a>
       </div>
     );
   }
 
+  const cart = model.cart;
+  const preferred =
+    profile.status === "ready" && profile.data
+      ? (profile.data.storedOptions.find((o) => o.id === profile.data!.preferredPaymentOptionId) ?? profile.data.storedOptions[0])
+      : undefined;
   return (
     <div className="checkout">
       <h2>{t.checkoutPageTitle}</h2>
-      <Loaded load={load} retry={reload}>
-        {({ cart, profile }) => {
-          if (cart.totalCount === 0) {
-            return (
+      {!cart ? (
+        <Spinner />
+      ) : cart.totalCount === 0 ? (
+        <p className="hint">
+          {d.emptyBasket} <a href={href("/search")}>{t.goToSearch}</a>
+        </p>
+      ) : (
+        <ol className="steps">
+          <li className="step">
+            <h3>{t.deliveriesWindowTitle}</h3>
+            <SlotLine cart={cart} />
+            {!cart.selectedSlot?.isExplicitSelection && <p className="hint">{d.chooseSlotFirst}</p>}
+          </li>
+          <li className="step">
+            <h3>{d.checkOrder}</h3>
+            {!isMinimumOrderMet(cart.totalPrice, cart.minimumOrderValue) ? (
+              <p className="gone">{t.checkoutMinimumNotMet}</p>
+            ) : started ? (
               <p>
-                {t.emptyCartTitle}. <a href={href("/search")}>{t.goToSearch}</a>
+                {d.orderReady.replace("{n}", String(started.totalCount))} <Price cents={started.totalPrice} />
+                {started.transactionExpiry && (
+                  <span className="hint-inline">
+                    {" "}
+                    {t.checkoutExpires} {dates.clock(started.transactionExpiry)}
+                  </span>
+                )}
               </p>
-            );
-          }
-          const preferred =
-            profile?.storedOptions.find((o) => o.id === profile.preferredPaymentOptionId) ?? profile?.storedOptions[0];
-          return (
-            <div className="checkout-body">
-              <SlotBanner cart={cart} onChosen={() => reload()} />
-              <Totals
-                totalPrice={cart.totalPrice}
-                totalCount={cart.totalCount}
-                depositBreakdown={cart.depositBreakdown}
-                membershipSavings={cart.membershipSavings}
-                promoSavings={cart.promoSavings}
-                fees={cart.fees}
-                minimumOrderValue={cart.minimumOrderValue}
-              />
-              {!isMinimumOrderMet(cart.totalPrice, cart.minimumOrderValue) ? (
-                <p className="problem">
-                  {t.checkoutMinimumNotMet} <a href={href("/cart")}>{t.cartTitle}</a>
-                </p>
-              ) : !started ? (
-                <>
-                  {!cart.selectedSlot?.isExplicitSelection && <p className="hint">{d.chooseSlotFirst}</p>}
-                  <button type="button" className="button primary wide" disabled={busy} onClick={() => void start()}>
-                    {busy ? t.checkoutProcessing : t.checkoutContinueButton}
+            ) : (
+              <>
+                <p className="hint">{d.checkOrderHint}</p>
+                <button type="button" className="primary" disabled={busy} onClick={() => void start()}>
+                  {busy ? t.checkoutProcessing : t.checkoutContinueButton}
+                </button>
+              </>
+            )}
+          </li>
+          <li className={`step ${started ? "" : "later"}`}>
+            <h3>{t.checkoutPaymentTitle}</h3>
+            {preferred && (
+              <p>
+                <strong>{preferred.displayName}</strong> {preferred.account && <span className="hint-inline">{preferred.account}</span>}
+              </p>
+            )}
+            {started && (
+              <>
+                <p className="hint">{d.payInNewTab}</p>
+                <div className="actions start">
+                  <button type="button" className="primary" disabled={busy} onClick={() => void pay()}>
+                    {busy ? t.checkoutProcessing : t.checkoutPayButton}
                   </button>
-                </>
-              ) : (
-                <section className="panel">
-                  <h3>{t.checkoutPaymentTitle}</h3>
-                  <p>
-                    {t.checkoutOrderTotal}: <Price cents={started.totalPrice} />
-                  </p>
-                  {started.transactionExpiry && (
-                    <p className="muted">
-                      {t.checkoutExpires}: {new Date(started.transactionExpiry).toLocaleString(LOCALES[language])}
-                    </p>
-                  )}
-                  {preferred && (
-                    <p className="payment-option">
-                      <strong>{preferred.displayName}</strong> {preferred.account && <span className="muted">{preferred.account}</span>}
-                    </p>
-                  )}
-                  <p className="hint">{d.payInNewTab}</p>
-                  <div className="dialog-actions">
-                    <button type="button" className="button quiet" disabled={busy} onClick={() => setStarted(null)}>
-                      {t.cancelButton}
-                    </button>
-                    <button type="button" className="button primary" disabled={busy} onClick={() => void pay()}>
-                      {busy ? t.checkoutProcessing : t.checkoutPayButton}
-                    </button>
-                  </div>
-                </section>
-              )}
-            </div>
-          );
-        }}
-      </Loaded>
+                  <button type="button" className="quiet" disabled={busy} onClick={() => setStarted(null)}>
+                    {t.cancelButton}
+                  </button>
+                </div>
+              </>
+            )}
+          </li>
+        </ol>
+      )}
       {issue &&
         (issue.requiresAgeVerification && issue.resolveKey ? (
           <Confirm
@@ -242,8 +237,8 @@ export function CheckoutPage({ returning = false }: { returning?: boolean }) {
         ) : (
           <Dialog title={issue.title} onClose={() => setIssue(null)}>
             <p>{issue.message}</p>
-            <div className="dialog-actions">
-              <button type="button" className="button" onClick={() => setIssue(null)}>
+            <div className="actions">
+              <button type="button" className="secondary" onClick={() => setIssue(null)}>
                 {t.closeLabel}
               </button>
             </div>
@@ -268,7 +263,7 @@ function PaymentWatch({ pending, payUrl, onDone }: { pending: Pending; payUrl: s
       // Another tab confirms it.
       onDone();
       await cartModel.refresh();
-      navigate("/deliveries");
+      navigate("/orders");
       return;
     }
     const result = await api<{ success: true; orderId: string }>("cart/checkout/confirm", {
@@ -283,7 +278,7 @@ function PaymentWatch({ pending, payUrl, onDone }: { pending: Pending; payUrl: s
     onDone();
     toast(d.orderPlaced);
     await cartModel.refresh();
-    navigate("/deliveries");
+    navigate("/orders");
   }, [pending, onDone, toast, t.checkoutConfirmError, d.orderPlaced]);
 
   useEffect(() => {
@@ -293,7 +288,7 @@ function PaymentWatch({ pending, payUrl, onDone }: { pending: Pending; payUrl: s
       // Another tab finished it.
       if (storageWorks() && !readPending() && !finished.current) {
         onDone();
-        navigate("/deliveries");
+        navigate("/orders");
         return;
       }
       const result = await api<CheckoutStatusData>(
@@ -325,8 +320,8 @@ function PaymentWatch({ pending, payUrl, onDone }: { pending: Pending; payUrl: s
     <div className="checkout">
       <h2>{t.checkoutReturnTitle}</h2>
       {!failed && <Spinner label={t.checkoutPollingMessage} />}
-      <p>{failed ? d.paymentFailed : t.checkoutPollingMessage}</p>
-      <p className="muted">
+      {failed && <p className="gone">{d.paymentFailed}</p>}
+      <p className="hint">
         {t.checkoutStatusLabel}: {status}
       </p>
       {payUrl && !failed && (
@@ -337,11 +332,11 @@ function PaymentWatch({ pending, payUrl, onDone }: { pending: Pending; payUrl: s
         </p>
       )}
       {problem && <ErrorView message={problem} onRetry={() => void confirm()} />}
-      <div className="dialog-actions">
+      <div className="actions start">
         {failed ? (
           <button
             type="button"
-            className="button primary"
+            className="primary"
             onClick={() => {
               onDone();
               navigate("/checkout");
@@ -352,7 +347,7 @@ function PaymentWatch({ pending, payUrl, onDone }: { pending: Pending; payUrl: s
         ) : (
           <button
             type="button"
-            className="button quiet"
+            className="quiet"
             disabled={cancelling}
             onClick={async () => {
               setCancelling(true);

@@ -15,7 +15,7 @@ savings and recipe groups, delivery times, checkout with the age check and
 payment, orders with live tracking, cancelling, rating and invoices, the
 parcel service, the cookbook (saved recipes, swapping ingredients, meal plans
 with a shopping list). Its own extras: shortcuts, a pasted shopping list,
-"bought before", starred products, a self-check, keyboard use, prices on
+"bought before", saved products, a self-check, keyboard use, prices on
 recipe cards. Not included: wallet, Family account, friend discount.
 
 It is not affiliated with Picnic and can break when Picnic changes its service.

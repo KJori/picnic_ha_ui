@@ -51,8 +51,9 @@ order.
 
 ## The page
 
-`src/ui` is a React app with its own design (the desk: shelf and receipt). It
-imports picnic-web's types, translations and pure helpers (deep-link routing,
+`src/ui` is a React app with the desk's own design (the shelf and the
+receipt, from 0.x), laid out for a wide screen rather than picnic-web's phone
+layout. It imports picnic-web's types, translations and pure helpers (deep-link routing,
 the RSC action resolver, the tracking parser, PML markdown) so it reads the
 routes' answers the way picnic-web's own pages do. TypeScript checks it
 against those types.
@@ -84,5 +85,5 @@ one already shown, and fetches the basket again after a failure.
 - The demo shop (`src/server/demo`) is typed with picnic-web's types, so it
   cannot drift from what the real routes return.
 
-What cannot be tested here is Picnic itself. The **Run the check** button
-under Account tries the read-only parts against the live service.
+What cannot be tested here is Picnic itself. **Check what works with Picnic**,
+under the receipt, tries the read-only parts against the live service.

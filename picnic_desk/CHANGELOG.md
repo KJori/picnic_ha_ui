@@ -21,11 +21,13 @@ it does what picnic-web does, with the same handling of Picnic's answers.
 - New: sign in with a Picnic auth token; the verification code can also come
   by e-mail.
 - New: screens in English, Dutch, German or French (`language` option).
-- Kept: the desk layout with the receipt, shortcuts, a pasted list, bought
-  before, starred products (your saved products), the self-check, the
-  keyboard, prices on recipe cards.
-- Changed: the app now runs on Node.js. Your Picnic session, saved (now
-  "starred") products and shortcuts carry over.
+- Kept: the desk layout (search box, tabs, shelf, receipt), shortcuts, several
+  searches at once, a pasted list, bought before, saved products, the
+  self-check, the keyboard, prices on recipe cards. picnic-web's screens are
+  made for a phone; here its parts are laid out for a desk: aisles beside the
+  shelf, the week of delivery times in one grid, orders in a table.
+- Changed: the app now runs on Node.js. Your Picnic session, saved products
+  and shortcuts carry over.
 
 ## 0.3.0
 

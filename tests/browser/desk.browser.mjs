@@ -98,8 +98,8 @@ async function openPage({ width = 1440, height = 900, colorScheme = "light" } = 
 
 /** The session lives on the server, so later pages may already be signed in. */
 async function signIn(page) {
-  await page.locator(".views, .login-card").first().waitFor();
-  if (await page.locator(".login-card").count()) {
+  await page.locator(".views, .signin").first().waitFor();
+  if (await page.locator(".signin").count()) {
     await page.getByLabel("E-mail address").fill("demo@example.nl");
     await page.getByLabel("Password").fill("x");
     await page.getByRole("button", { name: "Sign in", exact: true }).click();
@@ -108,10 +108,12 @@ async function signIn(page) {
 }
 
 const shot = async (page, name) => SHOTS && page.screenshot({ path: join(SHOTS, `${name}.png`), fullPage: true });
-const receiptTotal = (page) => page.locator(".receipt .sum-total dd").textContent();
+const receiptTotal = (page) => page.locator(".receipt .total span").last().textContent();
 const clean = (page) => assert.deepEqual(page.problems, []);
 /** The amount a stepper shows, or 0 when the product is not in the basket. */
 const amount = async (locator) => ((await locator.count()) ? Number(await locator.first().textContent()) : 0);
+const cell = (page, id) => page.locator(`.products .product[data-product="${id}"]`).first();
+const line = (page, id) => page.locator(`.till .receipt .line[data-product="${id}"]`);
 
 describe("Picnic Desk in a browser", () => {
   test("signing in with a verification code, then out again", async () => {
@@ -122,92 +124,131 @@ describe("Picnic Desk in a browser", () => {
     await page.getByLabel("Verification code").fill("000000");
     await page.getByRole("button", { name: "Verify" }).click();
     await page.getByRole("alert").filter({ hasText: "verification code is wrong" }).waitFor();
-    await page.getByRole("button", { name: "by e-mail" }).click();
+    await page.getByRole("button", { name: "Send by e-mail" }).click();
     await page.getByText("sent to your e-mail address").waitFor();
     await page.getByLabel("Verification code").fill("123456");
     await page.getByRole("button", { name: "Verify" }).click();
     await page.locator(".receipt").waitFor();
+    await page.getByText("Signed in as Demo Klant.").waitFor();
     await shot(page, "01-home");
-    await page.getByRole("link", { name: "Account" }).click();
-    await page.getByRole("button", { name: "Sign out" }).click();
+    await page.locator(".receipt").getByRole("button", { name: "Sign out" }).click();
     await page.getByRole("button", { name: "Sign in", exact: true }).waitFor();
     clean(page);
     await page.context().close();
   });
 
-  test("categories, search with suggestions, the basket and stars", async () => {
+  test("the desk layout: big search box, tabs, shelf, receipt on the right", async () => {
     const page = await openPage();
     await signIn(page);
-    // Picnic's category tree, and down into a category.
-    await page.getByRole("button", { name: /Brood & ontbijt/ }).click();
-    await page.getByRole("link", { name: "Brood", exact: true }).click();
-    await page.locator('.cell[data-product="s1001"]').waitFor();
+    const tabs = await page.locator(".views a").allTextContents();
+    assert.deepEqual(tabs, ["Search", "Categories", "Paste a list", "Bought before", "Saved", "Recipes", "Orders"]);
+    const shelf = await page.locator(".shelf").boundingBox();
+    const till = await page.locator(".till").boundingBox();
+    assert.ok(till.x > shelf.x + shelf.width - 1, "the receipt is to the right of the shelf");
+    await page.locator(".shortcuts .chip").first().waitFor();
+    clean(page);
+    await page.context().close();
+  });
+
+  test("categories, search with suggestions, several words at once, the basket and saving", async () => {
+    const page = await openPage();
+    await signIn(page);
+    // Picnic's aisles on the left, a category's subcategories and products on the right.
+    await page.locator(".views").getByRole("link", { name: "Categories" }).click();
+    await page.locator(".aisles").getByRole("link", { name: /Brood & ontbijt/ }).click();
+    await cell(page, "s1001").waitFor();
+    await page.locator(".aisle-shelf .chips").getByRole("link", { name: "Croissants & koffiebroodjes" }).click();
+    await cell(page, "s1003").waitFor();
     await shot(page, "02-category");
 
     // Suggestions while typing.
     await page.locator("#q").fill("tof");
     await page.getByRole("option", { name: "tofu" }).click();
-    await page.locator('.cell[data-product="s1004"]').waitFor();
-    const tofu = page.locator('.cell[data-product="s1004"]');
-    await tofu.getByRole("button", { name: /Add to basket/ }).click();
-    await tofu.getByRole("button", { name: /^Add 1/ }).click();
-    await page.locator('.receipt .line[data-product="s1004"] output').filter({ hasText: "2" }).waitFor();
-    assert.equal(await receiptTotal(page), "€3.58");
+    const tofu = cell(page, "s1004");
+    await tofu.locator(".more").click();
+    await tofu.locator(".more").click();
+    await line(page, "s1004").locator("output").filter({ hasText: "2" }).waitFor();
+    assert.equal(await receiptTotal(page), "3,58");
 
     // "More for less": the price follows the amount.
     await page.locator("#q").fill("havermelk");
     await page.locator("#q").press("Enter");
-    const milk = page.locator('.cell[data-product="s1006"]');
-    await milk.getByRole("button", { name: /Add to basket/ }).click();
-    await milk.getByRole("button", { name: /^Add 1/ }).click();
-    await milk.locator(".price-now").filter({ hasText: "€1.99" }).waitFor();
+    const milk = cell(page, "s1006");
+    await milk.locator(".more").click();
+    await milk.locator(".more").click();
+    await milk.locator(".price").filter({ hasText: "1,99" }).waitFor();
 
-    // Stars.
-    await tofu.isVisible().catch(() => {});
-    await milk.getByRole("button", { name: /^Star/ }).click();
-    await page.getByRole("link", { name: "Starred" }).click();
-    await page.locator('.past-item[data-product="s1006"]').waitFor();
-    await shot(page, "03-starred");
+    // Several words separated by commas, each with its own row.
+    await page.locator("#q").fill("tofu, appels");
+    await page.locator("#q").press("Enter");
+    await page.locator(".group > h3").filter({ hasText: "appels" }).waitFor();
+    assert.deepEqual(await page.locator(".group > h3").allTextContents(), ["tofu", "appels"]);
+
+    // Saving a product.
+    await cell(page, "s1004").getByRole("button", { name: /^Save/ }).click();
+    await page.locator(".views").getByRole("link", { name: "Saved" }).click();
+    await cell(page, "s1004").waitFor();
+    await shot(page, "03-saved");
 
     // Taking one off in the receipt.
-    await page.locator('.receipt .line[data-product="s1004"]').getByRole("button", { name: /^Remove 1/ }).click();
-    await page.locator('.receipt .line[data-product="s1004"] output').filter({ hasText: "1" }).waitFor();
+    await line(page, "s1004").locator(".less").click();
+    await line(page, "s1004").locator("output").filter({ hasText: "1" }).waitFor();
     clean(page);
     await page.context().close();
   });
 
-  test("a product's page over the shelf", async () => {
+  test("shortcuts can be edited in place", async () => {
+    const page = await openPage();
+    await signIn(page);
+    await page.locator(".views").getByRole("link", { name: "Search", exact: true }).click();
+    await page.getByRole("button", { name: "Edit shortcuts" }).click();
+    await page.getByLabel("Shortcut name").fill("Ontbijt");
+    await page.getByLabel("Search words").fill("brood, melk");
+    await page.getByRole("button", { name: "Add shortcut" }).click();
+    await page.getByRole("button", { name: "Remove the shortcut Ontbijt" }).waitFor();
+    await page.getByRole("button", { name: "Done" }).click();
+    await page.locator(".shortcuts").getByRole("link", { name: "Ontbijt" }).click();
+    await page.locator(".group > h3").filter({ hasText: "melk" }).waitFor();
+    clean(page);
+    await page.context().close();
+  });
+
+  test("a product's page as a sheet over the shelf", async () => {
     const page = await openPage();
     await signIn(page);
     await page.locator("#q").fill("tofu");
     await page.locator("#q").press("Enter");
-    await page.locator('.cell[data-product="s1004"] .cell-open').click();
-    const dialog = page.getByRole("dialog");
-    await dialog.getByRole("heading", { name: "Tofu naturel" }).waitFor();
-    await dialog.getByText("Contains:").waitFor();
-    await dialog.getByText("Voedingswaarde").click();
-    await dialog.locator("table.nutrition").first().waitFor();
-    const before = await amount(page.locator('.receipt .line[data-product="s1004"] output'));
-    await dialog.locator(".product-buy").getByRole("button", { name: /^(Add to basket|Add 1): Tofu naturel/ }).click();
-    await page.locator('.receipt .line[data-product="s1004"] output').filter({ hasText: String(before + 1) }).waitFor();
+    await cell(page, "s1004").locator(".name").click();
+    const sheet = page.getByRole("dialog");
+    await sheet.locator("h2.name").filter({ hasText: "Tofu naturel" }).waitFor();
+    await sheet.getByText("Contains:").waitFor();
+    await sheet.getByText("Voedingswaarde").click();
+    await sheet.locator("table.nutrition").first().waitFor();
+    const before = await amount(line(page, "s1004").locator("output"));
+    await sheet.locator(".sheet-head .buy .more").click();
+    await line(page, "s1004").locator("output").filter({ hasText: String(before + 1) }).waitFor();
     assert.match(page.url(), /product=s1004/);
     await shot(page, "04-product");
     await page.keyboard.press("Escape");
-    await dialog.waitFor({ state: "detached" });
+    await sheet.waitFor({ state: "detached" });
     assert.doesNotMatch(page.url(), /product=/);
     clean(page);
     await page.context().close();
   });
 
-  test("choosing a delivery time", async () => {
+  test("choosing a delivery time in the week grid", async () => {
     const page = await openPage();
     await signIn(page);
-    await page.locator(".receipt .slot-banner").click();
-    const dialog = page.getByRole("dialog");
-    await dialog.getByRole("tab").nth(1).click();
-    await dialog.locator(".slot:not([disabled])").first().click();
-    await dialog.waitFor({ state: "detached" });
-    await page.locator(".receipt .slot-banner strong").filter({ hasNotText: "Kies je bezorgmoment" }).waitFor();
+    await page.locator(".receipt .slot-line button").click();
+    const sheet = page.getByRole("dialog");
+    await sheet.locator(".week .day").first().waitFor();
+    assert.ok((await sheet.locator(".week .day").count()) >= 3, "several days side by side");
+    const days = await Promise.all([0, 1].map((i) => sheet.locator(".week .day").nth(i).boundingBox()));
+    assert.equal(Math.round(days[0].y), Math.round(days[1].y), "the days are columns, not a list");
+    await shot(page, "05-slots");
+    await sheet.locator(".week .day").nth(1).locator(".slot:not([disabled])").first().click();
+    await sheet.waitFor({ state: "detached" });
+    await page.locator(".receipt .slot-line").filter({ hasText: "Delivery:" }).waitFor();
     clean(page);
     await page.context().close();
   });
@@ -215,28 +256,28 @@ describe("Picnic Desk in a browser", () => {
   test("recipes: price on the card, portions, unticking, swapping, adding as a recipe", async () => {
     const page = await openPage();
     await signIn(page);
-    await page.getByRole("link", { name: "Cooking" }).click();
+    await page.locator(".views").getByRole("link", { name: "Recipes" }).click();
     const card = page.locator('.recipe-card[data-recipe="64a000000000000000000001"]');
-    await card.locator(".card-price").filter({ hasText: "€" }).waitFor();
-    await shot(page, "05-cookbook");
-    await card.getByRole("link").click();
+    await card.locator(".cost").filter({ hasText: "€" }).waitFor();
+    await shot(page, "06-recipes");
+    await card.locator("a.recipe").click();
     await page.getByRole("heading", { name: "Rode linzencurry met spinazie" }).waitFor();
     // Untick the rice, three people.
     await page.locator('.ingredient[data-product="s1025"] input[type="checkbox"]').uncheck();
-    await page.getByRole("button", { name: "Add 1: People" }).click();
+    await page.getByRole("button", { name: "More portions" }).click();
     await page.locator(".portions output").filter({ hasText: "3" }).waitFor();
     await page.locator(".recipe-body:not(.refreshing)").waitFor();
     // Swap the onion for garlic.
     await page.getByRole("button", { name: "Change ingredient: Rode ui" }).click();
     const editor = page.getByRole("dialog");
-    await editor.getByRole("button", { name: /Knoflook/ }).click();
+    await editor.locator(".pick").filter({ hasText: "Knoflook" }).click();
     await editor.getByRole("button", { name: "Save" }).click();
     await editor.waitFor({ state: "detached" });
     await page.locator('.ingredient[data-product="s1016"]').waitFor();
-    await shot(page, "06-recipe");
-    await page.getByRole("button", { name: /Add to basket \(5\)/ }).click();
-    await page.locator(".receipt .line-group-head").filter({ hasText: "Rode linzencurry" }).waitFor();
-    assert.equal(await page.locator('.receipt .line[data-product="s1025"]').count(), 0, "the unticked rice stays out");
+    await shot(page, "07-recipe");
+    await page.getByRole("button", { name: "Add 5 ingredients to the basket" }).click();
+    await page.locator(".receipt .line-head").filter({ hasText: "Rode linzencurry" }).waitFor();
+    assert.equal(await line(page, "s1025").count(), 0, "the unticked rice stays out");
     clean(page);
     await page.context().close();
   });
@@ -244,17 +285,19 @@ describe("Picnic Desk in a browser", () => {
   test("a meal plan and its shopping list", async () => {
     const page = await openPage();
     await signIn(page);
-    await page.getByRole("link", { name: "Cooking" }).click();
+    await page.locator(".views").getByRole("link", { name: "Recipes" }).click();
     await page.locator(".recipe-card").first().waitFor();
-    await page.locator('.planner input[type="number"]').first().fill("2");
+    await page.locator(".chips").getByRole("link", { name: /Meal plan/ }).click();
+    await page.locator(".plan-bar input").first().fill("2");
     await page.getByRole("button", { name: "Make a plan" }).click();
+    await page.locator(".recipe-card").nth(1).waitFor();
     await page.getByRole("button", { name: "Show shopping list" }).click();
     const list = page.getByRole("dialog");
     await list.getByText("packages saved").waitFor();
     await list.getByRole("button", { name: "Add everything to the basket" }).click();
     await list.getByRole("button", { name: "Added!" }).waitFor();
     await page.keyboard.press("Escape");
-    await page.locator(".receipt .line-group").first().waitFor();
+    await page.locator(".receipt .line-head").first().waitFor();
     clean(page);
     await page.context().close();
   });
@@ -264,45 +307,46 @@ describe("Picnic Desk in a browser", () => {
     await signIn(page);
     await page.locator("#q").fill("koffie");
     await page.locator("#q").press("Enter");
-    const coffee = page.locator('.cell[data-product="s1024"]');
-    await coffee.getByRole("button", { name: /Add to basket/ }).click();
-    for (let i = 0; i < 3; i++) await coffee.getByRole("button", { name: /^Add 1/ }).click();
-    await page.locator('.receipt .line[data-product="s1024"] output').filter({ hasText: "4" }).waitFor();
-    await page.getByRole("button", { name: "Check out" }).click();
+    const coffee = cell(page, "s1024");
+    for (let i = 0; i < 4; i++) await coffee.locator(".more").click();
+    await line(page, "s1024").locator("output").filter({ hasText: "4" }).waitFor();
+    await page.locator(".receipt").getByRole("button", { name: "Check out" }).click();
     await page.getByRole("button", { name: "Continue to payment" }).click();
     const age = page.getByRole("dialog");
     await age.getByText("18").first().waitFor();
     await age.getByRole("button", { name: "Confirm" }).click();
-    await shot(page, "07-checkout");
+    await page.getByRole("button", { name: "Pay at the bank" }).waitFor();
+    await shot(page, "08-checkout");
     const [tab] = await Promise.all([page.context().waitForEvent("page"), page.getByRole("button", { name: "Pay at the bank" }).click()]);
     await tab.waitForLoadState().catch(() => {});
     await page.getByText("Status: PENDING").or(page.getByText("Status: FINISHED")).waitFor();
-    await page.waitForURL(/#\/deliveries/, { timeout: 15000 });
+    await page.waitForURL(/#\/orders/, { timeout: 15000 });
     await page.getByText("Order placed").waitFor();
-    assert.equal(await page.locator(".receipt-empty").count(), 1, "the basket is empty after ordering");
+    await page.locator(".receipt .empty-basket").waitFor();
     await tab.close();
     clean(page);
     await page.context().close();
   });
 
-  test("orders: tracking, rating, cancelling, parcels", async () => {
+  test("orders: a table, tracking, rating, cancelling, parcels", async () => {
     const page = await openPage();
     await signIn(page);
-    await page.getByRole("link", { name: "Orders" }).click();
-    await page.getByText("Follow live").waitFor();
-    await page.locator('a[href*="demo-delivery-current"]').click();
+    await page.locator(".views").getByRole("link", { name: "Orders" }).click();
+    await page.locator("table.orders").getByText("Follow live").waitFor();
+    await shot(page, "09-orders");
+    await page.locator('table.orders a[href*="demo-delivery-current"]').click();
     await page.locator("svg.route").waitFor();
     await page.getByText("Expected arrival").waitFor();
-    await shot(page, "08-tracking");
+    await shot(page, "10-tracking");
     await page.getByRole("button", { name: "Cancel the order" }).click();
     await page.getByRole("dialog").getByRole("button", { name: "Confirm" }).click();
     await page.getByText("The order is cancelled.").waitFor();
-    await page.goto(`${base}#/deliveries/demo-delivery-1`);
+    await page.goto(`${base}#/orders/demo-delivery-1`);
     await page.getByRole("radio", { name: "9" }).click();
     await page.getByRole("button", { name: "Send rating" }).click();
     await page.getByText("Thank you for your rating!").waitFor();
     await page.getByRole("button", { name: "Put these in the basket again" }).click();
-    await page.locator('.receipt .line[data-product="s1013"]').waitFor();
+    await line(page, "s1013").waitFor();
     await page.goto(`${base}#/parcels`);
     await page.getByText("DHL-pakket").click();
     await page.getByText("Jouw pakketje").waitFor();
@@ -313,54 +357,56 @@ describe("Picnic Desk in a browser", () => {
   test("a pasted list, bought before, and the self-check", async () => {
     const page = await openPage();
     await signIn(page);
-    await page.getByRole("link", { name: "Paste a list" }).click();
     await page.request.delete(`${base}api/cart`, { headers: { "x-desk-base": base } });
     await page.reload();
     await page.locator(".views").waitFor();
+    await page.locator(".views").getByRole("link", { name: "Paste a list" }).click();
     await page.locator("#list-text").fill("2 appels\ntofu\nonbekend product xyz");
     await page.getByRole("button", { name: "Find these products" }).click();
-    await page.locator(".list-row").first().getByRole("button", { name: /Add 2×/ }).click();
-    await page.locator('.receipt .line[data-product="s1012"] output').filter({ hasText: "2" }).waitFor();
-    await page.getByText("No results for “onbekend product xyz”").waitFor();
-    await page.getByRole("link", { name: "Bought before" }).click();
-    await page.locator(".past-item").first().waitFor();
-    await page.getByRole("link", { name: "Account" }).click();
-    await page.getByRole("button", { name: "Run the check" }).click();
-    await page.getByText("Everything works.").waitFor();
-    await shot(page, "09-account");
+    await page.locator(".wanted").first().locator(".product .more").first().click();
+    await line(page, "s1012").locator("output").filter({ hasText: "2" }).waitFor();
+    await page.locator(".wanted.done").first().waitFor();
+    await page.getByText("No products match “onbekend product xyz”").waitFor();
+    await page.locator(".views").getByRole("link", { name: "Bought before" }).click();
+    await page.locator(".products .product").first().waitFor();
+    await page.locator(".receipt").getByRole("link", { name: "Check what works with Picnic" }).click();
+    await page.locator(".checks li").nth(8).waitFor();
+    assert.equal(await page.locator(".checks li.broken").count(), 0);
+    await shot(page, "11-check");
     clean(page);
     await page.context().close();
   });
 
-  test("on a narrow screen the basket is a page of its own", async () => {
+  test("on a narrow screen the receipt goes under the shelf", async () => {
     const page = await openPage({ width: 820, height: 1000 });
     await signIn(page);
-    assert.equal(await page.locator(".till").isVisible(), false);
-    await page.locator(".nav-basket").click();
-    await page.locator(".receipt-full").waitFor();
-    await shot(page, "10-narrow-basket");
+    const shelf = await page.locator(".shelf").boundingBox();
+    const till = await page.locator(".till").boundingBox();
+    assert.ok(till.y >= shelf.y + shelf.height - 1, "the receipt is below the shelf");
+    await shot(page, "12-narrow");
     clean(page);
     await page.context().close();
   });
 
-  test("dark mode and keyboard: / jumps to the search box", async () => {
+  test("dark mode and the keyboard: /, Enter, +, arrows, s", async () => {
     const page = await openPage({ colorScheme: "dark" });
     await signIn(page);
-    await page.locator("body").click({ position: { x: 5, y: 600 } });
+    await page.evaluate(() => (document.activeElement)?.blur?.());
     await page.keyboard.press("/");
     assert.equal(await page.evaluate(() => document.activeElement?.id), "q");
-    // Enter moves into the results; + adds, the arrows move, s stars.
     await page.keyboard.type("tofu");
     await page.keyboard.press("Enter");
-    await page.waitForFunction(() => document.activeElement?.closest(".cell")?.getAttribute("data-product") === "s1004");
-    const before = await amount(page.locator('.cell[data-product="s1004"] output'));
+    await page.waitForFunction(() => document.activeElement?.closest(".product")?.getAttribute("data-product") === "s1004");
+    const before = await amount(cell(page, "s1004").locator("output"));
     await page.keyboard.press("+");
-    await page.locator('.cell[data-product="s1004"] output').filter({ hasText: String(before + 1) }).waitFor();
+    await cell(page, "s1004").locator("output").filter({ hasText: String(before + 1) }).waitFor();
     await page.keyboard.press("ArrowRight");
-    assert.equal(await page.evaluate(() => document.activeElement?.closest(".cell")?.getAttribute("data-product")), "s1005");
+    assert.equal(await page.evaluate(() => document.activeElement?.closest(".product")?.getAttribute("data-product")), "s1005");
     await page.keyboard.press("s");
-    await page.locator('.cell[data-product="s1005"] .star-on').waitFor();
-    await shot(page, "11-dark");
+    await cell(page, "s1005").locator('.star[aria-pressed="true"]').waitFor();
+    await page.keyboard.press("Enter");
+    await page.getByRole("dialog").locator("h2.name").filter({ hasText: "Gerookte tofu" }).waitFor();
+    await shot(page, "13-dark");
     clean(page);
     await page.context().close();
   });
