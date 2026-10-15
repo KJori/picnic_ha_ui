@@ -27,6 +27,8 @@ import { isCountry } from "./session";
 
 declare const DESK_VERSION: string;
 
+const SHUTDOWN_GRACE_MS = 5000;
+
 function appOptions(dataDir: string): Record<string, unknown> {
   try {
     return JSON.parse(readFileSync(join(dataDir, "options.json"), "utf8"));
@@ -76,7 +78,17 @@ export function startDesk(env: NodeJS.ProcessEnv = process.env) {
         `${desk.options.ingressOnly ? ", ingress only" : ""})`
     );
   });
-  const stop = () => server.close(() => process.exit(0));
+  // Home Assistant stops an app with SIGTERM and waits a little before killing
+  // it. Finish what is running, close idle connections, and do not wait for
+  // a slow request longer than that.
+  const stop = () => {
+    server.close(() => process.exit(0));
+    server.closeIdleConnections();
+    setTimeout(() => {
+      server.closeAllConnections();
+      process.exit(0);
+    }, SHUTDOWN_GRACE_MS).unref();
+  };
   process.once("SIGTERM", stop);
   process.once("SIGINT", stop);
   return { server, desk };

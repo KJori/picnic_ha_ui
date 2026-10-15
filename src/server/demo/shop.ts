@@ -162,7 +162,7 @@ export function demoShop(state = new DemoState()) {
         if (segments[1] === "checkout" && segments[2] === "status") return checkoutStatus(state, q.get("transactionId"));
         return ok<CartData>(cart(state));
       case "POST cart":
-        return cartPost(state, segments, await body());
+        return cartPost(state, segments, await body(), request.nextUrl.origin);
       case "DELETE cart":
         state.lines = [];
         return ok<CartData>(cart(state));
@@ -484,7 +484,7 @@ function addLine(state: DemoState, productId: string, count: number, group: stri
   }
 }
 
-function cartPost(state: DemoState, segments: string[], body: any): Json {
+function cartPost(state: DemoState, segments: string[], body: any, origin: string): Json {
   if (segments[1] === "delivery-slots") {
     const slot = slotList(state).find((s) => s.slotId === body?.slotId);
     if (!slot) return fail("slotId is required", 400);
@@ -493,7 +493,7 @@ function cartPost(state: DemoState, segments: string[], body: any): Json {
     state.explicitSlot = true;
     return ok<CartData>(cart(state));
   }
-  if (segments[1] === "checkout") return checkout(state, segments[2], body);
+  if (segments[1] === "checkout") return checkout(state, segments[2], body, origin);
   if (segments.length !== 1) return fail("Not found.", 404);
 
   if (!body?.productId || !body?.action || typeof body.count !== "number") {
@@ -525,7 +525,7 @@ function paymentProfile(): PaymentProfileData {
   };
 }
 
-function checkout(state: DemoState, step: string | undefined, body: any): Json {
+function checkout(state: DemoState, step: string | undefined, body: any, origin: string): Json {
   const current = cart(state);
   switch (step) {
     case "start": {
@@ -563,7 +563,8 @@ function checkout(state: DemoState, step: string | undefined, body: any): Json {
       if (typeof body?.orderId !== "string" || !body.orderId) return fail("orderId is required", 400);
       const transactionId = `demo-tx-${state.checkouts.size + 1}`;
       state.checkouts.set(transactionId, { orderId: body.orderId, polls: 0, cancelled: false });
-      return ok({ paymentId: `demo-pay-${state.checkouts.size}`, transactionId, redirectUrl: "about:blank#demo-payment" });
+      // No bank in the demo: the "bank" sends the browser straight back, as a real one does after paying.
+      return ok({ paymentId: `demo-pay-${state.checkouts.size}`, transactionId, redirectUrl: `${origin}/checkout/return` });
     }
     case "confirm": {
       if (typeof body?.orderId !== "string" || !body.orderId) return fail("orderId is required", 400);

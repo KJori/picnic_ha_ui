@@ -317,12 +317,19 @@ describe("Picnic Desk in a browser", () => {
     await age.getByRole("button", { name: "Confirm" }).click();
     await page.getByRole("button", { name: "Pay at the bank" }).waitFor();
     await shot(page, "08-checkout");
+    const confirms = [];
+    page.on("request", (r) => r.url().includes("/api/cart/checkout/confirm") && confirms.push(r.url()));
     const [tab] = await Promise.all([page.context().waitForEvent("page"), page.getByRole("button", { name: "Pay at the bank" }).click()]);
-    await tab.waitForLoadState().catch(() => {});
+    tab.on("request", (r) => r.url().includes("/api/cart/checkout/confirm") && confirms.push(r.url()));
+    // The demo's "bank" sends its tab straight back into the app, as a real bank does after paying.
+    await tab.waitForURL(/#\/(checkout\/return|orders)/);
     await page.getByText("Status: PENDING").or(page.getByText("Status: FINISHED")).waitFor();
+    // Whichever tab sees the payment finish first confirms; both end on the orders.
+    await Promise.any([page, tab].map((p) => p.getByText("Order placed").waitFor({ timeout: 15000 })));
     await page.waitForURL(/#\/orders/, { timeout: 15000 });
-    await page.getByText("Order placed").waitFor();
+    await tab.waitForURL(/#\/orders/, { timeout: 15000 });
     await page.locator(".receipt .empty-basket").waitFor();
+    assert.equal(confirms.length, 1, "the order is confirmed once, by one tab");
     await tab.close();
     clean(page);
     await page.context().close();

@@ -57,6 +57,19 @@ describe("the door", () => {
     assert.equal((await desk.post("/", {})).status, 405);
   });
 
+  test("the page's files carry a tag, so an unchanged file is not sent again", async () => {
+    const first = await desk.get("/app.css");
+    const etag = first.headers.get("etag");
+    assert.ok(etag);
+    const again = await FAKE_SAFE_FETCH(`${desk.base}/app.css`, { headers: { "if-none-match": etag } });
+    assert.equal(again.status, 304);
+    assert.equal((await again.text()).length, 0);
+    const changed = await FAKE_SAFE_FETCH(`${desk.base}/app.css`, { headers: { "if-none-match": '"something-else"' } });
+    assert.equal(changed.status, 200);
+    const head = await FAKE_SAFE_FETCH(`${desk.base}/app.css`, { method: "HEAD" });
+    assert.equal(head.headers.get("content-length"), String(first.body.length));
+  });
+
   test("the payment page's way back leads into the page", async () => {
     const response = await FAKE_SAFE_FETCH(`${desk.base}/checkout/return`, { redirect: "manual" });
     assert.equal(response.status, 303);
@@ -334,6 +347,36 @@ describe("pictures", () => {
     assert.equal(picnic.seen.every((s) => s.url.hostname === "storefront-prod.nl.picnicinternational.com"), true);
   });
 
+  test("when Picnic is busy, a picture's other variants are not tried, and it is asked again soon", async () => {
+    const id = "c".repeat(64);
+    picnic.on("GET", new RegExp(`/static/images/${id}/`), new Response("slow down", { status: 429 }));
+    const before = picnic.seen.length;
+    assert.equal((await FAKE_SAFE_FETCH(`${desk.base}/api/desk/image?id=${id}`)).status, 404);
+    const asked = picnic.seen.slice(before).map((s) => s.url.pathname.split("/").pop());
+    assert.deepEqual(asked, ["medium.png", "medium.png"], "one variant, asked twice, then stop");
+  });
+
+  test("a picture that is too large, or cut off halfway, is refused without trouble", async () => {
+    const PNG_START = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    const big = "d".repeat(64);
+    picnic.on("GET", new RegExp(`/static/images/${big}/`), () =>
+      new Response(Buffer.concat([PNG_START, Buffer.alloc(9 * 1024 * 1024)]), { status: 200 })
+    );
+    assert.equal((await FAKE_SAFE_FETCH(`${desk.base}/api/desk/image?id=${big}`)).status, 404);
+    const cut = "e".repeat(64);
+    picnic.on("GET", new RegExp(`/static/images/${cut}/`), () => {
+      const body = new ReadableStream({
+        start(controller) {
+          controller.enqueue(new Uint8Array([0x89, 0x50, 0x4e, 0x47]));
+          controller.error(new Error("connection reset"));
+        },
+      });
+      return new Response(body, { status: 200 });
+    });
+    const response = await FAKE_SAFE_FETCH(`${desk.base}/api/desk/image?id=${cut}`);
+    assert.equal(response.status, 404);
+  });
+
   test("a picture is fetched from Picnic once and then served from the app's folder", async () => {
     const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGO4/+IOAAVNAqRW9JQaAAAAAElFTkSuQmCC", "base64");
     const id = "b".repeat(64);
@@ -411,6 +454,21 @@ describe("the desk's own routes", () => {
     assert.equal(picnic.seen.length, calls, "the second time comes from the cache");
     await desk.get("/api/desk/history?refresh=1");
     assert.ok(picnic.seen.length > calls);
+  });
+
+  test("bought before: a list still being built when signing out is not kept", async () => {
+    let release: () => void = () => {};
+    const held = new Promise<void>((resolve) => (release = resolve));
+    picnic.on("POST", "/deliveries/summary", async () => {
+      await held;
+      return json([]);
+    });
+    const building = desk.get("/api/desk/history?refresh=1");
+    await new Promise((r) => setTimeout(r, 50));
+    assert.equal((await desk.post("/api/auth/logout", {})).status, 200);
+    release();
+    await building;
+    assert.equal(existsSync(join(desk.dataDir, "history.json")), false, "nothing of the old account written");
   });
 
   test("a recipe's price: worked out once, kept, and a few recipes at a time", async () => {

@@ -64,6 +64,10 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   useEffect(() => onSignedOut(expire), [expire]);
 
   const language: Language = state?.language ?? "en";
+  useEffect(() => {
+    // Screen readers and hyphenation follow the page's language.
+    document.documentElement.lang = language;
+  }, [language]);
   const value = useMemo<SessionValue>(
     () => ({
       state,

@@ -64,7 +64,8 @@ function CardCost({ recipeId, minutes }: { recipeId: string; minutes: number | n
         if (cancelled) return;
         const result = await api<RecipePrice>(`desk/recipe-price?${new URLSearchParams({ id: recipeId })}`);
         const value = result.ok ? result.data : null;
-        knownPrices.set(recipeId, value);
+        // Only a price is remembered: after a failure (Picnic busy) the card asks again next time.
+        if (value) knownPrices.set(recipeId, value);
         if (!cancelled) setPrice(value);
       });
     });

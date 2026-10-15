@@ -2,6 +2,7 @@
  * The HTTP side of Picnic Desk: serves the page, guards the door, and hands
  * /api/... requests to picnic-web's route handlers (or to the demo shop).
  */
+import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { extname, join, normalize, sep } from "node:path";
@@ -127,10 +128,10 @@ export class Desk {
     }
 
     const file = url.pathname === "/" ? "index.html" : segments.join("/");
-    await this.#static(res, file, method === "HEAD");
+    await this.#static(req, res, file, method === "HEAD");
   }
 
-  async #static(res: ServerResponse, file: string, headOnly: boolean): Promise<void> {
+  async #static(req: IncomingMessage, res: ServerResponse, file: string, headOnly: boolean): Promise<void> {
     const root = normalize(this.options.publicDir + sep);
     const path = normalize(join(root, file));
     if (!path.startsWith(root)) {
@@ -144,13 +145,23 @@ export class Desk {
       send(res, 404, text("Not found."));
       return;
     }
+    // The files change with every app update: the browser always asks, and
+    // gets "not modified" while its copy is current.
+    const etag = `"${createHash("sha256").update(data).digest("base64url").slice(0, 22)}"`;
     const headers: Record<string, string> = {
       "content-type": TYPES[extname(path)] ?? "application/octet-stream",
-      // The files change with every app update and are small; always ask.
       "cache-control": "no-cache",
+      etag,
     };
     if (extname(path) === ".html") headers["content-security-policy"] = PAGE_POLICY;
-    send(res, 200, { body: headOnly ? Buffer.alloc(0) : data, headers });
+    if (ifNoneMatch(req.headers["if-none-match"], etag)) {
+      send(res, 304, { body: "", headers: { etag, "cache-control": "no-cache" } });
+      return;
+    }
+    send(res, 200, {
+      body: headOnly ? Buffer.alloc(0) : data,
+      headers: headOnly ? { ...headers, "content-length": String(data.length) } : headers,
+    });
   }
 
   async #api(req: IncomingMessage, res: ServerResponse, method: string, url: URL, segments: string[]): Promise<void> {
@@ -325,6 +336,15 @@ function stripCookies(response: Response): Response {
 }
 
 // ─── Small helpers ───────────────────────────────────────────────────────────
+
+/** If-None-Match holds the tag (or "*"); weak tags count, as for GET they should. */
+function ifNoneMatch(header: string | undefined, etag: string): boolean {
+  if (!header) return false;
+  return header.split(",").some((tag) => {
+    const value = tag.trim().replace(/^W\//, "");
+    return value === etag || value === "*";
+  });
+}
 
 export function fromGateway(address: string | undefined): boolean {
   return address === INGRESS_GATEWAY || address === `::ffff:${INGRESS_GATEWAY}`;

@@ -8,6 +8,7 @@ import { type FormEvent, useState } from "react";
 import { SUPPORTED_COUNTRY_CODES, type CountryCode } from "@/lib/core/types";
 
 import { api } from "../lib/api";
+import { forgetAccount } from "../state/account";
 import { cartModel } from "../state/cart";
 import { useSession } from "../state/session";
 
@@ -43,7 +44,8 @@ export function LoginPage() {
 
   const signedIn = async () => {
     setPassword("");
-    cartModel.reset();
+    setToken("");
+    forgetAccount();
     await refresh();
     void cartModel.refresh();
   };

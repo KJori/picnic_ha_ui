@@ -18,7 +18,9 @@ let cachedHref = "";
 let cached: Route = parse("/search");
 
 export function parse(href: string): Route {
-  const [path, search = ""] = href.split("?", 2);
+  const at = href.indexOf("?");
+  const path = at < 0 ? href : href.slice(0, at);
+  const search = at < 0 ? "" : href.slice(at + 1);
   const clean = path.replace(/\/+$/, "") || "/";
   let segments: string[];
   try {

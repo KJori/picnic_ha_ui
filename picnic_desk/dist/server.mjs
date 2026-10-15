@@ -3499,6 +3499,7 @@ import { dirname, join as join5 } from "node:path";
 import { fileURLToPath } from "node:url";
 
 // src/server/app.ts
+import { createHash as createHash2 } from "node:crypto";
 import { readFile as readFile2 } from "node:fs/promises";
 import { extname, join as join4, normalize, sep } from "node:path";
 
@@ -5369,7 +5370,10 @@ var PRODUCT_VARIANTS = ["medium.png", "padded.webp", "small.png", "large.png", "
 var RECIPE_VARIANTS = ["filled-600x600.webp", "large.png", "medium.png", "padded.webp"];
 var DEFAULT_CACHE_MB = 500;
 var MISSING_FOR_MS = 10 * 60 * 1e3;
+var TROUBLE_FOR_MS = 60 * 1e3;
 var RETRY_STATUSES = /* @__PURE__ */ new Set([429, 500, 502, 503, 504]);
+var ABSENT_STATUSES = /* @__PURE__ */ new Set([400, 403, 404, 410]);
+var MAX_PICTURE_BYTES = 8 * 1024 * 1024;
 var AT_ONCE = 6;
 var AFTER_EVICTION = 0.9;
 var TOUCH_EVERY_MS = 60 * 60 * 1e3;
@@ -5391,6 +5395,29 @@ function pictureType(data) {
   const head = data.subarray(0, 6).toString("latin1");
   if (head === "GIF87a" || head === "GIF89a") return "image/gif";
   return null;
+}
+var NOT_A_PICTURE = /* @__PURE__ */ new Set(["empty", "not a picture", "too large"]);
+async function readLimited(response, max) {
+  const declared = Number(response.headers.get("content-length"));
+  if (Number.isFinite(declared) && declared > max) {
+    response.body?.cancel().catch(() => void 0);
+    return null;
+  }
+  if (!response.body) return Buffer.alloc(0);
+  const chunks = [];
+  let size = 0;
+  const reader = response.body.getReader();
+  for (; ; ) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    size += value.byteLength;
+    if (size > max) {
+      reader.cancel().catch(() => void 0);
+      return null;
+    }
+    chunks.push(value);
+  }
+  return Buffer.concat(chunks);
 }
 var Pictures = class {
   #dir;
@@ -5449,16 +5476,22 @@ var Pictures = class {
   // ─── Picnic ────────────────────────────────────────────────────────────────
   async #fromPicnic(key, id, kind, country) {
     const tried = [];
+    let trouble = false;
     for (const variant of this.variants(kind)) {
       const outcome = await this.#get(`${getImageCdnBase(country)}/${id}/${variant}`);
       tried.push({ variant, outcome: typeof outcome === "object" ? 200 : outcome });
-      if (typeof outcome !== "object") continue;
-      this.worked.set(variant, (this.worked.get(variant) ?? 0) + 1);
-      this.#missing.delete(key);
-      await this.#write(key, outcome.data, outcome.type);
-      return { picture: { ...outcome, variant }, tried, from: "picnic" };
+      if (typeof outcome === "object") {
+        this.worked.set(variant, (this.worked.get(variant) ?? 0) + 1);
+        this.#missing.delete(key);
+        await this.#write(key, outcome.data, outcome.type);
+        return { picture: { ...outcome, variant }, tried, from: "picnic" };
+      }
+      if (typeof outcome === "number" ? !ABSENT_STATUSES.has(outcome) : !NOT_A_PICTURE.has(outcome)) {
+        trouble = true;
+        break;
+      }
     }
-    this.#missing.set(key, this.#now() + MISSING_FOR_MS);
+    this.#missing.set(key, this.#now() + (trouble ? TROUBLE_FOR_MS : MISSING_FOR_MS));
     if (this.#missing.size > 5e3) this.#missing.clear();
     this.failures.push({ id, tried });
     if (this.failures.length > 40) this.failures.shift();
@@ -5473,7 +5506,13 @@ var Pictures = class {
         return error2 instanceof Error ? error2.name : "network";
       }
       if (response.ok) {
-        const data = Buffer.from(await response.arrayBuffer());
+        let data;
+        try {
+          data = await readLimited(response, MAX_PICTURE_BYTES);
+        } catch (error2) {
+          return error2 instanceof Error ? error2.name : "cut off";
+        }
+        if (data === null) return "too large";
         if (data.length === 0) return "empty";
         const type = pictureType(data);
         return type ? { data, type } : "not a picture";
@@ -5520,7 +5559,12 @@ var Pictures = class {
               continue;
             }
             const key = `${country}/${kind}/${match[1]}`;
-            const stat = statSync(file);
+            let stat;
+            try {
+              stat = statSync(file);
+            } catch {
+              continue;
+            }
             const used = stat.mtimeMs;
             const twin = this.#entries.get(key);
             if (twin) {
@@ -5607,7 +5651,7 @@ var Pictures = class {
 };
 
 // src/server/store.ts
-import { mkdirSync as mkdirSync2, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { closeSync, fsyncSync, mkdirSync as mkdirSync2, openSync, readFileSync, renameSync, rmSync, writeSync } from "node:fs";
 import { join as join2 } from "node:path";
 var Store = class {
   constructor(dir) {
@@ -5626,7 +5670,13 @@ var Store = class {
   write(name, value) {
     const path = join2(this.dir, name);
     const temporary = `${path}.${process.pid}.tmp`;
-    writeFileSync(temporary, JSON.stringify(value, null, 1), { mode: 384 });
+    const fd = openSync(temporary, "w", 384);
+    try {
+      writeSync(fd, JSON.stringify(value, null, 1));
+      fsyncSync(fd);
+    } finally {
+      closeSync(fd);
+    }
     renameSync(temporary, path);
   }
   remove(name) {
@@ -5645,6 +5695,7 @@ var RECIPE_ID = /^[0-9a-f]{24}$/;
 var RECIPE_PRICE_MAX_AGE_MS = 24 * 60 * 60 * 1e3;
 var RECIPE_PRICES_MAX = 2e3;
 var RECIPE_PRICE_PARALLEL = 2;
+var SELF_CHECK_WORD = { NL: "melk", DE: "milch", FR: "lait" };
 var PAGE_ID = /^[A-Za-z0-9_.-]{1,80}(\?[A-Za-z0-9_=&.%-]{0,200})?$/;
 var DEFAULT_SHORTCUTS = {
   NL: [
@@ -5701,6 +5752,12 @@ var DeskRoutes = class {
   desk;
   pictures;
   #historyBuild = null;
+  /**
+   * Goes up when the account changes. Work started for the old account
+   * (bought before, recipe prices) checks it before keeping its result, so
+   * nothing of one account is written after signing out of it.
+   */
+  #account = 0;
   async handle(request, segments) {
     const route = `${request.method} ${segments.join("/")}`;
     switch (route) {
@@ -5832,8 +5889,10 @@ var DeskRoutes = class {
     const fresh = cached && now - Date.parse(cached.builtAt) < HISTORY_MAX_AGE_MS;
     if (fresh && request.nextUrl.searchParams.get("refresh") !== "1") return NextResponse.json(cached);
     try {
-      this.#historyBuild ??= this.#buildHistory().finally(() => this.#historyBuild = null);
-      return NextResponse.json(await this.#historyBuild);
+      const build = this.#historyBuild ??= this.#buildHistory().finally(() => {
+        if (this.#historyBuild === build) this.#historyBuild = null;
+      });
+      return NextResponse.json(await build);
     } catch (err) {
       if (err instanceof HistoryError) {
         if (cached) return NextResponse.json(cached);
@@ -5843,6 +5902,7 @@ var DeskRoutes = class {
     }
   }
   async #buildHistory() {
+    const account = this.#account;
     const list = await this.desk.internal("deliveries?status=COMPLETED");
     if (list.status !== 200) throw new HistoryError(list.status, list.body);
     const deliveries = (list.body.deliveries ?? []).slice(0, HISTORY_DELIVERIES);
@@ -5876,6 +5936,7 @@ var DeskRoutes = class {
       deliveries: deliveries.length,
       items
     };
+    if (account !== this.#account) throw new HistoryError(401, { error: "Signed out meanwhile.", code: "TOKEN_EXPIRED" });
     this.desk.store.write("history.json", data);
     return data;
   }
@@ -5898,12 +5959,16 @@ var DeskRoutes = class {
     if (known && now - Date.parse(known.at) < RECIPE_PRICE_MAX_AGE_MS) return NextResponse.json(known);
     let run = this.#priceRuns.get(id);
     if (!run) {
-      run = this.#workOutPrice(id).finally(() => this.#priceRuns.delete(id));
-      this.#priceRuns.set(id, run);
+      const started = this.#workOutPrice(id).finally(() => {
+        if (this.#priceRuns.get(id) === started) this.#priceRuns.delete(id);
+      });
+      this.#priceRuns.set(id, started);
+      run = started;
     }
     return (await run).clone();
   }
   async #workOutPrice(id) {
+    const account = this.#account;
     if (this.#priceSlots === 0) await new Promise((resolve) => this.#priceWaiting.push(resolve));
     else this.#priceSlots -= 1;
     try {
@@ -5921,6 +5986,7 @@ var DeskRoutes = class {
           return NextResponse.json({ error: "Picnic did not send the recipe." }, { status: 502 });
         }
       }
+      if (account !== this.#account) return signedOut();
       const price = recipePrice(recipe);
       const entry = {
         id,
@@ -5946,6 +6012,9 @@ var DeskRoutes = class {
   }
   /** After signing out: nothing of the old account may show for the next one. */
   forgetAccountData() {
+    this.#account += 1;
+    this.#historyBuild = null;
+    this.#priceRuns.clear();
     this.#recipePrices = {};
     this.desk.store.remove("recipe_prices.json");
     this.desk.store.remove("history.json");
@@ -5958,7 +6027,8 @@ var DeskRoutes = class {
     const run = async (name, step) => {
       const started = Date.now();
       try {
-        checks.push({ name, ok: true, ms: Date.now() - started, detail: await step() });
+        const detail = await step();
+        checks.push({ name, ok: true, ms: Date.now() - started, detail });
       } catch (err) {
         checks.push({ name, ok: false, ms: Date.now() - started, detail: err instanceof Error ? err.message : String(err) });
       }
@@ -5977,10 +6047,11 @@ var DeskRoutes = class {
       return profile.name ? `Signed in as ${profile.name}` : "Signed in";
     });
     await run("Search", async () => {
-      const result = await get("search?q=melk");
+      const word = SELF_CHECK_WORD[this.desk.session.country];
+      const result = await get(`search?${new URLSearchParams({ q: word })}`);
       products = result.products ?? [];
-      if (!products.length) throw new Error("no products for “melk”");
-      return `${products.length} products for “melk”`;
+      if (!products.length) throw new Error(`no products for “${word}”`);
+      return `${products.length} products for “${word}”`;
     });
     await run("Product page", async () => {
       if (!products.length) throw new Error("skipped: search found nothing");
@@ -6167,7 +6238,7 @@ var Session = class {
     this.store = store;
     this.defaultCountry = defaultCountry;
     this.now = now;
-    this.#saved = readSaved(store.read(FILE, null, (v) => true), defaultCountry);
+    this.#saved = readSaved(store.read(FILE, null, (_value) => true), defaultCountry);
   }
   store;
   defaultCountry;
@@ -6310,9 +6381,9 @@ var Desk = class {
       return;
     }
     const file = url.pathname === "/" ? "index.html" : segments.join("/");
-    await this.#static(res, file, method === "HEAD");
+    await this.#static(req, res, file, method === "HEAD");
   }
-  async #static(res, file, headOnly) {
+  async #static(req, res, file, headOnly) {
     const root = normalize(this.options.publicDir + sep);
     const path = normalize(join4(root, file));
     if (!path.startsWith(root)) {
@@ -6326,13 +6397,21 @@ var Desk = class {
       send(res, 404, text2("Not found."));
       return;
     }
+    const etag = `"${createHash2("sha256").update(data).digest("base64url").slice(0, 22)}"`;
     const headers = {
       "content-type": TYPES2[extname(path)] ?? "application/octet-stream",
-      // The files change with every app update and are small; always ask.
-      "cache-control": "no-cache"
+      "cache-control": "no-cache",
+      etag
     };
     if (extname(path) === ".html") headers["content-security-policy"] = PAGE_POLICY;
-    send(res, 200, { body: headOnly ? Buffer.alloc(0) : data, headers });
+    if (ifNoneMatch(req.headers["if-none-match"], etag)) {
+      send(res, 304, { body: "", headers: { etag, "cache-control": "no-cache" } });
+      return;
+    }
+    send(res, 200, {
+      body: headOnly ? Buffer.alloc(0) : data,
+      headers: headOnly ? { ...headers, "content-length": String(data.length) } : headers
+    });
   }
   async #api(req, res, method, url, segments) {
     if (method !== "GET" && method !== "HEAD" && typeof req.headers["x-desk-base"] !== "string") {
@@ -6476,6 +6555,13 @@ function stripCookies(response) {
   const headers = new Headers(response.headers);
   headers.delete("set-cookie");
   return new Response(response.body, { status: response.status, headers });
+}
+function ifNoneMatch(header, etag) {
+  if (!header) return false;
+  return header.split(",").some((tag) => {
+    const value = tag.trim().replace(/^W\//, "");
+    return value === etag || value === "*";
+  });
 }
 function fromGateway(address) {
   return address === INGRESS_GATEWAY || address === `::ffff:${INGRESS_GATEWAY}`;
@@ -6693,7 +6779,7 @@ function demoShop(state = new DemoState()) {
         if (segments[1] === "checkout" && segments[2] === "status") return checkoutStatus(state, q.get("transactionId"));
         return ok(cart(state));
       case "POST cart":
-        return cartPost(state, segments, await body());
+        return cartPost(state, segments, await body(), request.nextUrl.origin);
       case "DELETE cart":
         state.lines = [];
         return ok(cart(state));
@@ -6984,7 +7070,7 @@ function addLine(state, productId, count, group = null) {
     state.lines.push({ productId, quantity: count, group });
   }
 }
-function cartPost(state, segments, body) {
+function cartPost(state, segments, body, origin) {
   if (segments[1] === "delivery-slots") {
     const slot2 = slotList(state).find((s) => s.slotId === body?.slotId);
     if (!slot2) return fail("slotId is required", 400);
@@ -6993,7 +7079,7 @@ function cartPost(state, segments, body) {
     state.explicitSlot = true;
     return ok(cart(state));
   }
-  if (segments[1] === "checkout") return checkout(state, segments[2], body);
+  if (segments[1] === "checkout") return checkout(state, segments[2], body, origin);
   if (segments.length !== 1) return fail("Not found.", 404);
   if (!body?.productId || !body?.action || typeof body.count !== "number") {
     return fail("Missing required fields: productId, action, count", 400);
@@ -7020,7 +7106,7 @@ function paymentProfile() {
     storedOptions: [{ id: "ideal-1", displayName: "iDEAL", account: "NL** DEMO 0000 0000 01", paymentMethod: "IDEAL", iconUrl: "" }]
   };
 }
-function checkout(state, step, body) {
+function checkout(state, step, body, origin) {
   const current = cart(state);
   switch (step) {
     case "start": {
@@ -7058,7 +7144,7 @@ function checkout(state, step, body) {
       if (typeof body?.orderId !== "string" || !body.orderId) return fail("orderId is required", 400);
       const transactionId = `demo-tx-${state.checkouts.size + 1}`;
       state.checkouts.set(transactionId, { orderId: body.orderId, polls: 0, cancelled: false });
-      return ok({ paymentId: `demo-pay-${state.checkouts.size}`, transactionId, redirectUrl: "about:blank#demo-payment" });
+      return ok({ paymentId: `demo-pay-${state.checkouts.size}`, transactionId, redirectUrl: `${origin}/checkout/return` });
     }
     case "confirm": {
       if (typeof body?.orderId !== "string" || !body.orderId) return fail("orderId is required", 400);
@@ -12530,6 +12616,7 @@ var VENDORED_ROUTES = [
 ];
 
 // src/server/main.ts
+var SHUTDOWN_GRACE_MS = 5e3;
 function appOptions(dataDir) {
   try {
     return JSON.parse(readFileSync2(join5(dataDir, "options.json"), "utf8"));
@@ -12573,7 +12660,14 @@ function startDesk(env = process.env) {
       `Picnic Desk ${desk.options.version} on port ${port} (${country}${demo ? ", demo shop" : ""}${desk.options.ingressOnly ? ", ingress only" : ""})`
     );
   });
-  const stop = () => server.close(() => process.exit(0));
+  const stop = () => {
+    server.close(() => process.exit(0));
+    server.closeIdleConnections();
+    setTimeout(() => {
+      server.closeAllConnections();
+      process.exit(0);
+    }, SHUTDOWN_GRACE_MS).unref();
+  };
   process.once("SIGTERM", stop);
   process.once("SIGINT", stop);
   return { server, desk };

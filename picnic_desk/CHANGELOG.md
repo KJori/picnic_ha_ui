@@ -30,6 +30,7 @@ it does what picnic-web does, with the same handling of Picnic's answers.
   self-check, the keyboard, prices on recipe cards. picnic-web's screens are
   made for a phone; here its parts are laid out for a desk: aisles beside the
   shelf, the week of delivery times in one grid, orders in a table.
+- New: Home Assistant restarts the app when it stops answering (watchdog).
 - Changed: the app now runs on Node.js. Your Picnic session, saved products
   and shortcuts carry over.
 

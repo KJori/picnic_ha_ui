@@ -145,6 +145,8 @@ const desk = {
   country: "Country",
   networkError: "Picnic Desk did not answer. Check that the app is running.",
   notFound: "This page does not exist.",
+  viewBroke: "Something went wrong here: {message}",
+  signOutFailed: "Signing out did not work. Please try again.",
 };
 
 export type DeskStrings = typeof desk;
@@ -271,6 +273,8 @@ const nl: DeskStrings = {
   country: "Land",
   networkError: "Picnic Desk antwoordt niet. Controleer of de app draait.",
   notFound: "Deze pagina bestaat niet.",
+  viewBroke: "Hier ging iets mis: {message}",
+  signOutFailed: "Uitloggen lukte niet. Probeer het opnieuw.",
 };
 
 const de: DeskStrings = {
@@ -395,6 +399,8 @@ const de: DeskStrings = {
   country: "Land",
   networkError: "Picnic Desk antwortet nicht. Prüfe, ob die App läuft.",
   notFound: "Diese Seite gibt es nicht.",
+  viewBroke: "Hier ist etwas schiefgegangen: {message}",
+  signOutFailed: "Abmelden hat nicht geklappt. Bitte versuche es noch einmal.",
 };
 
 const fr: DeskStrings = {
@@ -519,6 +525,8 @@ const fr: DeskStrings = {
   country: "Pays",
   networkError: "Picnic Desk ne répond pas. Vérifiez que l'app tourne.",
   notFound: "Cette page n'existe pas.",
+  viewBroke: "Un problème est survenu ici : {message}",
+  signOutFailed: "La déconnexion n'a pas fonctionné. Veuillez réessayer.",
 };
 
 export function deskStrings(language: Language): DeskStrings {

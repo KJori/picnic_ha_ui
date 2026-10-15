@@ -72,6 +72,8 @@ const RECIPE_PRICE_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 const RECIPE_PRICES_MAX = 2000;
 /** Recipe prices are worked out a few at a time, so cards on screen do not set off Picnic's rate limit. */
 const RECIPE_PRICE_PARALLEL = 2;
+/** A word every Picnic country's shop has products for. */
+const SELF_CHECK_WORD: Record<CountryCode, string> = { NL: "melk", DE: "milch", FR: "lait" };
 const PAGE_ID = /^[A-Za-z0-9_.-]{1,80}(\?[A-Za-z0-9_=&.%-]{0,200})?$/;
 
 export const DEFAULT_SHORTCUTS: Record<CountryCode, Shortcut[]> = {
@@ -140,6 +142,12 @@ const signedOut = () =>
 export class DeskRoutes {
   readonly pictures: Pictures;
   #historyBuild: Promise<HistoryData> | null = null;
+  /**
+   * Goes up when the account changes. Work started for the old account
+   * (bought before, recipe prices) checks it before keeping its result, so
+   * nothing of one account is written after signing out of it.
+   */
+  #account = 0;
 
   constructor(private readonly desk: Desk) {
     this.pictures = new Pictures({
@@ -292,8 +300,10 @@ export class DeskRoutes {
     const fresh = cached && now - Date.parse(cached.builtAt) < HISTORY_MAX_AGE_MS;
     if (fresh && request.nextUrl.searchParams.get("refresh") !== "1") return NextResponse.json(cached);
     try {
-      this.#historyBuild ??= this.#buildHistory().finally(() => (this.#historyBuild = null));
-      return NextResponse.json(await this.#historyBuild);
+      const build = (this.#historyBuild ??= this.#buildHistory().finally(() => {
+        if (this.#historyBuild === build) this.#historyBuild = null;
+      }));
+      return NextResponse.json(await build);
     } catch (err) {
       if (err instanceof HistoryError) {
         if (cached) return NextResponse.json(cached); // old list beats none
@@ -304,6 +314,7 @@ export class DeskRoutes {
   }
 
   async #buildHistory(): Promise<HistoryData> {
+    const account = this.#account;
     const list = await this.desk.internal("deliveries?status=COMPLETED");
     if (list.status !== 200) throw new HistoryError(list.status, list.body);
     const deliveries = ((list.body as DeliveriesApiResponse).deliveries ?? []).slice(0, HISTORY_DELIVERIES);
@@ -337,6 +348,7 @@ export class DeskRoutes {
       deliveries: deliveries.length,
       items,
     };
+    if (account !== this.#account) throw new HistoryError(401, { error: "Signed out meanwhile.", code: "TOKEN_EXPIRED" });
     this.desk.store.write("history.json", data);
     return data;
   }
@@ -362,13 +374,17 @@ export class DeskRoutes {
     if (known && now - Date.parse(known.at) < RECIPE_PRICE_MAX_AGE_MS) return NextResponse.json(known);
     let run = this.#priceRuns.get(id);
     if (!run) {
-      run = this.#workOutPrice(id).finally(() => this.#priceRuns.delete(id));
-      this.#priceRuns.set(id, run);
+      const started: Promise<Response> = this.#workOutPrice(id).finally(() => {
+        if (this.#priceRuns.get(id) === started) this.#priceRuns.delete(id);
+      });
+      this.#priceRuns.set(id, started);
+      run = started;
     }
     return (await run).clone();
   }
 
   async #workOutPrice(id: string): Promise<Response> {
+    const account = this.#account;
     if (this.#priceSlots === 0) await new Promise<void>((resolve) => this.#priceWaiting.push(resolve));
     else this.#priceSlots -= 1;
     try {
@@ -389,6 +405,7 @@ export class DeskRoutes {
           return NextResponse.json({ error: "Picnic did not send the recipe." }, { status: 502 });
         }
       }
+      if (account !== this.#account) return signedOut();
       const price = recipePrice(recipe);
       const entry: RecipePrice = {
         id,
@@ -416,6 +433,9 @@ export class DeskRoutes {
 
   /** After signing out: nothing of the old account may show for the next one. */
   forgetAccountData(): void {
+    this.#account += 1;
+    this.#historyBuild = null;
+    this.#priceRuns.clear();
     this.#recipePrices = {};
     this.desk.store.remove("recipe_prices.json");
     this.desk.store.remove("history.json");
@@ -430,7 +450,8 @@ export class DeskRoutes {
     const run = async (name: string, step: () => Promise<string>) => {
       const started = Date.now();
       try {
-        checks.push({ name, ok: true, ms: Date.now() - started, detail: await step() });
+        const detail = await step();
+        checks.push({ name, ok: true, ms: Date.now() - started, detail });
       } catch (err) {
         checks.push({ name, ok: false, ms: Date.now() - started, detail: err instanceof Error ? err.message : String(err) });
       }
@@ -450,10 +471,11 @@ export class DeskRoutes {
       return profile.name ? `Signed in as ${profile.name}` : "Signed in";
     });
     await run("Search", async () => {
-      const result = (await get("search?q=melk")) as SearchApiResponse;
+      const word = SELF_CHECK_WORD[this.desk.session.country];
+      const result = (await get(`search?${new URLSearchParams({ q: word })}`)) as SearchApiResponse;
       products = result.products ?? [];
-      if (!products.length) throw new Error("no products for “melk”");
-      return `${products.length} products for “melk”`;
+      if (!products.length) throw new Error(`no products for “${word}”`);
+      return `${products.length} products for “${word}”`;
     });
     await run("Product page", async () => {
       if (!products.length) throw new Error("skipped: search found nothing");

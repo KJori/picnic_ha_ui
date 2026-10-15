@@ -183,3 +183,35 @@ test("a refresh started before a change does not undo that change", async () => 
   await refreshing;
   assert.equal(model.quantity("s1"), 2);
 });
+
+test("emptying the basket while a click is on its way: the late answer neither shows nor skews later clicks", async () => {
+  const server = fakeServer({ s1: 1 });
+  const empty = async (): Promise<Result<CartData>> => {
+    for (const key of Object.keys(server.state)) delete server.state[key];
+    return { ok: true, status: 200, data: cartOf({}) };
+  };
+  const cart = new CartModel(server.send, server.load, empty);
+  await cart.refresh();
+  cart.add("s1", 99, 2); // on its way
+  assert.equal(await cart.clear(), true);
+  assert.equal(cart.quantity("s1"), 0);
+  server.waiting.shift()!.release(); // Picnic answers the add after emptying
+  await settle();
+  assert.equal(cart.quantity("s1"), 0, "the old answer is not shown");
+  cart.add("s1");
+  assert.equal(cart.quantity("s1"), 1, "a new click counts from zero, not from minus two");
+});
+
+test("after signing out, an answer for the old account is not shown", async () => {
+  const server = fakeServer({ s1: 1 });
+  const cart = new CartModel(server.send, server.load);
+  await cart.refresh();
+  cart.add("s1");
+  cart.reset();
+  server.waiting.shift()!.release();
+  await settle();
+  await settle();
+  assert.equal(cart.cart, null);
+  assert.equal(cart.quantity("s1"), 0);
+  assert.equal(cart.busy, false);
+});

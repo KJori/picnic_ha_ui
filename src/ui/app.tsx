@@ -53,7 +53,7 @@ function canonical(route: Route): string | null {
 function Desk() {
   const route = useRoute();
   const toast = useToast();
-  const { t } = useT();
+  const { t, d } = useT();
 
   useEffect(() => {
     const to = canonical(route);
@@ -105,13 +105,13 @@ function Desk() {
           <Tabs route={route} />
         </header>
         <section className="view">
-          <Boundary key={route.path}>
+          <Boundary key={route.path} message={d.viewBroke} retry={t.retryButton}>
             <View route={route} />
           </Boundary>
         </section>
       </main>
       <aside className="till" aria-label={t.cartTitle}>
-        <Boundary>
+        <Boundary message={d.viewBroke} retry={t.retryButton}>
           <Receipt />
         </Boundary>
       </aside>
@@ -185,22 +185,24 @@ function NotFound() {
   );
 }
 
+type BoundaryProps = { children: ReactNode; message: string; retry: string };
+
 /** A view that breaks shows a message and a way back, not a blank shelf. */
-class Boundary extends Component<{ children: ReactNode }, { error: Error | null }> {
-  state = { error: null as Error | null };
+class Boundary extends Component<BoundaryProps, { error: Error | null }> {
+  override state = { error: null as Error | null };
   static getDerivedStateFromError(error: Error) {
     return { error };
   }
-  componentDidCatch(error: Error) {
+  override componentDidCatch(error: Error) {
     console.error("[Picnic Desk]", error);
   }
-  render() {
+  override render() {
     if (!this.state.error) return this.props.children;
     return (
       <div className="trouble" role="alert">
-        <p>Something went wrong here: {this.state.error.message}</p>
+        <p>{this.props.message.replace("{message}", this.state.error.message)}</p>
         <button type="button" className="secondary" onClick={() => this.setState({ error: null })}>
-          Try again
+          {this.props.retry}
         </button>
       </div>
     );

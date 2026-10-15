@@ -12,6 +12,7 @@ import { packs, packsPrice, recipePrice } from "../src/shared/recipe-price";
 import { demoShop } from "../src/server/demo/shop";
 import { Pictures, pictureType } from "../src/server/pictures";
 import { parseListLine } from "../src/ui/lib/list";
+import { paymentAddress } from "../src/ui/lib/payment";
 import type { RecipeIngredient } from "@/lib/core/types";
 import { runDesk } from "./helpers";
 
@@ -273,4 +274,14 @@ test("pictures: a folder that cannot be written to still serves pictures", async
     console.error = log;
   }
   assert.ok(errors.length >= 1 && errors.length <= 2, "said once on start and once for writing, not per picture");
+});
+
+test("only a plain https address from Picnic is opened for paying", () => {
+  const here = "http://homeassistant.local:8123";
+  assert.equal(paymentAddress("https://pay.example/bank?x=1", here), "https://pay.example/bank?x=1");
+  assert.equal(paymentAddress(`${here}/api/hassio_ingress/abc/checkout/return`, here), `${here}/api/hassio_ingress/abc/checkout/return`);
+  for (const bad of ["javascript:alert(1)", "JaVaScRiPt:alert(1)", "data:text/html,hi", "http://pay.example/", "https://user:pw@pay.example/", "", null, 42, "not a url"]) {
+    assert.equal(paymentAddress(bad, here), null, String(bad));
+  }
+  assert.equal(paymentAddress("null", "null"), null, "an opaque origin matches nothing");
 });

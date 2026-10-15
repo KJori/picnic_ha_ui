@@ -22,6 +22,7 @@ import type {
 import { SlotLine } from "../components/basket";
 import { Confirm, Dialog, ErrorView, Price, Spinner, useDates, useLoad, useTitle, useToast } from "../components/common";
 import { api } from "../lib/api";
+import { paymentAddress } from "../lib/payment";
 import { href, navigate } from "../lib/router";
 import { cartModel, useCart } from "../state/cart";
 import { useT } from "../state/session";
@@ -121,7 +122,8 @@ export function CheckoutPage({ returning = false }: { returning?: boolean }) {
     setBusy(true);
     const result = await api<CheckoutPaymentData>("cart/checkout/initiate", { body: { orderId: started.orderId } });
     setBusy(false);
-    if (!result.ok) {
+    const address = result.ok ? paymentAddress(result.data.redirectUrl, window.location.origin) : null;
+    if (!result.ok || !address) {
       tab?.close();
       toast(t.checkoutPaymentError, "error");
       return;
@@ -129,23 +131,21 @@ export function CheckoutPage({ returning = false }: { returning?: boolean }) {
     const next: Pending = { orderId: started.orderId, transactionId: result.data.transactionId, startedAt: Date.now() };
     writePending(next);
     setPending(next);
-    setPayUrl(result.data.redirectUrl);
+    setPayUrl(address);
     if (tab) {
       tab.opener = null;
-      tab.location.href = result.data.redirectUrl;
+      tab.location.href = address;
     }
   };
 
+  const paymentDone = useCallback(() => {
+    writePending(null);
+    setPending(null);
+  }, []);
+
   if (pending) {
     return (
-      <PaymentWatch
-        pending={pending}
-        payUrl={payUrl}
-        onDone={() => {
-          writePending(null);
-          setPending(null);
-        }}
-      />
+      <PaymentWatch pending={pending} payUrl={payUrl} onDone={paymentDone} />
     );
   }
 
@@ -252,7 +252,10 @@ function PaymentWatch({ pending, payUrl, onDone }: { pending: Pending; payUrl: s
   const { t, d } = useT();
   const toast = useToast();
   const [status, setStatus] = useState<string>("…");
-  const [problem, setProblem] = useState<string | null>(null);
+  /** Asking for the payment's status failed; polling goes on by itself. */
+  const [statusProblem, setStatusProblem] = useState<string | null>(null);
+  /** Confirming the paid order failed; only this has a "try again". */
+  const [confirmProblem, setConfirmProblem] = useState<string | null>(null);
   const [cancelling, setCancelling] = useState(false);
   const finished = useRef(false);
 
@@ -272,9 +275,10 @@ function PaymentWatch({ pending, payUrl, onDone }: { pending: Pending; payUrl: s
     if (!result.ok) {
       finished.current = false;
       writePending({ ...pending, confirming: undefined });
-      setProblem(result.error === "network" ? t.checkoutConfirmError : result.error);
+      setConfirmProblem(result.error === "network" ? t.checkoutConfirmError : result.error);
       return;
     }
+    setConfirmProblem(null);
     onDone();
     toast(d.orderPlaced);
     await cartModel.refresh();
@@ -285,10 +289,16 @@ function PaymentWatch({ pending, payUrl, onDone }: { pending: Pending; payUrl: s
     let stopped = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
     const poll = async () => {
-      // Another tab finished it.
+      // Another tab finished it: the basket Picnic has now is the one to show.
       if (storageWorks() && !readPending() && !finished.current) {
         onDone();
+        void cartModel.refresh();
         navigate("/orders");
+        return;
+      }
+      // Past the time a payment can take: stop asking, the page says so.
+      if (Date.now() - pending.startedAt > PENDING_FOR_MS) {
+        setStatus("EXPIRED");
         return;
       }
       const result = await api<CheckoutStatusData>(
@@ -296,9 +306,9 @@ function PaymentWatch({ pending, payUrl, onDone }: { pending: Pending; payUrl: s
       );
       if (stopped) return;
       if (!result.ok) {
-        setProblem(result.error === "network" ? t.checkoutStatusError : result.error);
+        setStatusProblem(result.error === "network" ? t.checkoutStatusError : result.error);
       } else {
-        setProblem(null);
+        setStatusProblem(null);
         setStatus(result.data.checkoutStatus);
         if (result.data.checkoutStatus === "FINISHED") {
           void confirm();
@@ -331,7 +341,8 @@ function PaymentWatch({ pending, payUrl, onDone }: { pending: Pending; payUrl: s
           </a>
         </p>
       )}
-      {problem && <ErrorView message={problem} onRetry={() => void confirm()} />}
+      {statusProblem && !confirmProblem && <ErrorView message={statusProblem} />}
+      {confirmProblem && <ErrorView message={confirmProblem} onRetry={() => void confirm()} />}
       <div className="actions start">
         {failed ? (
           <button
@@ -358,7 +369,7 @@ function PaymentWatch({ pending, payUrl, onDone }: { pending: Pending; payUrl: s
                 return;
               }
               onDone();
-              navigate("/cart");
+              navigate("/checkout");
             }}
           >
             {t.checkoutCancelPaymentButton}

@@ -33,7 +33,13 @@ export const RECIPE_VARIANTS = ["filled-600x600.webp", "large.png", "medium.png"
 
 export const DEFAULT_CACHE_MB = 500;
 const MISSING_FOR_MS = 10 * 60 * 1000;
+/** After Picnic was busy or unreachable, ask again sooner than for a picture that is not there. */
+const TROUBLE_FOR_MS = 60 * 1000;
 const RETRY_STATUSES = new Set([429, 500, 502, 503, 504]);
+/** "Not here": the next variant may exist. Anything else means Picnic itself is in trouble. */
+const ABSENT_STATUSES = new Set([400, 403, 404, 410]);
+/** A product photo is far smaller; anything bigger is not taken. */
+export const MAX_PICTURE_BYTES = 8 * 1024 * 1024;
 /** At most this many pictures are fetched from Picnic at the same time. */
 const AT_ONCE = 6;
 /** When full, make room down to this share of the limit, so that not every new picture evicts one. */
@@ -64,6 +70,33 @@ export function pictureType(data: Buffer): string | null {
   const head = data.subarray(0, 6).toString("latin1");
   if (head === "GIF87a" || head === "GIF89a") return "image/gif";
   return null; // SVG and everything else is refused: it could carry script
+}
+
+/** Outcomes that say this variant is no good, not that Picnic is in trouble. */
+const NOT_A_PICTURE = new Set(["empty", "not a picture", "too large"]);
+
+/** The body, or null when it is larger than `max`; stops reading as soon as it is. */
+async function readLimited(response: Response, max: number): Promise<Buffer | null> {
+  const declared = Number(response.headers.get("content-length"));
+  if (Number.isFinite(declared) && declared > max) {
+    response.body?.cancel().catch(() => undefined);
+    return null;
+  }
+  if (!response.body) return Buffer.alloc(0);
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  const reader = response.body.getReader();
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    size += value.byteLength;
+    if (size > max) {
+      reader.cancel().catch(() => undefined);
+      return null;
+    }
+    chunks.push(value);
+  }
+  return Buffer.concat(chunks);
 }
 
 export type PicturesOptions = {
@@ -146,16 +179,23 @@ export class Pictures {
 
   async #fromPicnic(key: string, id: string, kind: "product" | "recipe", country: CountryCode) {
     const tried: Attempt[] = [];
+    let trouble = false;
     for (const variant of this.variants(kind)) {
       const outcome = await this.#get(`${getImageCdnBase(country)}/${id}/${variant}`);
       tried.push({ variant, outcome: typeof outcome === "object" ? 200 : outcome });
-      if (typeof outcome !== "object") continue;
-      this.worked.set(variant, (this.worked.get(variant) ?? 0) + 1);
-      this.#missing.delete(key);
-      await this.#write(key, outcome.data, outcome.type);
-      return { picture: { ...outcome, variant }, tried, from: "picnic" as const };
+      if (typeof outcome === "object") {
+        this.worked.set(variant, (this.worked.get(variant) ?? 0) + 1);
+        this.#missing.delete(key);
+        await this.#write(key, outcome.data, outcome.type);
+        return { picture: { ...outcome, variant }, tried, from: "picnic" as const };
+      }
+      // Busy, down or unreachable: the other variants would only add to it.
+      if (typeof outcome === "number" ? !ABSENT_STATUSES.has(outcome) : !NOT_A_PICTURE.has(outcome)) {
+        trouble = true;
+        break;
+      }
     }
-    this.#missing.set(key, this.#now() + MISSING_FOR_MS);
+    this.#missing.set(key, this.#now() + (trouble ? TROUBLE_FOR_MS : MISSING_FOR_MS));
     if (this.#missing.size > 5000) this.#missing.clear();
     this.failures.push({ id, tried });
     if (this.failures.length > 40) this.failures.shift();
@@ -171,7 +211,13 @@ export class Pictures {
         return error instanceof Error ? error.name : "network";
       }
       if (response.ok) {
-        const data = Buffer.from(await response.arrayBuffer());
+        let data: Buffer | null;
+        try {
+          data = await readLimited(response, MAX_PICTURE_BYTES);
+        } catch (error) {
+          return error instanceof Error ? error.name : "cut off"; // e.g. the time limit ran out mid-picture
+        }
+        if (data === null) return "too large";
         if (data.length === 0) return "empty";
         const type = pictureType(data);
         return type ? { data, type } : "not a picture";
@@ -223,7 +269,12 @@ export class Pictures {
               continue;
             }
             const key = `${country}/${kind}/${match[1]}`;
-            const stat = statSync(file);
+            let stat;
+            try {
+              stat = statSync(file);
+            } catch {
+              continue; // gone while looking
+            }
             const used = stat.mtimeMs;
             const twin = this.#entries.get(key);
             if (twin) {

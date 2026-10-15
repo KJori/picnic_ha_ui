@@ -43,7 +43,7 @@ export class Session {
     readonly defaultCountry: CountryCode,
     private readonly now: () => number = Date.now
   ) {
-    this.#saved = readSaved(store.read<unknown>(FILE, null, (v): v is unknown => true), defaultCountry);
+    this.#saved = readSaved(store.read<unknown>(FILE, null, (_value): _value is unknown => true), defaultCountry);
   }
 
   get signedIn(): boolean {

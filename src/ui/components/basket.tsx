@@ -7,12 +7,11 @@ import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { isMinimumOrderMet } from "@/lib/cart/minimum-order";
 import type { DeliverySlotData, DeliverySlotPickerData } from "@/lib/core/delivery-slot-types";
 import type { CartData, CartFooterData, CartItem, CartRecipeGroup, DepositEntry, FeeEntry } from "@/lib/core/types";
-import type { ProfileData } from "@/lib/core/user-types";
 
 import { api } from "../lib/api";
 import { href, navigate } from "../lib/router";
 import { cartModel, useCart } from "../state/cart";
-import { forgetSaved } from "../state/saved";
+import { forgetAccount, useProfileName } from "../state/account";
 import { useSession, useT } from "../state/session";
 import { Dialog, ErrorView, Loaded, Spinner, Stepper, useDates, useLoad, useMoney, useToast } from "./common";
 import { useOpenProduct } from "./products";
@@ -277,8 +276,6 @@ function useFooter(totalPrice: number | undefined): CartFooterData | null {
   return footer;
 }
 
-let profileName: string | null = null;
-
 export function Receipt() {
   const { t, d } = useT();
   const session = useSession();
@@ -288,20 +285,15 @@ export function Receipt() {
   const footer = useFooter(cart.cart?.totalPrice);
   const [armed, setArmed] = useState(false);
   const armTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
-  const [name, setName] = useState(profileName);
-
-  useEffect(() => {
-    if (profileName) return;
-    void api<ProfileData>("user/profile").then((result) => {
-      if (result.ok && result.data.name) setName((profileName = result.data.name));
-    });
-  }, []);
+  const name = useProfileName();
 
   const signOut = async () => {
-    await api("auth/logout", { method: "POST" });
-    profileName = null;
-    cartModel.reset();
-    forgetSaved();
+    const result = await api("auth/logout", { method: "POST" });
+    if (!result.ok) {
+      toast(d.signOutFailed, "error");
+      return;
+    }
+    forgetAccount();
     await session.refresh();
   };
 

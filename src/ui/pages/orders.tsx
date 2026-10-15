@@ -275,6 +275,8 @@ function Rating({ busy, onRate }: { busy: boolean; onRate: (rating: number) => P
  * ("scenario") again when its version changes, and parse both with
  * picnic-web's parser. Stops when the delivery is no longer on its way.
  */
+const TRACKING_RETRY_MS = 15_000;
+
 function useTracking(deliveryId: string, enabled: boolean): DeliveryTrackingData | null {
   const { country } = useT();
   const [tracking, setTracking] = useState<DeliveryTrackingData | null>(null);
@@ -286,7 +288,12 @@ function useTracking(deliveryId: string, enabled: boolean): DeliveryTrackingData
     let timer: ReturnType<typeof setTimeout> | undefined;
     const poll = async () => {
       const position = await api<Record<string, unknown>>(`deliveries/${encodeURIComponent(deliveryId)}/position`);
-      if (stopped || !position.ok) return;
+      if (stopped) return;
+      if (!position.ok) {
+        // A failed look (busy, a network hiccup) is tried again; tracking stops only when the delivery is over.
+        timer = setTimeout(() => void poll(), TRACKING_RETRY_MS);
+        return;
+      }
       const positionVersion = typeof position.data.version === "number" ? position.data.version : -1;
       if (scenario.current === null || positionVersion !== version.current) {
         const route = await api<unknown>(`deliveries/${encodeURIComponent(deliveryId)}/scenario`);

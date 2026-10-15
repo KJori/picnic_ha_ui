@@ -6,7 +6,8 @@
  * go as one request (Picnic's add and remove calls take a count). Different
  * products go in parallel. Each answer is the whole basket; an answer older
  * than one already shown is not shown. When a change fails, the basket is
- * fetched again, so what is shown is what Picnic has.
+ * fetched again, so what is shown is what Picnic has. Answers to requests sent
+ * before the basket was emptied or the account changed are ignored.
  */
 import { useSyncExternalStore } from "react";
 
@@ -36,11 +37,14 @@ export class CartModel {
   #version = 0;
   #snapshot: { version: number } = { version: 0 };
   #refreshing: Promise<void> | null = null;
+  /** Goes up when the basket is emptied or forgotten; older answers no longer count. */
+  #epoch = 0;
   onError: (message: string) => void = () => {};
 
   constructor(
     private readonly send: Send = defaultSend,
-    private readonly load: () => Promise<Result<CartData>> = () => api<CartData>("cart")
+    private readonly load: () => Promise<Result<CartData>> = () => api<CartData>("cart"),
+    private readonly empty: () => Promise<Result<CartData>> = () => api<CartData>("cart", { method: "DELETE" })
   ) {}
 
   // ─── Reading ──────────────────────────────────────────────────────────────
@@ -114,6 +118,7 @@ export class CartModel {
 
     this.#inFlight.add(productId);
     const order = ++this.#sent;
+    const epoch = this.#epoch;
     let result: Result<CartData>;
     try {
       result = await this.send(productId, delta > 0 ? "add" : "remove", Math.abs(delta));
@@ -121,6 +126,11 @@ export class CartModel {
       result = { ok: false, status: 0, error: "network" };
     }
     this.#inFlight.delete(productId);
+    if (epoch !== this.#epoch) {
+      // The basket was emptied or forgotten meanwhile: what this was based on is gone.
+      if (this.#queued.has(productId)) void this.#flush(productId);
+      return;
+    }
 
     const left = (this.#pending.get(productId) ?? 0) - delta;
     if (left) this.#pending.set(productId, left);
@@ -162,8 +172,10 @@ export class CartModel {
   refresh(): Promise<void> {
     this.#refreshing ??= (async () => {
       const startedAt = this.#sent;
+      const epoch = this.#epoch;
       const result = await this.load().catch(() => ({ ok: false, status: 0, error: "network" }) as const);
       this.#refreshing = null;
+      if (epoch !== this.#epoch) return; // for an account or basket that is gone
       if (result.ok) {
         // A change sent after this request started knows better.
         if (this.#sent === startedAt && !this.busy) {
@@ -182,8 +194,9 @@ export class CartModel {
   }
 
   async clear(): Promise<boolean> {
-    const result = await api<CartData>("cart", { method: "DELETE" });
+    const result = await this.empty();
     if (result.ok) {
+      this.#epoch += 1;
       this.#pending.clear();
       this.#queued.clear();
       this.accept(result.data);
@@ -195,8 +208,11 @@ export class CartModel {
 
   /** Forget everything, e.g. after signing out. */
   reset(): void {
+    this.#epoch += 1;
+    this.#refreshing = null;
     this.cart = null;
     this.status = "loading";
+    this.error = null;
     this.#pending.clear();
     this.#queued.clear();
     this.#emit();

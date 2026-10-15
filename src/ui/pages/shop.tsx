@@ -19,8 +19,12 @@ import { useT } from "../state/session";
 /** The page the Picnic app shows on its search tab before anything is typed. */
 const CATEGORY_TREE_PAGE_ID = "category-tree-root";
 
+/** At most this many comma-separated searches at once, so a pasted paragraph does not set off Picnic's rate limit. */
+const MAX_TERMS = 12;
+
 /** Words separated by commas are searched one after the other, as on the old desk. */
-export const searchTerms = (text: string) => [...new Set(text.split(",").map((t) => t.trim()).filter((t) => t.length >= 2))];
+export const searchTerms = (text: string) =>
+  [...new Set(text.split(",").map((t) => t.trim()).filter((t) => t.length >= 2))].slice(0, MAX_TERMS);
 
 /** Set when a search is sent with Enter: the results then take the focus. */
 let focusResults = false;
@@ -354,7 +358,7 @@ export function SearchBox({ route }: { route: Route }) {
         enterKeyHint="search"
         role="combobox"
         aria-expanded={open && suggestions.length > 0}
-        aria-controls="suggestions"
+        aria-controls={open && suggestions.length > 0 ? "suggestions" : undefined}
         aria-activedescendant={active >= 0 ? `suggestion-${active}` : undefined}
         onChange={(event) => {
           setText(event.target.value);
