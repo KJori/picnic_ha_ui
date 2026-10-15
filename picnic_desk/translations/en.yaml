@@ -1,0 +1,13 @@
+configuration:
+  country_code:
+    name: Country
+    description: The country of your Picnic account.
+  language:
+    name: Language
+    description: The language of the app's screens. Product names and texts are always Picnic's own.
+  picture_cache_mb:
+    name: Room for pictures (MB)
+    description: How much disk space the kept product and recipe pictures may take. The ones shown longest ago make room when it is full.
+  allowed_users:
+    name: Other users
+    description: Home Assistant user names (not display names) that may use your Picnic account here, besides the person who signed in to it.

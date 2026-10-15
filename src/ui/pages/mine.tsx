@@ -187,8 +187,8 @@ export function CheckView() {
       {load.status === "ready" && (
         <ul className="checks">
           {load.data.checks.map((check) => (
-            <li key={check.name} className={check.ok ? "" : "broken"}>
-              <strong>{check.name}</strong>
+            <li key={check.key} className={check.ok ? "" : "broken"}>
+              <strong>{d.checkNames[check.key] ?? check.name}</strong>
               <span className="verdict">{check.ok ? d.works : d.broken}</span>
               <p>
                 {check.detail} · {check.ms} ms

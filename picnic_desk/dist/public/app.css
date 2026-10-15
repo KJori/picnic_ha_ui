@@ -17,6 +17,7 @@
   --paper-ink: #1d2a25;
   --paper-rule: #b9c2ba;
   --focus: #0b57d0;
+  --crate-hover: color-mix(in srgb, var(--crate) 85%, #000);
 
   --ui: "Seravek", "Gill Sans Nova", "Ubuntu", "Calibri", "DejaVu Sans", "Source Sans 3", sans-serif;
   --till: ui-monospace, "Cascadia Mono", "Ubuntu Mono", "DejaVu Sans Mono", Menlo, Consolas, monospace;
@@ -36,6 +37,8 @@
     --paper-ink: #17231e;
     --paper-rule: #a3ac9f;
     --focus: #9cc2ff;
+    /* On the dark theme a hovered green button gets lighter, keeping its dark text readable. */
+    --crate-hover: color-mix(in srgb, var(--crate) 85%, #fff);
   }
 }
 
@@ -195,7 +198,7 @@ button { cursor: pointer; }
 .stepper output { min-width: 2rem; text-align: center; font-weight: 700; font-variant-numeric: tabular-nums; }
 .stepper.empty .less, .stepper.empty output { display: none; }
 .stepper:not(.empty) { background: var(--crate); color: var(--crate-ink); }
-.stepper:not(.empty) button:hover { background: color-mix(in srgb, var(--crate) 80%, #000); }
+.stepper:not(.empty) button:hover { background: var(--crate-hover); }
 
 /* ------------------------------------------------------------ paste a list */
 
@@ -303,7 +306,7 @@ button { cursor: pointer; }
 
 .product { cursor: pointer; }
 .line .what .name {
-  display: block; padding: 0; background: none; border: 0; text-align: left;
+  display: block; min-height: 1.5rem; padding: 0; background: none; border: 0; text-align: left;
   font: inherit; font-weight: 600; color: inherit; overflow-wrap: anywhere; cursor: pointer;
 }
 .line .what .name:hover { text-decoration: underline; text-underline-offset: .2em; }
@@ -344,7 +347,7 @@ button { cursor: pointer; }
 .fold > div { max-width: 65ch; padding: 0 0 .9rem; line-height: 1.5; }
 
 .recipe .cost { padding: 0 .8rem .8rem; margin-top: -.45rem; min-height: 1.3rem; font-size: .875rem; color: var(--soft); font-variant-numeric: tabular-nums; }
-.ingredient .what .quiet { display: inline; padding: 0; font-size: .875rem; color: var(--soft); }
+.ingredient .what .quiet { display: inline-block; padding: 0; font-size: .875rem; color: var(--soft); }
 
 /* ---------------------------------------------------------------- buttons */
 
@@ -353,11 +356,12 @@ button { cursor: pointer; }
   border: 2px solid var(--crate);
 }
 .primary { background: var(--crate); color: var(--crate-ink); }
-.primary:hover { background: color-mix(in srgb, var(--crate) 85%, #000); }
+.primary:hover { background: var(--crate-hover); }
 .secondary { background: transparent; color: var(--ink); border-color: var(--ink); }
 .secondary:hover { background: var(--board); }
+/* Text buttons: at least 24 px tall, so they are easy to hit (WCAG 2.5.8). */
 .quiet {
-  padding: .2rem 0; background: none; border: 0;
+  min-height: 1.5rem; padding: .2rem 0; background: none; border: 0;
   color: inherit; text-decoration: underline; text-underline-offset: .2em;
 }
 .quiet:hover { text-decoration-thickness: 2px; }
@@ -480,6 +484,7 @@ button { cursor: pointer; }
 
 @media (prefers-reduced-motion: reduce) {
   .line.fresh { animation: none; }
+  .spinner { animation-duration: 3s; }
   .minimum .bar i { transition: none; }
 }
 
@@ -594,6 +599,15 @@ select { padding: .55rem .7rem; background: var(--shelf); border: 1px solid var(
 .nutrition th, .nutrition td { padding: .3rem .5rem; text-align: left; font-weight: 400; border-bottom: 1px solid var(--rule); }
 .nutrition tr:not(.sub) th { font-weight: 700; }
 .nutrition tr.sub th { padding-left: 1.3rem; }
+.nutrition tr.shaded { background: color-mix(in srgb, var(--ink) 7%, var(--board)); }
+
+/* Text in a colour Picnic chose for its white app: lightened on the dark
+   theme, except on the receipt, which is light paper in both. */
+.picnic-ink { color: var(--picnic-ink); }
+@media (prefers-color-scheme: dark) {
+  .picnic-ink { color: color-mix(in oklab, var(--picnic-ink) 40%, #fff); }
+  .receipt .picnic-ink { color: var(--picnic-ink); }
+}
 .prose { white-space: pre-line; margin: 0 0 .5rem; }
 
 /* recipes additions */
@@ -608,9 +622,10 @@ select { padding: .55rem .7rem; background: var(--shelf); border: 1px solid var(
 .heart[aria-pressed="true"] { background: var(--board); }
 .plan-check {
   position: absolute; top: .45rem; left: .45rem; display: flex; align-items: center; gap: .3rem;
-  padding: .15rem .45rem; background: color-mix(in srgb, var(--board) 88%, transparent); border-radius: 3px; font-size: .875rem; font-weight: 600;
+  min-height: 1.5rem; padding: .2rem .5rem; background: color-mix(in srgb, var(--board) 88%, transparent); border-radius: 3px; font-size: .875rem; font-weight: 600;
+  cursor: pointer;
 }
-.plan-check input { margin: 0; accent-color: var(--crate); }
+.plan-check input { width: 1rem; height: 1rem; margin: 0; accent-color: var(--crate); }
 .plan-bar { display: flex; flex-wrap: wrap; align-items: center; gap: .9rem; margin: .9rem 0 1rem; }
 .plan-bar input { width: 4.2rem; padding: .45rem .5rem; background: var(--board); border: 1px solid var(--soft); border-radius: 4px; }
 .plan-bar .hint { flex-basis: 100%; margin: 0; }

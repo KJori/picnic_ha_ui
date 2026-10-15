@@ -5140,7 +5140,8 @@ var PRODUCTS = INPUT.map((p) => ({
   imageId: img(p.id),
   displayPrice: p.price,
   originalPrice: p.was ?? null,
-  displayPriceColor: null,
+  // Picnic colours offer prices red, chosen for its white app; the dark theme must cope.
+  displayPriceColor: p.was ? "#B40117" : null,
   unitQuantity: p.unit,
   maxCount: p.max ?? 99,
   priceRanges: p.bundle ?? null,
@@ -6037,13 +6038,13 @@ var DeskRoutes = class {
   async #selfcheck() {
     if (!this.desk.session.signedIn && !this.desk.options.demo) return signedOut();
     const checks = [];
-    const run = async (name, step) => {
+    const run = async (key, name, step) => {
       const started = Date.now();
       try {
         const detail = await step();
-        checks.push({ name, ok: true, ms: Date.now() - started, detail });
+        checks.push({ key, name, ok: true, ms: Date.now() - started, detail });
       } catch (err) {
-        checks.push({ name, ok: false, ms: Date.now() - started, detail: err instanceof Error ? err.message : String(err) });
+        checks.push({ key, name, ok: false, ms: Date.now() - started, detail: err instanceof Error ? err.message : String(err) });
       }
     };
     const get = async (path) => {
@@ -6055,11 +6056,11 @@ var DeskRoutes = class {
       return result.body;
     };
     let products = [];
-    await run("Account", async () => {
+    await run("account", "Account", async () => {
       const profile = await get("user/profile");
       return profile.name ? `Signed in as ${profile.name}` : "Signed in";
     });
-    await run("Who may use it", async () => {
+    await run("access", "Who may use it", async () => {
       const owner = this.desk.session.owner;
       const others = (this.desk.options.allowedUsers ?? []).filter((name) => name.trim());
       if (!this.desk.options.ingressOnly) return "anyone who can reach the app (not running under Home Assistant)";
@@ -6070,14 +6071,14 @@ var DeskRoutes = class {
       }
       return `${owner.displayName || owner.name}${others.length ? ` and ${others.join(", ")}` : " only"}`;
     });
-    await run("Search", async () => {
+    await run("search", "Search", async () => {
       const word = SELF_CHECK_WORD[this.desk.session.country];
       const result = await get(`search?${new URLSearchParams({ q: word })}`);
       products = result.products ?? [];
       if (!products.length) throw new Error(`no products for “${word}”`);
       return `${products.length} products for “${word}”`;
     });
-    await run("Product page", async () => {
+    await run("product", "Product page", async () => {
       if (!products.length) throw new Error("skipped: search found nothing");
       const detail = await get(`product/${encodeURIComponent(products[0].id)}`);
       const parts = [
@@ -6088,7 +6089,7 @@ var DeskRoutes = class {
       ].filter(Boolean);
       return `${detail.name}: ${parts.join(", ") || "name and price only"}`;
     });
-    await run("Pictures", async () => {
+    await run("pictures", "Pictures", async () => {
       const sample = products.slice(0, 4).filter((p) => p.imageId);
       if (!sample.length) throw new Error("skipped: no product pictures to try");
       if (this.desk.options.demo) return `${sample.length} of ${sample.length} loaded`;
@@ -6105,25 +6106,25 @@ var DeskRoutes = class {
       if (!loaded.length) throw new Error(`none of ${sample.length} loaded from Picnic${failure}${store}`);
       return `${loaded.length} of ${sample.length} loaded from Picnic (${variants})${failure}${store}`;
     });
-    await run("Basket", async () => {
+    await run("basket", "Basket", async () => {
       const cart2 = await get("cart");
       return `${cart2.totalCount} items`;
     });
-    await run("Delivery slots", async () => {
+    await run("slots", "Delivery slots", async () => {
       const picker = await get("cart/delivery-slots");
       const days = picker.dayGroups ?? [];
       const count = days.reduce((n, d) => n + d.greenSlots.length + d.regularSlots.length, 0);
       return `${count} slots over ${days.length} days`;
     });
-    await run("Categories", async () => {
+    await run("categories", "Categories", async () => {
       const page = await get("rsc-pages?pageId=category-tree-root");
       return `${page.nodes?.length ?? 0} sections`;
     });
-    await run("Recipes", async () => {
+    await run("recipes", "Recipes", async () => {
       const book = await get("cookbook");
       return `${book.recipes?.length ?? 0} recipes in ${book.categories?.length ?? 0} categories`;
     });
-    await run("Deliveries", async () => {
+    await run("deliveries", "Deliveries", async () => {
       const list = await get("deliveries");
       return `${list.deliveries?.length ?? 0} deliveries`;
     });

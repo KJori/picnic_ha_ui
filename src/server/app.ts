@@ -16,7 +16,7 @@ import { Store } from "./store";
 import type { CountryCode } from "@/lib/core/types";
 
 /** Home Assistant's ingress gateway: the only address allowed in under ingress. */
-export const INGRESS_GATEWAY = "172.30.32.2";
+const INGRESS_GATEWAY = "172.30.32.2";
 const MAX_BODY_BYTES = 1024 * 1024;
 const INTERNAL_BASE = "http://picnic-desk.internal";
 

@@ -53,8 +53,9 @@ order.
 
 `src/ui` is a React app with the desk's own design (the shelf and the
 receipt, from 0.x), laid out for a wide screen rather than picnic-web's phone
-layout. It imports picnic-web's types, translations and pure helpers (deep-link routing,
-the RSC action resolver, the tracking parser, PML markdown) so it reads the
+layout. It imports picnic-web's types, translations and pure helpers
+(deep-link routing, the RSC action resolver, the tracking parser, PML
+markdown) so it reads the
 routes' answers the way picnic-web's own pages do. TypeScript checks it
 against those types.
 
@@ -113,7 +114,15 @@ one already shown, and fetches the basket again after a failure.
   the demo shop and small helpers.
 - `npm run test:browser`: the built app in Chromium, behind a stand-in for
   ingress, against the demo shop: every screen, checkout included, with no
-  console errors, no server errors and no requests outside the app.
+  console errors, no server errors and no requests outside the app. On every
+  screen, in light and dark (`tests/browser/a11y.mjs`, on Chromium's own
+  accessibility tree and rendered colours): every control has a name, text
+  meets WCAG AA contrast, buttons are at least 24 px, headings do not skip a
+  level, and keyboard focus shows. A Dutch desk shows no English string from
+  the page's own tables.
+- `tests/app-config.test.ts`: options, schema and the option translations
+  agree; the version matches everywhere; the app asks Home Assistant for no
+  extra rights.
 - The demo shop (`src/server/demo`) is typed with picnic-web's types, so it
   cannot drift from what the real routes return.
 

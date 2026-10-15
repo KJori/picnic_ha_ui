@@ -13,6 +13,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, describe, test } from "node:test";
 
+import { audit } from "./a11y.mjs";
+
 const playwright = await import(process.env.PLAYWRIGHT_MODULE ?? "playwright");
 const { chromium } = playwright.default ?? playwright;
 
@@ -430,5 +432,177 @@ describe("Picnic Desk in a browser", () => {
     await shot(page, "13-dark");
     clean(page);
     await page.context().close();
+  });
+
+  // Every screen, in light and dark: names, contrast, target size, structure, focus.
+  for (const colorScheme of ["light", "dark"]) {
+    test(`accessibility, ${colorScheme}: every screen`, async () => {
+      const page = await openPage({ colorScheme });
+      const found = [];
+      const check = async (screen, options) => {
+        for (const problem of await audit(page, options)) found.push(`${screen}: ${problem}`);
+      };
+      await page.evaluate(() => fetch("api/auth/logout", { method: "POST", headers: { "x-desk-base": location.href } }));
+      await page.reload();
+      await page.locator(".signin").waitFor();
+      await check("sign-in", { focus: true });
+      await signIn(page);
+      const go = async (hash, ready) => {
+        await page.goto(`${base}#${hash}`);
+        await page.locator(ready).first().waitFor();
+      };
+      await go("/search", ".shortcuts");
+      await check("search, empty", { focus: true });
+      await go("/search?q=tofu", ".products .product");
+      await cell(page, "s1004").locator(".more").click();
+      await line(page, "s1004").waitFor();
+      await check("search results", { focus: true });
+      await go("/categories", ".aisles");
+      await page.locator(".aisles .aisle").first().click();
+      await page.locator(".aisle-shelf .products .product").first().waitFor();
+      await check("categories");
+      await go("/search?q=tofu&product=s1004", "dialog[open] h2.name");
+      await check("product page");
+      await page.keyboard.press("Escape");
+      await go("/list", ".views");
+      await check("pasted list");
+      await go("/history", ".products .product, .hint");
+      await check("bought before");
+      await go("/saved", ".views");
+      await check("saved");
+      await go("/cookbook", ".recipe-card");
+      await check("recipes");
+      await page.locator(".recipe-card a.recipe").first().click();
+      await page.locator(".ingredient").first().waitFor();
+      await check("one recipe");
+      await go("/orders", "table.orders");
+      await check("orders");
+      // Live, or cancelled by the orders test before this one: the page either way.
+      await go("/orders/demo-delivery-current", ".bill");
+      await check("one order");
+      await go("/checkout", ".steps");
+      await check("checkout");
+      await page.locator(".till").getByRole("button", { name: /Change|Choose/ }).first().click();
+      await page.locator("dialog[open] .week").waitFor();
+      await check("delivery times");
+      await page.keyboard.press("Escape");
+      await go("/check", ".checks");
+      await check("self-check");
+      if (process.env.A11Y_REPORT) console.log(found.join("\n"));
+      assert.deepEqual(found, []);
+      clean(page);
+      await page.context().close();
+    });
+  }
+
+  test("a Dutch desk shows no English", async () => {
+    // English strings that Dutch says differently, from the page's own tables.
+    const tables = JSON.parse(
+      await new Promise((resolve, reject) => {
+        const child = spawn(
+          process.execPath,
+          [
+            "--import",
+            "tsx",
+            "-e",
+            `import("./src/ui/i18n/index.ts").then(({ picnicStrings, deskStrings }) =>
+              process.stdout.write(JSON.stringify({ en: { ...picnicStrings("en"), ...deskStrings("en") }, nl: { ...picnicStrings("nl"), ...deskStrings("nl") } })))`,
+          ],
+          { cwd: ROOT, stdio: ["ignore", "pipe", "inherit"] }
+        );
+        let out = "";
+        child.stdout.on("data", (chunk) => (out += chunk));
+        child.on("exit", (code) => (code === 0 ? resolve(out) : reject(new Error(`strings: exit ${code}`))));
+      })
+    );
+    const english = new Set(
+      Object.entries(tables.en)
+        .filter(([key, value]) => typeof value === "string" && !value.includes("{") && value !== tables.nl[key] && /[a-z]{3}/.test(value))
+        .map(([, value]) => value.trim())
+    );
+
+    const port = await freePort();
+    const folder = mkdtempSync(join(tmpdir(), "desk-nl-"));
+    const dutch = spawn(process.execPath, [join(ROOT, "picnic_desk/dist/server.mjs")], {
+      env: { ...process.env, PORT: String(port), DATA_DIR: folder, PICNIC_DEMO: "1", INGRESS_ONLY: "0", DESK_LANGUAGE: "nl" },
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    try {
+      await new Promise((resolve) => dutch.stdout.on("data", (chunk) => String(chunk).includes("on port") && resolve()));
+      const context = await browser.newContext({ viewport: { width: 1440, height: 900 }, locale: "nl-NL" });
+      const page = await context.newPage();
+      const root = `http://127.0.0.1:${port}/`;
+      const found = new Set();
+      const look = async (screen) => {
+        const shown = await page.evaluate(() => {
+          const out = [];
+          const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+          for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+            const el = n.parentElement;
+            if (el && !el.closest("[hidden]") && n.textContent.trim()) out.push(n.textContent.trim());
+          }
+          for (const el of document.querySelectorAll("[aria-label], [title], [placeholder], [alt]")) {
+            for (const name of ["aria-label", "title", "placeholder", "alt"]) {
+              const v = el.getAttribute(name);
+              if (v && v.trim()) out.push(v.trim());
+            }
+          }
+          out.push(document.title.replace(/ · Picnic$/, ""));
+          return out;
+        });
+        for (const text of shown) if (english.has(text)) found.add(`${screen}: "${text}"`);
+      };
+      // The screen before the app has answered follows the browser's language.
+      await page.route("**/api/desk/state", async (route) => {
+        await look("starting");
+        await route.continue();
+      });
+      await page.goto(root);
+      await page.locator(".signin").waitFor();
+      await page.unroute("**/api/desk/state");
+      await look("sign-in");
+      await page.getByLabel("E-mailadres").fill("demo@example.nl");
+      await page.getByLabel("Wachtwoord").fill("x");
+      await page.locator(".signin button[type=submit]").click();
+      await page.locator(".views").waitFor();
+      const screens = [
+        ["/search", ".shortcuts"],
+        ["/search?q=tofu", ".products .product"],
+        ["/search?q=tofu,brood", ".group"],
+        ["/categories", ".aisles"],
+        ["/search?q=tofu&product=s1004", "dialog[open] h2.name"],
+        ["/list", ".views"],
+        ["/history", ".products .product, .hint"],
+        ["/saved", ".views"],
+        ["/cookbook", ".recipe-card"],
+        ["/cookbook?plan=1", ".plan-bar, .recipe-card, .hint"],
+        ["/orders", "table.orders"],
+        ["/orders/demo-delivery-current", "svg.route"],
+        ["/orders/demo-delivery-1", ".bill"],
+        ["/parcels", ".views"],
+        ["/checkout", ".checkout"],
+        ["/check", ".checks"],
+      ];
+      for (const [hash, ready] of screens) {
+        await page.goto(`${root}#${hash}`);
+        await page.locator(ready).first().waitFor();
+        // Something in the basket, so the receipt and checkout show all their parts.
+        if (hash === "/search?q=tofu") {
+          await page.locator('.products .product[data-product="s1004"] .more').click();
+          await page.locator('.till .receipt[aria-busy="false"] .line').first().waitFor();
+        }
+        await look(hash);
+      }
+      await page.goto(`${root}#/cookbook`);
+      await page.locator(".recipe-card a.recipe").first().click();
+      await page.locator(".ingredient").first().waitFor();
+      await look("one recipe");
+      if (process.env.A11Y_REPORT) console.log([...found].join("\n"));
+      assert.deepEqual([...found], []);
+      await context.close();
+    } finally {
+      dutch.kill();
+      rmSync(folder, { recursive: true, force: true });
+    }
   });
 });

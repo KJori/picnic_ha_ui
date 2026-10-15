@@ -15,7 +15,7 @@ import type { CartData, CartItem } from "@/lib/core/types";
 
 import { api, type Result } from "../lib/api";
 
-export type CartStatus = "loading" | "ready" | "error";
+type CartStatus = "loading" | "ready" | "error";
 
 type Send = (productId: string, action: "add" | "remove", count: number) => Promise<Result<CartData>>;
 

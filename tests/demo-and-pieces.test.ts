@@ -285,3 +285,20 @@ test("only a plain https address from Picnic is opened for paying", () => {
   }
   assert.equal(paymentAddress("null", "null"), null, "an opaque origin matches nothing");
 });
+
+test("Picnic's colours: only plain colour values, and readable ink on Picnic's own backgrounds", async () => {
+  const { inkFor, picnicColour, picnicInk, picnicLabel } = await import("../src/ui/lib/colour");
+  for (const ok of ["#fff", "#B40117", "#b4011780", "rgb(10, 20, 30)", "rgba(10,20,30,.5)", "hsl(120 50% 40%)"]) {
+    assert.equal(picnicColour(ok), ok, ok);
+  }
+  for (const bad of ["red; background: url(https://x)", "url(https://x)", "var(--x)", "expression(alert(1))", "YELLOW2", "", null, 3]) {
+    assert.equal(picnicColour(bad), undefined, String(bad));
+  }
+  assert.equal(inkFor("#fbd92b"), "#111111", "dark text on yellow");
+  assert.equal(inkFor("#b40117"), "#ffffff", "white text on dark red");
+  assert.deepEqual(picnicLabel(null, "#2e5a03").style, { backgroundColor: "#2e5a03", color: "#ffffff" });
+  // On a mid green black reads slightly better (4.66:1) than white (4.50:1).
+  assert.equal(inkFor("#4B8505"), "#111111");
+  assert.equal(picnicLabel("#333", "YELLOW2").className, "picnic-ink", "an unknown background is dropped");
+  assert.deepEqual(picnicInk("url(x)"), {});
+});

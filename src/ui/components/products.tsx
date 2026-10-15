@@ -8,6 +8,7 @@ import type { KeyboardEvent } from "react";
 import type { CartItem, Product, SearchSection, SliderProduct } from "@/lib/core/types";
 
 import type { SavedProduct } from "../../server/desk-routes";
+import { picnicInk } from "../lib/colour";
 import { navigate, useRoute, withQuery } from "../lib/router";
 import { useCart } from "../state/cart";
 import { toggleStar, useStarred } from "../state/saved";
@@ -21,7 +22,7 @@ export function useOpenProduct(): (id: string) => void {
 }
 
 /** The price per unit at an amount, when a "more for less" tier applies. */
-export function bundlePrice(ranges: Product["priceRanges"], quantity: number): number | null {
+function bundlePrice(ranges: Product["priceRanges"], quantity: number): number | null {
   if (!ranges?.length || quantity === 0) return null;
   return ranges.filter((tier) => tier.quantity <= quantity).at(-1)?.pricePerUnit ?? null;
 }
@@ -156,7 +157,7 @@ export function ProductCell({ product, want = 1, note }: { product: Product; wan
         {product.badges.map((badge, i) => (
           <Badge key={i} badge={badge} />
         ))}
-        {product.highlight && <span style={{ color: product.highlight.color }}>{product.highlight.text} </span>}
+        {product.highlight && <span {...picnicInk(product.highlight.color)}>{product.highlight.text} </span>}
         {meta}
       </p>
       <div className="buy">

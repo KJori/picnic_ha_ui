@@ -9,6 +9,7 @@ import type { DeliverySlotData, DeliverySlotPickerData } from "@/lib/core/delive
 import type { CartData, CartFooterData, CartItem, CartRecipeGroup, DepositEntry, FeeEntry } from "@/lib/core/types";
 
 import { api } from "../lib/api";
+import { picnicInk } from "../lib/colour";
 import { href, navigate } from "../lib/router";
 import { cartModel, useCart } from "../state/cart";
 import { forgetAccount, useProfileName } from "../state/account";
@@ -150,8 +151,8 @@ export function Sums({
       </div>
       {loyalty && (
         <div className="sum-row points">
-          <span style={loyalty.label.color ? { color: loyalty.label.color } : undefined}>{loyalty.label.text}</span>
-          <span style={loyalty.value.color ? { color: loyalty.value.color } : undefined}>{loyalty.value.text}</span>
+          <span {...picnicInk(loyalty.label.color)}>{loyalty.label.text}</span>
+          <span {...picnicInk(loyalty.value.color)}>{loyalty.value.text}</span>
         </div>
       )}
     </>
@@ -161,7 +162,7 @@ export function Sums({
 // ─── Delivery time ───────────────────────────────────────────────────────────
 
 /** The week at a glance: a column per day, a button per delivery time. */
-export function SlotPicker({ onClose, onChosen }: { onClose: () => void; onChosen: (cart: CartData) => void }) {
+function SlotPicker({ onClose, onChosen }: { onClose: () => void; onChosen: (cart: CartData) => void }) {
   const { t, d } = useT();
   const dates = useDates();
   const [load, reload] = useLoad<DeliverySlotPickerData>("slots", (signal) => api("cart/delivery-slots", { signal }));

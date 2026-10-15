@@ -23,7 +23,7 @@ const CATEGORY_TREE_PAGE_ID = "category-tree-root";
 const MAX_TERMS = 12;
 
 /** Words separated by commas are searched one after the other, as on the old desk. */
-export const searchTerms = (text: string) =>
+const searchTerms = (text: string) =>
   [...new Set(text.split(",").map((t) => t.trim()).filter((t) => t.length >= 2))].slice(0, MAX_TERMS);
 
 /** Set when a search is sent with Enter: the results then take the focus. */

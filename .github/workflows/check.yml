@@ -11,15 +11,20 @@ permissions:
 jobs:
   tests:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        # 24 is what the app's image runs; 22 is the oldest package.json allows.
+        node: ["22", "24"]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: "24"
+          node-version: ${{ matrix.node }}
       - run: npm install --no-audit --no-fund
       # Types, the route table, and the committed build all match the sources.
       - run: npm run check
       - run: npm test
+      - run: npx --yes markdownlint-cli2@0.23.2 "README.md" "picnic_desk/*.md" "docs/*.md" "picnic-web/*.md"
       - run: npx playwright install --with-deps chromium
       - run: npm run test:browser
 

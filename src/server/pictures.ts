@@ -26,10 +26,10 @@ import { join } from "node:path";
 
 import { getImageCdnBase, type CountryCode } from "@/lib/core/types";
 
-export const IMAGE_ID = /^(?:[a-z][a-z0-9_-]{1,30}\/)?[A-Za-z0-9_-]{8,128}$/;
+const IMAGE_ID = /^(?:[a-z][a-z0-9_-]{1,30}\/)?[A-Za-z0-9_-]{8,128}$/;
 
-export const PRODUCT_VARIANTS = ["medium.png", "padded.webp", "small.png", "large.png", "tile-medium.webp", "regular.png"];
-export const RECIPE_VARIANTS = ["filled-600x600.webp", "large.png", "medium.png", "padded.webp"];
+const PRODUCT_VARIANTS = ["medium.png", "padded.webp", "small.png", "large.png", "tile-medium.webp", "regular.png"];
+const RECIPE_VARIANTS = ["filled-600x600.webp", "large.png", "medium.png", "padded.webp"];
 
 export const DEFAULT_CACHE_MB = 500;
 const MISSING_FOR_MS = 10 * 60 * 1000;
@@ -39,7 +39,7 @@ const RETRY_STATUSES = new Set([429, 500, 502, 503, 504]);
 /** "Not here": the next variant may exist. Anything else means Picnic itself is in trouble. */
 const ABSENT_STATUSES = new Set([400, 403, 404, 410]);
 /** A product photo is far smaller; anything bigger is not taken. */
-export const MAX_PICTURE_BYTES = 8 * 1024 * 1024;
+const MAX_PICTURE_BYTES = 8 * 1024 * 1024;
 /** At most this many pictures are fetched from Picnic at the same time. */
 const AT_ONCE = 6;
 /** When full, make room down to this share of the limit, so that not every new picture evicts one. */

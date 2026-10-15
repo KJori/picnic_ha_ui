@@ -16,11 +16,11 @@ import type { RscAction, RscNode, RscPageModel } from "@/lib/rsc/rsc-page-types"
 import { href, navigate, type Route } from "../lib/router";
 import { useCart } from "../state/cart";
 import { useT } from "../state/session";
-import { Img } from "./common";
+import { Img, PicnicLabel } from "./common";
 import { ProductGrid } from "./products";
 
 /** A theme token ("YELLOW2") or a literal colour; anything else is ignored. */
-export function resolveColor(tokens: Record<string, string>, value: unknown): string | undefined {
+function resolveColor(tokens: Record<string, string>, value: unknown): string | undefined {
   if (typeof value !== "string" || value === "") return undefined;
   if (value in tokens) return tokens[value];
   if (value.startsWith("#") || value.startsWith("rgb")) return value;
@@ -32,7 +32,7 @@ type Row =
   | { kind: "row"; key: string; title: string; image: string | null; label?: { text: string; bg?: string; fg?: string }; actions: RscAction[]; route: string | null };
 
 /** Every row and heading of the page's vertical lists, in order. */
-export function readRows(page: RscPageModel): Row[] {
+function readRows(page: RscPageModel): Row[] {
   const rows: Row[] = [];
   const walk = (nodes: RscNode[]) => {
     for (const node of nodes) {
@@ -110,9 +110,7 @@ export function Aisles({ page, route }: { page: RscPageModel; route: Route }) {
             {row.image && <Img id={row.image} name={row.title} />}
             <span>{row.title}</span>
             {row.label && (
-              <span className="offer" style={{ backgroundColor: row.label.bg, color: row.label.fg }}>
-                {row.label.text}
-              </span>
+              <PicnicLabel text={row.label.text} fg={row.label.fg} bg={row.label.bg} />
             )}
           </a>
         )

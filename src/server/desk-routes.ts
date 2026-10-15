@@ -63,7 +63,19 @@ export type SavedProduct = Pick<Product, "id" | "name" | "imageId" | "unitQuanti
 export type Shortcut = { label: string; query: string };
 export type HistoryItem = { item: CartItem; times: number; lastBought: string };
 export type HistoryData = { builtAt: string; deliveries: number; items: HistoryItem[] };
-export type Check = { name: string; ok: boolean; ms: number; detail: string };
+/** One step of the self-check. `key` names it for the page; `name` and `detail` are English, for bug reports. */
+export type Check = { key: CheckKey; name: string; ok: boolean; ms: number; detail: string };
+export type CheckKey =
+  | "account"
+  | "access"
+  | "search"
+  | "product"
+  | "pictures"
+  | "basket"
+  | "slots"
+  | "categories"
+  | "recipes"
+  | "deliveries";
 export type RecipePrice = { id: string; total: number; perServing: number; portions: number; at: string };
 
 const SAVED_MAX = 500;
@@ -79,7 +91,7 @@ const RECIPE_PRICE_PARALLEL = 2;
 const SELF_CHECK_WORD: Record<CountryCode, string> = { NL: "melk", DE: "milch", FR: "lait" };
 const PAGE_ID = /^[A-Za-z0-9_.-]{1,80}(\?[A-Za-z0-9_=&.%-]{0,200})?$/;
 
-export const DEFAULT_SHORTCUTS: Record<CountryCode, Shortcut[]> = {
+const DEFAULT_SHORTCUTS: Record<CountryCode, Shortcut[]> = {
   NL: [
     { label: "Brood", query: "brood" },
     { label: "Vegan", query: "vegan" },
@@ -464,13 +476,13 @@ export class DeskRoutes {
   async #selfcheck(): Promise<Response> {
     if (!this.desk.session.signedIn && !this.desk.options.demo) return signedOut();
     const checks: Check[] = [];
-    const run = async (name: string, step: () => Promise<string>) => {
+    const run = async (key: CheckKey, name: string, step: () => Promise<string>) => {
       const started = Date.now();
       try {
         const detail = await step();
-        checks.push({ name, ok: true, ms: Date.now() - started, detail });
+        checks.push({ key, name, ok: true, ms: Date.now() - started, detail });
       } catch (err) {
-        checks.push({ name, ok: false, ms: Date.now() - started, detail: err instanceof Error ? err.message : String(err) });
+        checks.push({ key, name, ok: false, ms: Date.now() - started, detail: err instanceof Error ? err.message : String(err) });
       }
     };
     const get = async (path: string) => {
@@ -483,11 +495,11 @@ export class DeskRoutes {
     };
 
     let products: Product[] = [];
-    await run("Account", async () => {
+    await run("account", "Account", async () => {
       const profile = (await get("user/profile")) as ProfileData;
       return profile.name ? `Signed in as ${profile.name}` : "Signed in";
     });
-    await run("Who may use it", async () => {
+    await run("access", "Who may use it", async () => {
       const owner = this.desk.session.owner;
       const others = (this.desk.options.allowedUsers ?? []).filter((name) => name.trim());
       if (!this.desk.options.ingressOnly) return "anyone who can reach the app (not running under Home Assistant)";
@@ -498,14 +510,14 @@ export class DeskRoutes {
       }
       return `${owner.displayName || owner.name}${others.length ? ` and ${others.join(", ")}` : " only"}`;
     });
-    await run("Search", async () => {
+    await run("search", "Search", async () => {
       const word = SELF_CHECK_WORD[this.desk.session.country];
       const result = (await get(`search?${new URLSearchParams({ q: word })}`)) as SearchApiResponse;
       products = result.products ?? [];
       if (!products.length) throw new Error(`no products for “${word}”`);
       return `${products.length} products for “${word}”`;
     });
-    await run("Product page", async () => {
+    await run("product", "Product page", async () => {
       if (!products.length) throw new Error("skipped: search found nothing");
       const detail = (await get(`product/${encodeURIComponent(products[0].id)}`)) as ProductDetail;
       const parts = [
@@ -516,7 +528,7 @@ export class DeskRoutes {
       ].filter(Boolean);
       return `${detail.name}: ${parts.join(", ") || "name and price only"}`;
     });
-    await run("Pictures", async () => {
+    await run("pictures", "Pictures", async () => {
       const sample = products.slice(0, 4).filter((p) => p.imageId);
       if (!sample.length) throw new Error("skipped: no product pictures to try");
       if (this.desk.options.demo) return `${sample.length} of ${sample.length} loaded`;
@@ -535,25 +547,25 @@ export class DeskRoutes {
       if (!loaded.length) throw new Error(`none of ${sample.length} loaded from Picnic${failure}${store}`);
       return `${loaded.length} of ${sample.length} loaded from Picnic (${variants})${failure}${store}`;
     });
-    await run("Basket", async () => {
+    await run("basket", "Basket", async () => {
       const cart = (await get("cart")) as CartData;
       return `${cart.totalCount} items`;
     });
-    await run("Delivery slots", async () => {
+    await run("slots", "Delivery slots", async () => {
       const picker = (await get("cart/delivery-slots")) as DeliverySlotPickerData;
       const days = picker.dayGroups ?? [];
       const count = days.reduce((n, d) => n + d.greenSlots.length + d.regularSlots.length, 0);
       return `${count} slots over ${days.length} days`;
     });
-    await run("Categories", async () => {
+    await run("categories", "Categories", async () => {
       const page = (await get("rsc-pages?pageId=category-tree-root")) as RscPageModel;
       return `${page.nodes?.length ?? 0} sections`;
     });
-    await run("Recipes", async () => {
+    await run("recipes", "Recipes", async () => {
       const book = (await get("cookbook")) as CookbookApiResponse;
       return `${book.recipes?.length ?? 0} recipes in ${book.categories?.length ?? 0} categories`;
     });
-    await run("Deliveries", async () => {
+    await run("deliveries", "Deliveries", async () => {
       const list = (await get("deliveries")) as DeliveriesApiResponse;
       return `${list.deliveries?.length ?? 0} deliveries`;
     });

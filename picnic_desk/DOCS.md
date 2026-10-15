@@ -155,3 +155,11 @@ What goes where:
   Assistant that page may ask you to log in or show an error; the order is
   confirmed by the Picnic tab you kept open, so close the bank's tab.
 - Not here: wallet, Family account, friend discount, shopping reminder.
+
+## License
+
+Picnic Desk is free software under the GNU Affero General Public License
+v3.0, because it contains picnic-web, which uses that license. The source is
+at the address under **Website** on the app's page in Home Assistant. The
+licenses of everything the app contains are in `THIRD_PARTY_LICENSES.txt` in
+the app's image.

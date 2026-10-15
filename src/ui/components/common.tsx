@@ -15,13 +15,14 @@ import {
 
 import type { Badge as BadgeData } from "@/lib/core/types";
 
+import { picnicInk, picnicLabel } from "../lib/colour";
 import { useT } from "../state/session";
 
 // ─── Money and dates ─────────────────────────────────────────────────────────
 
 /** Euro amounts are written the Picnic way for the country ("€ 1,39" in Dutch and English). */
 const MONEY_LOCALES = { en: "nl-NL", nl: "nl-NL", de: "de-DE", fr: "fr-FR" } as const;
-export const DATE_LOCALES = { en: "en-GB", nl: "nl-NL", de: "de-DE", fr: "fr-FR" } as const;
+const DATE_LOCALES = { en: "en-GB", nl: "nl-NL", de: "de-DE", fr: "fr-FR" } as const;
 
 export function useMoney() {
   const { language } = useT();
@@ -57,8 +58,9 @@ export function useDates() {
 
 export function Price({ cents, was, color }: { cents: number; was?: number | null; color?: string | null }) {
   const money = useMoney();
+  const ink = picnicInk(color);
   const price = (
-    <span className="price" style={color ? { color } : undefined}>
+    <span className={`price ${ink.className ?? ""}`} style={ink.style}>
       {money(cents)}
     </span>
   );
@@ -72,11 +74,20 @@ export function Price({ cents, was, color }: { cents: number; was?: number | nul
 }
 
 export function Badge({ badge }: { badge: BadgeData }) {
-  const style =
-    badge.backgroundColor || badge.textColor ? { backgroundColor: badge.backgroundColor, color: badge.textColor } : undefined;
+  const look = picnicLabel(badge.textColor, badge.backgroundColor);
   return (
-    <span className={`offer offer-${badge.variant}`} style={style}>
+    <span className={`offer offer-${badge.variant} ${look.className ?? ""}`} style={look.style}>
       {badge.text}
+    </span>
+  );
+}
+
+/** An offer label in Picnic's own colours. */
+export function PicnicLabel({ text, fg, bg }: { text: string; fg?: string | null; bg?: string | null }) {
+  const look = picnicLabel(fg, bg);
+  return (
+    <span className={`offer ${look.className ?? ""}`} style={look.style}>
+      {text}
     </span>
   );
 }

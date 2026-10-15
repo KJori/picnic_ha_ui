@@ -456,6 +456,33 @@ describe("the desk's own routes", () => {
     assert.ok(picnic.seen.length > calls);
   });
 
+  test("bought before: when Picnic fails, the last list still shows; without one, the failure is passed on", async () => {
+    picnic.on("POST", "/deliveries/summary", json({ error: { message: "busy" } }, { status: 503 }));
+    const none = await desk.get("/api/desk/history");
+    assert.ok(none.status >= 400, `failure passed on, got ${none.status}`);
+    const old = { builtAt: "2026-01-01T00:00:00.000Z", deliveries: 1, items: [] };
+    writeFileSync(join(desk.dataDir, "history.json"), JSON.stringify(old));
+    const kept = await desk.get("/api/desk/history?refresh=1");
+    assert.equal(kept.status, 200);
+    assert.deepEqual(kept.body, old, "an old list beats none");
+  });
+
+  test("shortcuts: a list that is too long or malformed is refused, and nothing changes", async () => {
+    const before = (await desk.get("/api/desk/shortcuts")).body.shortcuts;
+    const tooMany = Array.from({ length: 25 }, (_, i) => ({ label: `s${i}`, query: `q${i}` }));
+    for (const bad of [tooMany, [{ label: "", query: "x" }], [{ label: "x".repeat(41), query: "x" }], "nope", [{ label: "x" }]]) {
+      assert.equal((await desk.post("/api/desk/shortcuts", { shortcuts: bad }, "PUT")).status, 400, JSON.stringify(bad).slice(0, 40));
+    }
+    assert.equal((await desk.post("/api/desk/shortcuts", "not json", "PUT")).status, 400);
+    assert.deepEqual((await desk.get("/api/desk/shortcuts")).body.shortcuts, before);
+  });
+
+  test("a recipe price is only worked out for a recipe id", async () => {
+    for (const bad of ["", "abc", "../../etc", "0123456789abcdef0123456X"]) {
+      assert.equal((await desk.get(`/api/desk/recipe-price?id=${encodeURIComponent(bad)}`)).status, 400, bad);
+    }
+  });
+
   test("bought before: a list still being built when signing out is not kept", async () => {
     let release: () => void = () => {};
     const held = new Promise<void>((resolve) => (release = resolve));

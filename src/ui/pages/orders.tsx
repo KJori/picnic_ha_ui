@@ -16,6 +16,7 @@ import { parseDeliveryTracking } from "@/lib/delivery/parse-delivery-tracking";
 import { Lines, Sums } from "../components/basket";
 import { Confirm, Hint, Loaded, useDates, useLoad, useMoney, useTitle, useToast } from "../components/common";
 import { api } from "../lib/api";
+import { picnicInk } from "../lib/colour";
 import { back, href, navigate, type Route } from "../lib/router";
 import { cartModel } from "../state/cart";
 import { useT } from "../state/session";
@@ -352,6 +353,7 @@ function TrackingPanel({ tracking }: { tracking: DeliveryTrackingData }) {
 
 /** The van's route as a line, with where it is now and where it goes. No map tiles: nothing leaves the page. */
 function RouteSketch({ tracking }: { tracking: DeliveryTrackingData }) {
+  const { d } = useT();
   const points = tracking.route;
   const target = tracking.destination;
   const lats = [...points.map((p) => p.lat), ...(target ? [target.lat] : [])];
@@ -364,7 +366,7 @@ function RouteSketch({ tracking }: { tracking: DeliveryTrackingData }) {
   const path = points.map((p, i) => `${i ? "L" : "M"}${x(p.lng).toFixed(1)},${y(p.lat).toFixed(1)}`).join(" ");
   const here = tracking.currentPosition;
   return (
-    <svg className="route" viewBox="0 0 200 200" role="img" aria-label="Route">
+    <svg className="route" viewBox="0 0 200 200" role="img" aria-label={d.routeMap}>
       <path d={path} fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" opacity="0.35" />
       {target && <circle cx={x(target.lng)} cy={y(target.lat)} r="7" className="route-home" />}
       {here && <circle cx={x(here.lng)} cy={y(here.lat)} r="6" className="route-van" />}
@@ -399,7 +401,7 @@ export function ParcelsView() {
                       {section.parcels.map((parcel) => (
                         <tr key={parcel.id} onClick={() => parcel.parcelId && navigate(`/parcels/${encodeURIComponent(parcel.parcelId)}`)}>
                           <td>{parcel.parcelId ? <a href={href(`/parcels/${encodeURIComponent(parcel.parcelId)}`)}>{parcel.name}</a> : parcel.name}</td>
-                          <td style={parcel.statusColor ? { color: parcel.statusColor } : undefined}>{parcel.statusText}</td>
+                          <td {...picnicInk(parcel.statusColor)}>{parcel.statusText}</td>
                           <td className="number">{parcel.dateText}</td>
                         </tr>
                       ))}

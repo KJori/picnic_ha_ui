@@ -10,7 +10,7 @@ import { renderMarkdownBold } from "@/lib/pml/render-markdown-bold";
 import { api } from "../lib/api";
 import { useCart } from "../state/cart";
 import { useT } from "../state/session";
-import { Dialog, Img, Loaded, Price, Stepper, useLoad, useMoney } from "./common";
+import { Dialog, Img, Loaded, PicnicLabel, Price, Stepper, useLoad, useMoney } from "./common";
 import { fromSlider, ProductGrid, StarButton } from "./products";
 
 /** Icons Picnic names for highlights, as picnic-web shows them. */
@@ -113,9 +113,7 @@ function ProductView({ product }: { product: ProductDetail }) {
           {product.labels.length > 0 && (
             <p className="meta">
               {product.labels.map((label, i) => (
-                <span key={i} className="offer" style={{ color: label.textColor, backgroundColor: label.backgroundColor }}>
-                  {label.text}
-                </span>
+                <PicnicLabel key={i} text={label.text} fg={label.textColor} bg={label.backgroundColor} />
               ))}
             </p>
           )}
@@ -211,7 +209,8 @@ export function NutritionTable({ rows }: { rows: NutritionRow[] }) {
     <table className="nutrition">
       <tbody>
         {rows.map((row, i) => (
-          <tr key={i} className={row.isCategory ? "" : "sub"} style={row.backgroundColor ? { backgroundColor: row.backgroundColor } : undefined}>
+          // Picnic shades some rows for its white app; here a shade that works in both themes.
+          <tr key={i} className={`${row.isCategory ? "" : "sub"} ${row.backgroundColor ? "shaded" : ""}`}>
             <th scope="row">{row.label}</th>
             <td>{row.value ?? ""}</td>
           </tr>
@@ -234,7 +233,7 @@ export function Fold({ title, open = false, children }: { title: string; open?: 
  * Text from a fold-out section: **bold**, line breaks, and markdown tables
  * ("| a | b |" lines), which Picnic uses for nutrition and the like.
  */
-export function RichText({ text }: { text: string }) {
+function RichText({ text }: { text: string }) {
   const blocks: { table: boolean; lines: string[] }[] = [];
   for (const line of text.split("\n")) {
     const table = /^\s*\|.*\|\s*$/.test(line);

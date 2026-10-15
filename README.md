@@ -82,7 +82,7 @@ Try it without a Picnic account, against a small made-up shop:
     npm run build
     PICNIC_DEMO=1 DATA_DIR=./data node picnic_desk/dist/server.mjs
 
-then open http://localhost:8099. Any e-mail address and password work; the
+then open <http://localhost:8099>. Any e-mail address and password work; the
 password `2fa` walks through the verification-code step with code `123456`.
 
 ## Licence

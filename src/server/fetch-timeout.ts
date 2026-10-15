@@ -9,7 +9,7 @@
 const UPSTREAM_TIMEOUT_MS = 25_000;
 
 /** Picnic's API and picture servers, over https. */
-export const PICNIC_HOST = /^storefront-prod\.(nl|de|fr)\.picnicinternational\.com$/;
+const PICNIC_HOST = /^storefront-prod\.(nl|de|fr)\.picnicinternational\.com$/;
 
 type Marked = typeof fetch & { deskTimeout?: boolean; deskOnlyPicnic?: boolean };
 

@@ -75,7 +75,8 @@ export const PRODUCTS: (Product & { words: string[]; category: string })[] = INP
   imageId: img(p.id),
   displayPrice: p.price,
   originalPrice: p.was ?? null,
-  displayPriceColor: null,
+  // Picnic colours offer prices red, chosen for its white app; the dark theme must cope.
+  displayPriceColor: p.was ? "#B40117" : null,
   unitQuantity: p.unit,
   maxCount: p.max ?? 99,
   priceRanges: p.bundle ?? null,

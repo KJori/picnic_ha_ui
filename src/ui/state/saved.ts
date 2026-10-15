@@ -32,7 +32,7 @@ class Store<T> {
 const starred = new Store<SavedProduct[] | null>(null);
 let starredLoading: Promise<void> | null = null;
 
-export function loadStarred(force = false): Promise<void> {
+function loadStarred(force = false): Promise<void> {
   if (starred.value && !force) return Promise.resolve();
   starredLoading ??= api<{ products: SavedProduct[] }>("desk/saved").then((result) => {
     starredLoading = null;

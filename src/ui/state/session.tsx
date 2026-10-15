@@ -38,6 +38,17 @@ export function useT(): { t: Translations; d: DeskStrings; language: Language; c
   return { t, d, language, country };
 }
 
+const LANGUAGES: readonly Language[] = ["en", "nl", "de", "fr"];
+
+/** The first of the browser's languages this page speaks; English otherwise. */
+function browserLanguage(): Language {
+  for (const tag of navigator.languages ?? [navigator.language]) {
+    const base = tag.toLowerCase().split("-")[0] as Language;
+    if (LANGUAGES.includes(base)) return base;
+  }
+  return "en";
+}
+
 export function SessionProvider({ children }: { children: ReactNode }) {
   const [state, setState] = useState<DeskState | null>(null);
   const [failed, setFailed] = useState(false);
@@ -83,17 +94,20 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   );
 
   if (!state) {
+    // Before the app has said which language it speaks: the browser's.
+    const boot = deskStrings(browserLanguage());
+    const retry = picnicStrings(browserLanguage()).retryButton;
     return (
       <div className="boot" role="status">
         {failed ? (
           <>
-            <p>Picnic Desk is not answering.</p>
+            <p>{boot.networkError}</p>
             <button type="button" className="button" onClick={() => void refresh()}>
-              Try again
+              {retry}
             </button>
           </>
         ) : (
-          <span className="spinner" aria-label="Loading" />
+          <span className="spinner" aria-label={boot.loading} />
         )}
       </div>
     );
