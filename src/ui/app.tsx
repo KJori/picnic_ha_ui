@@ -30,6 +30,16 @@ export function App() {
 function Gate() {
   const { state } = useSession();
   const { d } = useT();
+  if (state?.notYours) {
+    return (
+      <main className="door">
+        <div className="signin" role="alert">
+          <h1>{d.notYoursTitle}</h1>
+          <p>{d.notYoursText}</p>
+        </div>
+      </main>
+    );
+  }
   return (
     <>
       {state?.signedIn ? <Desk /> : <LoginPage />}

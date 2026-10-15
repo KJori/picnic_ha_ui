@@ -77,6 +77,34 @@ one already shown, and fetches the basket again after a failure.
 - Recipe card prices are worked out two at a time and kept for a day.
 - Request bodies are capped; static files cannot leave their folder.
 
+## Security and privacy
+
+- Who: only Home Assistant's ingress gateway may connect. Ingress names the
+  Home Assistant user (`X-Remote-User-Id`, `-Name`, `-Display-Name`); those
+  headers are trusted only under the gateway rule. The user who signs in to
+  Picnic is recorded as the owner in `auth.json`; other users get 403
+  `NOT_YOUR_ACCOUNT` on every API route except `desk/state`, unless named in
+  `allowed_users` (`Desk.mayUse`).
+- Changes: non-GET requests need the page's `X-Desk-Base` header (forcing a
+  CORS preflight that is never granted) and are refused when the browser
+  says they come from another site (`Sec-Fetch-Site`).
+- What picnic-web's code sees: only `content-type` and `accept-language` of
+  the browser's headers; cookies, Home Assistant's headers and any
+  authorization stay out. Its cookies come from the server-side session.
+- Outbound: `installOnlyPicnic` refuses any request that is not https to
+  `storefront-prod.{nl,de,fr}.picnicinternational.com`, before it is sent.
+- Answers: CSP without inline script or style, `object-src 'none'`,
+  `frame-ancestors 'self'`, `X-Frame-Options`, `Cross-Origin-Resource-Policy:
+  same-origin`, a Permissions-Policy that turns off device access,
+  `Referrer-Policy: no-referrer`, `no-store` on API answers.
+- At rest: `auth.json` is mode 600 and, with the order history and the
+  pictures, left out of backups (`backup_exclude`).
+- Payment: the bank's address is opened only when it is https (or the app's
+  own way back).
+- Limit: under ingress every app shares Home Assistant's origin, so a page of
+  another app could call this one as the same user. Nothing secret is kept in
+  the browser for that reason.
+
 ## Tests
 
 - `npm test`: the stand-in, the route table, the server around the real

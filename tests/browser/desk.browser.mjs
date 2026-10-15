@@ -108,7 +108,11 @@ async function signIn(page) {
 }
 
 const shot = async (page, name) => SHOTS && page.screenshot({ path: join(SHOTS, `${name}.png`), fullPage: true });
-const receiptTotal = (page) => page.locator(".receipt .total span").last().textContent();
+/** The receipt's total once every click has been answered (amounts show at once, the total follows Picnic). */
+const receiptTotal = async (page) => {
+  await page.locator('.till .receipt[aria-busy="false"]').waitFor();
+  return page.locator(".receipt .total span").last().textContent();
+};
 const clean = (page) => assert.deepEqual(page.problems, []);
 /** The amount a stepper shows, or 0 when the product is not in the basket. */
 const amount = async (locator) => ((await locator.count()) ? Number(await locator.first().textContent()) : 0);
@@ -131,8 +135,18 @@ describe("Picnic Desk in a browser", () => {
     await page.locator(".receipt").waitFor();
     await page.getByText("Signed in as Demo Klant.").waitFor();
     await shot(page, "01-home");
+    // What the page keeps in the browser goes with signing out; Home Assistant's own storage stays.
+    await page.evaluate(() => {
+      localStorage.setItem("picnic_desk_list", "2 havermelk");
+      localStorage.setItem("picnic_desk_meal_plan", "{}");
+      localStorage.setItem("hassTokens", "not ours");
+    });
     await page.locator(".receipt").getByRole("button", { name: "Sign out" }).click();
     await page.getByRole("button", { name: "Sign in", exact: true }).waitFor();
+    assert.deepEqual(
+      await page.evaluate(() => Object.keys(localStorage).sort()),
+      ["hassTokens"]
+    );
     clean(page);
     await page.context().close();
   });

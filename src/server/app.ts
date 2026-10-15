@@ -11,7 +11,7 @@ import { NextRequest, NextResponse } from "next/server";
 
 import { DeskRoutes, type Language } from "./desk-routes";
 import { type RouteEntry, Router } from "./router";
-import { Session, type SetCookie } from "./session";
+import { type HaUser, Session, type SetCookie } from "./session";
 import { Store } from "./store";
 import type { CountryCode } from "@/lib/core/types";
 
@@ -35,18 +35,34 @@ const TYPES: Record<string, string> = {
 /**
  * The page loads nothing from outside, pictures included: those come through
  * this server (src/server/pictures.ts). Under ingress the page sits in a frame
- * of Home Assistant's own page, which has the same origin.
+ * of Home Assistant's own page, which has the same origin. No inline script
+ * or style: React sets styles through the DOM, which this allows.
  */
 const PAGE_POLICY = [
   "default-src 'self'",
   "img-src 'self' data:",
-  "style-src 'self' 'unsafe-inline'",
+  "style-src 'self'",
   "script-src 'self'",
   "connect-src 'self'",
+  "object-src 'none'",
   "frame-ancestors 'self'",
   "base-uri 'none'",
   "form-action 'self'",
 ].join("; ");
+
+/** Nothing on this page needs the camera, the microphone, the location or the like. */
+const PERMISSIONS_POLICY =
+  "camera=(), microphone=(), geolocation=(), payment=(), usb=(), serial=(), bluetooth=(), midi=(), " +
+  "magnetometer=(), gyroscope=(), accelerometer=(), display-capture=(), clipboard-read=()";
+
+/** The only request headers picnic-web's routes may see; cookies and Home Assistant's own headers stay out. */
+const PASSED_HEADERS = ["content-type", "accept-language"];
+
+/** Answers for someone Home Assistant let in but who may not use this Picnic account. */
+const NOT_YOURS = {
+  error: "This Picnic account was connected by another Home Assistant user.",
+  code: "NOT_YOUR_ACCOUNT",
+} as const;
 
 export type DeskOptions = {
   dataDir: string;
@@ -54,8 +70,15 @@ export type DeskOptions = {
   country: CountryCode;
   language: Language;
   ingressOnly: boolean;
+  /** The address Home Assistant's ingress gateway connects from; tests set their own. */
+  gateway?: string;
   version: string;
   routes: RouteEntry[];
+  /**
+   * Home Assistant user names (besides the one who signed in to Picnic) who
+   * may use the Picnic account here.
+   */
+  allowedUsers?: string[];
   /** Answers instead of picnic-web's routes; the demo shop. */
   demo?: (request: NextRequest, segments: string[]) => Promise<NextResponse<unknown> | null>;
   /** The size limit of the picture folder; DEFAULT_CACHE_MB when left out. */
@@ -92,7 +115,7 @@ export class Desk {
   };
 
   async #handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
-    if (this.options.ingressOnly && !fromGateway(req.socket.remoteAddress)) {
+    if (this.options.ingressOnly && !fromGateway(req.socket.remoteAddress, this.options.gateway)) {
       send(res, 403, text("Only Home Assistant may open this app."));
       return;
     }
@@ -112,7 +135,7 @@ export class Desk {
     }
 
     if (segments[0] === "api") {
-      await this.#api(req, res, method, url, segments.slice(1));
+      await this.#api(req, res, method, url, segments.slice(1), this.haUser(req));
       return;
     }
 
@@ -164,12 +187,27 @@ export class Desk {
     });
   }
 
-  async #api(req: IncomingMessage, res: ServerResponse, method: string, url: URL, segments: string[]): Promise<void> {
+  async #api(
+    req: IncomingMessage,
+    res: ServerResponse,
+    method: string,
+    url: URL,
+    segments: string[],
+    user: HaUser | null
+  ): Promise<void> {
     // Changes need a header that only this app's page sends. Another site
     // cannot add one without the browser asking this server first, which it
     // never allows, so a page elsewhere cannot fill or empty the basket.
-    if (method !== "GET" && method !== "HEAD" && typeof req.headers["x-desk-base"] !== "string") {
+    // Browsers also say where a request comes from; one from another site is
+    // refused outright.
+    const writing = method !== "GET" && method !== "HEAD";
+    const site = req.headers["sec-fetch-site"];
+    if (writing && (typeof req.headers["x-desk-base"] !== "string" || (site !== undefined && site !== "same-origin"))) {
       send(res, 403, json({ error: "Changes are only accepted from Picnic Desk's own page." }));
+      return;
+    }
+    if (!this.mayUse(user) && segments.join("/") !== "desk/state") {
+      send(res, 403, json(NOT_YOURS));
       return;
     }
     let body: string | null;
@@ -181,7 +219,8 @@ export class Desk {
     }
 
     const headers: Record<string, string> = {};
-    for (const [name, value] of Object.entries(req.headers)) {
+    for (const name of PASSED_HEADERS) {
+      const value = req.headers[name];
       if (typeof value === "string") headers[name] = value;
     }
     const request = new NextRequest(`${INTERNAL_BASE}${url.pathname}${url.search}`, {
@@ -192,13 +231,43 @@ export class Desk {
       origin: pageBase(req.headers["x-desk-base"]),
     });
 
-    const response = await this.dispatch(request, segments);
+    const response = await this.dispatch(request, segments, user);
     await this.#reply(res, response);
   }
 
+  /**
+   * Who Home Assistant says is using the page. Only trusted when only Home
+   * Assistant's gateway can connect: anyone else could send these headers.
+   */
+  haUser(req: IncomingMessage): HaUser | null {
+    if (!this.options.ingressOnly) return null;
+    const one = (name: string) => {
+      const value = req.headers[name];
+      return typeof value === "string" ? value.trim() : "";
+    };
+    const id = one("x-remote-user-id");
+    if (!id) return null;
+    const name = one("x-remote-user-name");
+    return { id, name, displayName: one("x-remote-user-display-name") || name };
+  }
+
+  /**
+   * The Picnic account belongs to the Home Assistant user who signed in to it
+   * here, and to the users named in the app's `allowed_users` option.
+   * Signing in is open to everyone; a session from before this rule, or a
+   * request Home Assistant did not name a user for, is not restricted.
+   */
+  mayUse(user: HaUser | null): boolean {
+    const owner = this.session.owner;
+    if (!this.session.signedIn || !owner || !user) return true;
+    if (user.id === owner.id) return true;
+    const allowed = (this.options.allowedUsers ?? []).map((name) => name.trim().toLowerCase()).filter(Boolean);
+    return user.name !== "" && allowed.includes(user.name.toLowerCase());
+  }
+
   /** Answer one API request; also used inside the app (self-check, bought before). */
-  async dispatch(request: NextRequest, segments: string[]): Promise<Response> {
-    if (segments[0] === "desk") return this.desk.handle(request, segments.slice(1));
+  async dispatch(request: NextRequest, segments: string[], user: HaUser | null = null): Promise<Response> {
+    if (segments[0] === "desk") return this.desk.handle(request, segments.slice(1), user);
 
     const isAuthRoute = segments[0] === "auth";
     if (isAuthRoute) request = await prepareAuthRequest(this, request, segments[1]);
@@ -226,7 +295,7 @@ export class Desk {
     }
     if (!response) return NextResponse.json({ error: "Not found." }, { status: 404 });
 
-    if (isAuthRoute) response = await finishAuthResponse(this, response, segments[1]);
+    if (isAuthRoute) response = await finishAuthResponse(this, response, segments[1], user);
     else this.#noteTokenState(response);
     return response;
   }
@@ -295,10 +364,17 @@ async function prepareAuthRequest(desk: Desk, request: NextRequest, step: string
   });
 }
 
-async function finishAuthResponse(desk: Desk, response: Response, step: string | undefined): Promise<Response> {
+async function finishAuthResponse(
+  desk: Desk,
+  response: Response,
+  step: string | undefined,
+  user: HaUser | null
+): Promise<Response> {
   const before = desk.session.token;
   desk.session.apply(readSetCookies(response));
   if (desk.session.signedIn && response.ok) desk.expired = false;
+  // Whoever signed in owns the account here from now on.
+  if (desk.session.signedIn && desk.session.token !== before) desk.session.setOwner(user);
   // Signed out, or in as someone else: nothing of the old account may show.
   if (before !== null && desk.session.token !== before) desk.desk.forgetAccountData();
   if (step !== "login-credentials") return stripCookies(response);
@@ -346,8 +422,8 @@ function ifNoneMatch(header: string | undefined, etag: string): boolean {
   });
 }
 
-export function fromGateway(address: string | undefined): boolean {
-  return address === INGRESS_GATEWAY || address === `::ffff:${INGRESS_GATEWAY}`;
+export function fromGateway(address: string | undefined, gateway = INGRESS_GATEWAY): boolean {
+  return address === gateway || address === `::ffff:${gateway}`;
 }
 
 /**
@@ -396,6 +472,10 @@ function send(res: ServerResponse, status: number, reply: Reply, extra: Record<s
   res.writeHead(status, {
     "x-content-type-options": "nosniff",
     "referrer-policy": "no-referrer",
+    // Other sites may not embed or read anything from here (pictures and answers included).
+    "cross-origin-resource-policy": "same-origin",
+    "x-frame-options": "SAMEORIGIN",
+    "permissions-policy": PERMISSIONS_POLICY,
     ...reply.headers,
     ...extra,
   });

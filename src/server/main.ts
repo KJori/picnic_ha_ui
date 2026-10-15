@@ -18,7 +18,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { Desk } from "./app";
-import { installFetchTimeout } from "./fetch-timeout";
+import { installFetchTimeout, installOnlyPicnic } from "./fetch-timeout";
 import { LANGUAGES, type Language } from "./desk-routes";
 import { demoShop } from "./demo/shop";
 import { DEFAULT_CACHE_MB } from "./pictures";
@@ -48,9 +48,13 @@ export function startDesk(env: NodeJS.ProcessEnv = process.env) {
   const wantedLanguage = String(env.DESK_LANGUAGE || options.language || "en").toLowerCase();
   const language = (LANGUAGES as readonly string[]).includes(wantedLanguage) ? (wantedLanguage as Language) : "en";
 
+  const allowedUsers = Array.isArray(options.allowed_users)
+    ? options.allowed_users.filter((name): name is string => typeof name === "string" && name.trim() !== "")
+    : [];
   const wantedCache = Number(env.PICTURE_CACHE_MB || options.picture_cache_mb || DEFAULT_CACHE_MB);
   const pictureCacheMb = Number.isFinite(wantedCache) && wantedCache >= 0 ? wantedCache : DEFAULT_CACHE_MB;
 
+  installOnlyPicnic();
   installFetchTimeout();
   // An app that runs for months logs a stray failure instead of stopping on it.
   process.on("unhandledRejection", (reason) => {
@@ -62,6 +66,7 @@ export function startDesk(env: NodeJS.ProcessEnv = process.env) {
     country,
     language,
     pictureCacheMb,
+    allowedUsers,
     ingressOnly: env.INGRESS_ONLY === "1",
     version: typeof DESK_VERSION === "string" ? DESK_VERSION : "dev",
     routes: VENDORED_ROUTES,

@@ -17,7 +17,15 @@ const FILE = "auth.json";
 /** A verification code must be entered within this time after it is sent. */
 const PARTIAL_TOKEN_LIFETIME_MS = 15 * 60 * 1000;
 
-type Saved = { token: string; country: CountryCode; since: string };
+/** The Home Assistant user who signed in to Picnic here; their account, their basket. */
+export type HaUser = { id: string; name: string; displayName: string };
+
+type Saved = { token: string; country: CountryCode; since: string; owner?: HaUser };
+
+const readOwner = (value: unknown): HaUser | undefined =>
+  isObject(value) && typeof value.id === "string" && value.id && typeof value.name === "string"
+    ? { id: value.id, name: value.name, displayName: typeof value.displayName === "string" ? value.displayName : value.name }
+    : undefined;
 
 export const isCountry = (value: unknown): value is CountryCode =>
   typeof value === "string" && (SUPPORTED_COUNTRY_CODES as readonly string[]).includes(value);
@@ -29,6 +37,7 @@ const readSaved = (value: unknown, country: CountryCode): Saved | null => {
     token: value.token,
     country: isCountry(value.country) ? value.country : country,
     since: typeof value.since === "string" ? value.since : "",
+    owner: readOwner(value.owner),
   };
 };
 
@@ -107,5 +116,17 @@ export class Session {
 
   get since(): string | null {
     return this.#saved?.since ?? null;
+  }
+
+  /** Who signed in to Picnic here; undefined when Home Assistant did not say (or before 1.0). */
+  get owner(): HaUser | undefined {
+    return this.#saved?.owner;
+  }
+
+  setOwner(owner: HaUser | null): void {
+    if (!this.#saved) return;
+    const { owner: _old, ...rest } = this.#saved;
+    this.#saved = owner ? { ...rest, owner } : rest;
+    this.store.write(FILE, this.#saved);
   }
 }

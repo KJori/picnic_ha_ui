@@ -146,6 +146,8 @@ const desk = {
   networkError: "Picnic Desk did not answer. Check that the app is running.",
   notFound: "This page does not exist.",
   viewBroke: "Something went wrong here: {message}",
+  notYoursTitle: "Not your Picnic account",
+  notYoursText: "Another Home Assistant user connected their Picnic account here. They can let you use it by adding your Home Assistant user name under allowed_users in the app's configuration.",
   signOutFailed: "Signing out did not work. Please try again.",
 };
 
@@ -274,6 +276,8 @@ const nl: DeskStrings = {
   networkError: "Picnic Desk antwoordt niet. Controleer of de app draait.",
   notFound: "Deze pagina bestaat niet.",
   viewBroke: "Hier ging iets mis: {message}",
+  notYoursTitle: "Niet jouw Picnic-account",
+  notYoursText: "Een andere Home Assistant-gebruiker heeft hier zijn Picnic-account gekoppeld. Die kan je toegang geven door jouw Home Assistant-gebruikersnaam toe te voegen onder allowed_users in de configuratie van de app.",
   signOutFailed: "Uitloggen lukte niet. Probeer het opnieuw.",
 };
 
@@ -400,6 +404,8 @@ const de: DeskStrings = {
   networkError: "Picnic Desk antwortet nicht. Prüfe, ob die App läuft.",
   notFound: "Diese Seite gibt es nicht.",
   viewBroke: "Hier ist etwas schiefgegangen: {message}",
+  notYoursTitle: "Nicht dein Picnic-Konto",
+  notYoursText: "Ein anderer Home Assistant-Benutzer hat hier sein Picnic-Konto verbunden. Er kann dir Zugang geben, indem er deinen Home Assistant-Benutzernamen unter allowed_users in der Konfiguration der App einträgt.",
   signOutFailed: "Abmelden hat nicht geklappt. Bitte versuche es noch einmal.",
 };
 
@@ -526,6 +532,8 @@ const fr: DeskStrings = {
   networkError: "Picnic Desk ne répond pas. Vérifiez que l'app tourne.",
   notFound: "Cette page n'existe pas.",
   viewBroke: "Un problème est survenu ici : {message}",
+  notYoursTitle: "Ce n'est pas votre compte Picnic",
+  notYoursText: "Un autre utilisateur de Home Assistant a connecté son compte Picnic ici. Il peut vous y donner accès en ajoutant votre nom d'utilisateur Home Assistant sous allowed_users dans la configuration de l'app.",
   signOutFailed: "La déconnexion n'a pas fonctionné. Veuillez réessayer.",
 };
 

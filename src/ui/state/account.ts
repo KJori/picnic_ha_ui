@@ -36,9 +36,26 @@ export function useProfileName(): string | null {
   return useSyncExternalStore(subscribe, () => profileName);
 }
 
-export function forgetAccount(): void {
+/** What this page keeps in the browser: a pasted list, a meal plan, a payment being watched. */
+const BROWSER_KEY_PREFIX = "picnic_desk_";
+
+/**
+ * Forget the account's data in the page. Signing out (`signingOut`) also
+ * clears what this page keeps in the browser, which another Home Assistant
+ * user on the same browser could otherwise read.
+ */
+export function forgetAccount({ signingOut = false }: { signingOut?: boolean } = {}): void {
   profileName = null;
   changed();
   cartModel.reset();
   forgetSaved();
+  if (signingOut) {
+    try {
+      for (const key of Object.keys(localStorage)) {
+        if (key.startsWith(BROWSER_KEY_PREFIX)) localStorage.removeItem(key);
+      }
+    } catch {
+      // storage not available: nothing kept
+    }
+  }
 }

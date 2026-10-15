@@ -31,6 +31,12 @@ it does what picnic-web does, with the same handling of Picnic's answers.
   made for a phone; here its parts are laid out for a desk: aisles beside the
   shelf, the week of delivery times in one grid, orders in a table.
 - New: Home Assistant restarts the app when it stops answering (watchdog).
+- New: the Picnic account belongs to the Home Assistant user who signed in to
+  it; others see "Not your Picnic account" unless named in `allowed_users`.
+- New: backups no longer contain the Picnic session, the order history or
+  pictures; signing out also clears the page's data from that browser.
+- New: the app's server only talks to Picnic; the page refuses inline styles
+  and scripts and cannot be embedded or read by other sites.
 - Changed: the app now runs on Node.js. Your Picnic session, saved products
   and shortcuts carry over.
 

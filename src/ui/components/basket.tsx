@@ -293,7 +293,7 @@ export function Receipt() {
       toast(d.signOutFailed, "error");
       return;
     }
-    forgetAccount();
+    forgetAccount({ signingOut: true });
     await session.refresh();
   };
 

@@ -5758,11 +5758,11 @@ var DeskRoutes = class {
    * nothing of one account is written after signing out of it.
    */
   #account = 0;
-  async handle(request, segments) {
+  async handle(request, segments, user = null) {
     const route = `${request.method} ${segments.join("/")}`;
     switch (route) {
       case "GET state":
-        return NextResponse.json(this.state());
+        return NextResponse.json(this.state(user));
       case "POST code":
         return this.#resendCode(request);
       case "GET image":
@@ -5787,9 +5787,22 @@ var DeskRoutes = class {
     const known = ["state", "code", "image", "saved", "shortcuts", "history", "selfcheck", "raw", "recipe-price"];
     return known.includes(segments.join("/")) ? error("Method not allowed.", 405) : error("Not found.", 404);
   }
-  state() {
+  state(user = null) {
     const { session } = this.desk;
+    if (!this.desk.mayUse(user)) {
+      return {
+        notYours: true,
+        signedIn: false,
+        expired: false,
+        awaitingCode: false,
+        country: session.country,
+        language: this.desk.options.language,
+        demo: Boolean(this.desk.options.demo),
+        version: this.desk.options.version
+      };
+    }
     return {
+      notYours: false,
       signedIn: session.signedIn && !this.desk.expired,
       expired: session.signedIn && this.desk.expired,
       awaitingCode: session.partialToken() !== null,
@@ -6046,6 +6059,17 @@ var DeskRoutes = class {
       const profile = await get("user/profile");
       return profile.name ? `Signed in as ${profile.name}` : "Signed in";
     });
+    await run("Who may use it", async () => {
+      const owner = this.desk.session.owner;
+      const others = (this.desk.options.allowedUsers ?? []).filter((name) => name.trim());
+      if (!this.desk.options.ingressOnly) return "anyone who can reach the app (not running under Home Assistant)";
+      if (!owner) {
+        throw new Error(
+          "anyone in Home Assistant: this sign-in is not tied to a Home Assistant user. Sign out and in again to tie it to you."
+        );
+      }
+      return `${owner.displayName || owner.name}${others.length ? ` and ${others.join(", ")}` : " only"}`;
+    });
     await run("Search", async () => {
       const word = SELF_CHECK_WORD[this.desk.session.country];
       const result = await get(`search?${new URLSearchParams({ q: word })}`);
@@ -6224,13 +6248,15 @@ function readCountryCode(request) {
 // src/server/session.ts
 var FILE = "auth.json";
 var PARTIAL_TOKEN_LIFETIME_MS = 15 * 60 * 1e3;
+var readOwner = (value) => isObject(value) && typeof value.id === "string" && value.id && typeof value.name === "string" ? { id: value.id, name: value.name, displayName: typeof value.displayName === "string" ? value.displayName : value.name } : void 0;
 var isCountry = (value) => typeof value === "string" && SUPPORTED_COUNTRY_CODES.includes(value);
 var readSaved = (value, country) => {
   if (!isObject(value) || typeof value.token !== "string" || !value.token) return null;
   return {
     token: value.token,
     country: isCountry(value.country) ? value.country : country,
-    since: typeof value.since === "string" ? value.since : ""
+    since: typeof value.since === "string" ? value.since : "",
+    owner: readOwner(value.owner)
   };
 };
 var Session = class {
@@ -6298,6 +6324,16 @@ var Session = class {
   get since() {
     return this.#saved?.since ?? null;
   }
+  /** Who signed in to Picnic here; undefined when Home Assistant did not say (or before 1.0). */
+  get owner() {
+    return this.#saved?.owner;
+  }
+  setOwner(owner) {
+    if (!this.#saved) return;
+    const { owner: _old, ...rest } = this.#saved;
+    this.#saved = owner ? { ...rest, owner } : rest;
+    this.store.write(FILE, this.#saved);
+  }
 };
 
 // src/server/app.ts
@@ -6318,13 +6354,20 @@ var TYPES2 = {
 var PAGE_POLICY = [
   "default-src 'self'",
   "img-src 'self' data:",
-  "style-src 'self' 'unsafe-inline'",
+  "style-src 'self'",
   "script-src 'self'",
   "connect-src 'self'",
+  "object-src 'none'",
   "frame-ancestors 'self'",
   "base-uri 'none'",
   "form-action 'self'"
 ].join("; ");
+var PERMISSIONS_POLICY = "camera=(), microphone=(), geolocation=(), payment=(), usb=(), serial=(), bluetooth=(), midi=(), magnetometer=(), gyroscope=(), accelerometer=(), display-capture=(), clipboard-read=()";
+var PASSED_HEADERS = ["content-type", "accept-language"];
+var NOT_YOURS = {
+  error: "This Picnic account was connected by another Home Assistant user.",
+  code: "NOT_YOUR_ACCOUNT"
+};
 var Desk = class {
   constructor(options) {
     this.options = options;
@@ -6351,7 +6394,7 @@ var Desk = class {
     }
   };
   async #handle(req, res) {
-    if (this.options.ingressOnly && !fromGateway(req.socket.remoteAddress)) {
+    if (this.options.ingressOnly && !fromGateway(req.socket.remoteAddress, this.options.gateway)) {
       send(res, 403, text2("Only Home Assistant may open this app."));
       return;
     }
@@ -6369,7 +6412,7 @@ var Desk = class {
       return;
     }
     if (segments[0] === "api") {
-      await this.#api(req, res, method, url, segments.slice(1));
+      await this.#api(req, res, method, url, segments.slice(1), this.haUser(req));
       return;
     }
     if (method !== "GET" && method !== "HEAD") {
@@ -6413,9 +6456,15 @@ var Desk = class {
       headers: headOnly ? { ...headers, "content-length": String(data.length) } : headers
     });
   }
-  async #api(req, res, method, url, segments) {
-    if (method !== "GET" && method !== "HEAD" && typeof req.headers["x-desk-base"] !== "string") {
+  async #api(req, res, method, url, segments, user) {
+    const writing = method !== "GET" && method !== "HEAD";
+    const site = req.headers["sec-fetch-site"];
+    if (writing && (typeof req.headers["x-desk-base"] !== "string" || site !== void 0 && site !== "same-origin")) {
       send(res, 403, json({ error: "Changes are only accepted from Picnic Desk's own page." }));
+      return;
+    }
+    if (!this.mayUse(user) && segments.join("/") !== "desk/state") {
+      send(res, 403, json(NOT_YOURS));
       return;
     }
     let body;
@@ -6426,7 +6475,8 @@ var Desk = class {
       return;
     }
     const headers = {};
-    for (const [name, value] of Object.entries(req.headers)) {
+    for (const name of PASSED_HEADERS) {
+      const value = req.headers[name];
       if (typeof value === "string") headers[name] = value;
     }
     const request = new NextRequest(`${INTERNAL_BASE}${url.pathname}${url.search}`, {
@@ -6436,12 +6486,40 @@ var Desk = class {
       cookies: this.session.cookies(),
       origin: pageBase(req.headers["x-desk-base"])
     });
-    const response = await this.dispatch(request, segments);
+    const response = await this.dispatch(request, segments, user);
     await this.#reply(res, response);
   }
+  /**
+   * Who Home Assistant says is using the page. Only trusted when only Home
+   * Assistant's gateway can connect: anyone else could send these headers.
+   */
+  haUser(req) {
+    if (!this.options.ingressOnly) return null;
+    const one = (name2) => {
+      const value = req.headers[name2];
+      return typeof value === "string" ? value.trim() : "";
+    };
+    const id = one("x-remote-user-id");
+    if (!id) return null;
+    const name = one("x-remote-user-name");
+    return { id, name, displayName: one("x-remote-user-display-name") || name };
+  }
+  /**
+   * The Picnic account belongs to the Home Assistant user who signed in to it
+   * here, and to the users named in the app's `allowed_users` option.
+   * Signing in is open to everyone; a session from before this rule, or a
+   * request Home Assistant did not name a user for, is not restricted.
+   */
+  mayUse(user) {
+    const owner = this.session.owner;
+    if (!this.session.signedIn || !owner || !user) return true;
+    if (user.id === owner.id) return true;
+    const allowed = (this.options.allowedUsers ?? []).map((name) => name.trim().toLowerCase()).filter(Boolean);
+    return user.name !== "" && allowed.includes(user.name.toLowerCase());
+  }
   /** Answer one API request; also used inside the app (self-check, bought before). */
-  async dispatch(request, segments) {
-    if (segments[0] === "desk") return this.desk.handle(request, segments.slice(1));
+  async dispatch(request, segments, user = null) {
+    if (segments[0] === "desk") return this.desk.handle(request, segments.slice(1), user);
     const isAuthRoute = segments[0] === "auth";
     if (isAuthRoute) request = await prepareAuthRequest(this, request, segments[1]);
     let response = null;
@@ -6465,7 +6543,7 @@ var Desk = class {
       return NextResponse.json({ error: "Picnic could not be reached. Please try again." }, { status: 502 });
     }
     if (!response) return NextResponse.json({ error: "Not found." }, { status: 404 });
-    if (isAuthRoute) response = await finishAuthResponse(this, response, segments[1]);
+    if (isAuthRoute) response = await finishAuthResponse(this, response, segments[1], user);
     else this.#noteTokenState(response);
     return response;
   }
@@ -6521,10 +6599,11 @@ async function prepareAuthRequest(desk, request, step) {
     origin: request.nextUrl.origin
   });
 }
-async function finishAuthResponse(desk, response, step) {
+async function finishAuthResponse(desk, response, step, user) {
   const before = desk.session.token;
   desk.session.apply(readSetCookies(response));
   if (desk.session.signedIn && response.ok) desk.expired = false;
+  if (desk.session.signedIn && desk.session.token !== before) desk.session.setOwner(user);
   if (before !== null && desk.session.token !== before) desk.desk.forgetAccountData();
   if (step !== "login-credentials") return stripCookies(response);
   const body = await response.clone().json().catch(() => null);
@@ -6563,8 +6642,8 @@ function ifNoneMatch(header, etag) {
     return value === etag || value === "*";
   });
 }
-function fromGateway(address) {
-  return address === INGRESS_GATEWAY || address === `::ffff:${INGRESS_GATEWAY}`;
+function fromGateway(address, gateway = INGRESS_GATEWAY) {
+  return address === gateway || address === `::ffff:${gateway}`;
 }
 function pageBase(value) {
   if (typeof value !== "string" || value.length > 500) return void 0;
@@ -6600,6 +6679,10 @@ function send(res, status, reply, extra = {}) {
   res.writeHead(status, {
     "x-content-type-options": "nosniff",
     "referrer-policy": "no-referrer",
+    // Other sites may not embed or read anything from here (pictures and answers included).
+    "cross-origin-resource-policy": "same-origin",
+    "x-frame-options": "SAMEORIGIN",
+    "permissions-policy": PERMISSIONS_POLICY,
     ...reply.headers,
     ...extra
   });
@@ -6608,11 +6691,27 @@ function send(res, status, reply, extra = {}) {
 
 // src/server/fetch-timeout.ts
 var UPSTREAM_TIMEOUT_MS = 25e3;
+var PICNIC_HOST = /^storefront-prod\.(nl|de|fr)\.picnicinternational\.com$/;
 function installFetchTimeout(timeoutMs = UPSTREAM_TIMEOUT_MS) {
   const original = globalThis.fetch;
   if (original.deskTimeout) return;
-  const wrapped = (input, init) => original(input, { ...init, signal: init?.signal ?? AbortSignal.timeout(timeoutMs) });
+  const wrapped = ((input, init) => original(input, { ...init, signal: init?.signal ?? AbortSignal.timeout(timeoutMs) }));
   wrapped.deskTimeout = true;
+  wrapped.deskOnlyPicnic = original.deskOnlyPicnic;
+  globalThis.fetch = wrapped;
+}
+function installOnlyPicnic() {
+  const original = globalThis.fetch;
+  if (original.deskOnlyPicnic) return;
+  const wrapped = (async (input, init) => {
+    const url = new URL(input instanceof Request ? input.url : String(input));
+    if (url.protocol !== "https:" || !PICNIC_HOST.test(url.hostname) || url.port !== "") {
+      throw new TypeError(`Picnic Desk only talks to Picnic, not to ${url.host}`);
+    }
+    return original(input, init);
+  });
+  wrapped.deskOnlyPicnic = true;
+  wrapped.deskTimeout = original.deskTimeout;
   globalThis.fetch = wrapped;
 }
 
@@ -12634,8 +12733,10 @@ function startDesk(env = process.env) {
   const demo = env.PICNIC_DEMO === "1";
   const wantedLanguage = String(env.DESK_LANGUAGE || options.language || "en").toLowerCase();
   const language = LANGUAGES.includes(wantedLanguage) ? wantedLanguage : "en";
+  const allowedUsers = Array.isArray(options.allowed_users) ? options.allowed_users.filter((name) => typeof name === "string" && name.trim() !== "") : [];
   const wantedCache = Number(env.PICTURE_CACHE_MB || options.picture_cache_mb || DEFAULT_CACHE_MB);
   const pictureCacheMb = Number.isFinite(wantedCache) && wantedCache >= 0 ? wantedCache : DEFAULT_CACHE_MB;
+  installOnlyPicnic();
   installFetchTimeout();
   process.on("unhandledRejection", (reason) => {
     console.error("[desk] unhandled:", reason instanceof Error ? reason.stack : reason);
@@ -12646,6 +12747,7 @@ function startDesk(env = process.env) {
     country,
     language,
     pictureCacheMb,
+    allowedUsers,
     ingressOnly: env.INGRESS_ONLY === "1",
     version: true ? "1.0.0" : "dev",
     routes: VENDORED_ROUTES,

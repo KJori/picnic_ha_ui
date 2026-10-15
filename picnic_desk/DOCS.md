@@ -30,6 +30,27 @@ On the Configuration tab:
   names and texts are always Picnic's own.
 - `picture_cache_mb`: how much room the product and recipe pictures may take
   (500 MB unless you change it, from 50 to 10000).
+- `allowed_users`: Home Assistant user names that may use your Picnic account
+  besides you, e.g. a partner's. See "Who can use it".
+
+## Who can use it
+
+The Picnic account belongs to the Home Assistant user who signed in to it
+here. Other Home Assistant users who open the app see "Not your Picnic
+account": nothing of your basket, orders, name or address, and they cannot
+sign you out or connect their own account over yours. To share it, add their
+Home Assistant user name (not the display name) to `allowed_users`. After you
+sign out, the next person to sign in owns it.
+
+Home Assistant tells the app who is using it. If it does not (older
+versions), or if you signed in before version 1.0, anyone who can open the app
+can use the account; **Check what works with Picnic** says so under "Who may
+use it". Signing out and in again ties the account to you.
+
+Only Home Assistant administrators see the app in the sidebar. Until a recent
+Home Assistant Supervisor change, that hid the entry but did not stop other
+users from opening the app by its address, which is why the app checks for
+itself.
 
 ## Using it
 
@@ -76,26 +97,41 @@ search.
 
 ## What is stored
 
-In the app's own data folder, which Home Assistant includes in backups:
+In the app's own data folder:
 
-- `auth.json`: the Picnic session, readable only by the app. Your password
-  goes to Picnic once at sign-in and is never written anywhere. The token
-  never reaches a browser: every browser in the household uses the one
-  session. **Sign out** deletes it.
-- `saved.json`, `shortcuts.json`: saved products and shortcuts.
+- `auth.json`: the Picnic session and which Home Assistant user it belongs
+  to, readable only by the app. Your password goes to Picnic once at sign-in
+  and is never written anywhere. The token never reaches a browser. **Sign
+  out** deletes it. Left out of backups: a backup that ends up on a NAS or in
+  the cloud cannot be used to get into your Picnic account. After restoring a
+  backup, sign in again.
 - `history.json`, `recipe_prices.json`: "Bought before" and the recipe card
-  prices. **Sign out** deletes both.
+  prices. **Sign out** deletes both. Left out of backups; they are built
+  again when needed.
+- `saved.json`, `shortcuts.json`: saved products and shortcuts. These are in
+  backups.
 - `picture-cache/`: Picnic's product and recipe pictures. Each is fetched from
   Picnic the first time it is shown and kept, so it keeps showing when
   Picnic's picture server is slow or down. When the folder reaches
-  `picture_cache_mb`, the pictures shown longest ago make room. It is left out
-  of backups; deleting it is harmless.
+  `picture_cache_mb`, the pictures shown longest ago make room. Left out of
+  backups; deleting it is harmless.
 
-Meal plans and a pasted list are kept in the browser.
+In the browser: a pasted list, a meal plan, and a payment being watched.
+**Sign out** clears them from that browser.
 
-The app has no open network port. It only accepts connections from Home
-Assistant's ingress gateway, behind your Home Assistant login. The page loads
-nothing from other sites: Picnic's pictures come through the app.
+What goes where:
+
+- The app has no open network port. It only accepts connections from Home
+  Assistant's ingress gateway, behind your Home Assistant login.
+- The app's server talks to Picnic's servers only, over https; it refuses to
+  send anything anywhere else. Picnic sees what the Picnic app would: your
+  account, searches, basket and orders.
+- The page loads nothing from other sites: Picnic's pictures come through the
+  app. It sends no referrer, and other sites cannot embed it or read from it.
+- When you pay, Picnic and your bank get the address of this app in Home
+  Assistant, to send your browser back after paying, as with any web shop.
+- The Log tab can show Picnic's error messages and which page failed; never
+  your password or session.
 
 ## If something does not work
 

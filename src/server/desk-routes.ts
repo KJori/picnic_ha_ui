@@ -36,6 +36,7 @@ import type { RscPageModel } from "@/lib/rsc/rsc-page-types";
 
 import { recipePrice } from "../shared/recipe-price";
 import type { Desk } from "./app";
+import type { HaUser } from "./session";
 import { L1_CATEGORIES, productById } from "./demo/data";
 import { join } from "node:path";
 
@@ -43,6 +44,8 @@ import { DEFAULT_CACHE_MB, Pictures } from "./pictures";
 import { isObject } from "./store";
 
 export type DeskState = {
+  /** Home Assistant let this person in, but the Picnic account here is someone else's. */
+  notYours: boolean;
   signedIn: boolean;
   expired: boolean;
   awaitingCode: boolean;
@@ -158,11 +161,11 @@ export class DeskRoutes {
     });
   }
 
-  async handle(request: NextRequest, segments: string[]): Promise<Response> {
+  async handle(request: NextRequest, segments: string[], user: HaUser | null = null): Promise<Response> {
     const route = `${request.method} ${segments.join("/")}`;
     switch (route) {
       case "GET state":
-        return NextResponse.json(this.state());
+        return NextResponse.json(this.state(user));
       case "POST code":
         return this.#resendCode(request);
       case "GET image":
@@ -188,9 +191,23 @@ export class DeskRoutes {
     return known.includes(segments.join("/")) ? error("Method not allowed.", 405) : error("Not found.", 404);
   }
 
-  state(): DeskState {
+  state(user: HaUser | null = null): DeskState {
     const { session } = this.desk;
+    if (!this.desk.mayUse(user)) {
+      // Nothing about the account for someone it does not belong to.
+      return {
+        notYours: true,
+        signedIn: false,
+        expired: false,
+        awaitingCode: false,
+        country: session.country,
+        language: this.desk.options.language,
+        demo: Boolean(this.desk.options.demo),
+        version: this.desk.options.version,
+      };
+    }
     return {
+      notYours: false,
       signedIn: session.signedIn && !this.desk.expired,
       expired: session.signedIn && this.desk.expired,
       awaitingCode: session.partialToken() !== null,
@@ -469,6 +486,17 @@ export class DeskRoutes {
     await run("Account", async () => {
       const profile = (await get("user/profile")) as ProfileData;
       return profile.name ? `Signed in as ${profile.name}` : "Signed in";
+    });
+    await run("Who may use it", async () => {
+      const owner = this.desk.session.owner;
+      const others = (this.desk.options.allowedUsers ?? []).filter((name) => name.trim());
+      if (!this.desk.options.ingressOnly) return "anyone who can reach the app (not running under Home Assistant)";
+      if (!owner) {
+        throw new Error(
+          "anyone in Home Assistant: this sign-in is not tied to a Home Assistant user. Sign out and in again to tie it to you."
+        );
+      }
+      return `${owner.displayName || owner.name}${others.length ? ` and ${others.join(", ")}` : " only"}`;
     });
     await run("Search", async () => {
       const word = SELF_CHECK_WORD[this.desk.session.country];
