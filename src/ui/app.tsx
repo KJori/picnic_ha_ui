@@ -10,6 +10,7 @@ import { ToastProvider, useToast } from "./components/common";
 import { ProductDialog } from "./components/product-dialog";
 import { href, navigate, type Route, useRoute, withQuery } from "./lib/router";
 import { CheckoutPage } from "./pages/checkout";
+import { ListsView } from "./pages/lists";
 import { LoginPage } from "./pages/login";
 import { CheckView, HistoryView, ListView, SavedView } from "./pages/mine";
 import { OrdersView, OrderView, ParcelsView, ParcelView } from "./pages/orders";
@@ -150,6 +151,7 @@ function Tabs({ route }: { route: Route }) {
     { to: "/list", label: d.pasteList, match: ["/list"] },
     { to: "/history", label: d.boughtBefore, match: ["/history"] },
     { to: "/saved", label: d.starred, match: ["/saved"] },
+    { to: "/lists", label: d.lists, match: ["/lists"] },
     { to: "/cookbook", label: d.recipes, match: ["/cookbook", "/recipe"] },
     { to: "/orders", label: t.deliveriesNavLabel, match: ["/orders", "/parcels", "/checkout"] },
   ];
@@ -182,6 +184,8 @@ function View({ route }: { route: Route }) {
       return <HistoryView />;
     case "saved":
       return <SavedView />;
+    case "lists":
+      return <ListsView />;
     case "cookbook":
       return <RecipesView route={route} />;
     case "recipe":

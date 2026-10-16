@@ -215,3 +215,53 @@ test("after signing out, an answer for the old account is not shown", async () =
   assert.equal(cart.quantity("s1"), 0);
   assert.equal(cart.busy, false);
 });
+
+test("putting many products in the basket: a few at a time, topping up, keeping to the maximum, reporting refusals", async () => {
+  const server = fakeServer({ s2: 1 });
+  let open = 0;
+  let most = 0;
+  const send = async (productId: string, action: "add" | "remove", count: number) => {
+    open++;
+    most = Math.max(most, open);
+    await new Promise((r) => setTimeout(r, 2));
+    open--;
+    if (productId === "gone") return { ok: false as const, status: 400, error: "sold out" };
+    server.state[productId] = Math.max(0, (server.state[productId] ?? 0) + (action === "add" ? count : -count));
+    return { ok: true as const, status: 200, data: cartOf(server.state) };
+  };
+  const cart = new CartModel(send, server.load);
+  await cart.refresh();
+  const items = [
+    { productId: "s1", count: 2, maxCount: 99 },
+    { productId: "s2", count: 2, maxCount: 99 }, // one already in the basket
+    { productId: "s3", count: 5, maxCount: 3 }, // at most 3
+    { productId: "gone", count: 1, maxCount: 99 },
+    ...Array.from({ length: 8 }, (_, i) => ({ productId: `x${i}`, count: 1, maxCount: 99 })),
+  ];
+  const result = await cart.addMany(items);
+  assert.ok(most <= 3, `at most three at once, saw ${most}`);
+  assert.equal(cart.quantity("s1"), 2);
+  assert.equal(cart.quantity("s2"), 2, "topped up by one");
+  assert.equal(cart.quantity("s3"), 3, "kept to the maximum");
+  assert.deepEqual(result.failed, ["gone"]);
+  assert.deepEqual(
+    result.changed.filter((c) => c.productId.startsWith("s")).sort((a, b) => a.productId.localeCompare(b.productId)),
+    [{ productId: "s1", delta: 2 }, { productId: "s2", delta: 1 }, { productId: "s3", delta: 3 }]
+  );
+  // Undo takes back exactly what was added, not what was there before.
+  await cart.takeBack(result.changed);
+  assert.equal(cart.quantity("s1"), 0);
+  assert.equal(cart.quantity("s2"), 1, "the one that was there stays");
+  assert.equal(cart.quantity("x0"), 0);
+});
+
+test("a bulk change does not wait forever when the basket is emptied or forgotten halfway", async () => {
+  const server = fakeServer();
+  const cart = new CartModel(server.send, server.load, async () => ({ ok: true, status: 200, data: cartOf({}) }));
+  await cart.refresh();
+  const running = cart.addMany([{ productId: "s1", count: 1, maxCount: 99 }]);
+  await settle();
+  cart.reset();
+  const result = await running;
+  assert.deepEqual(result.failed, ["s1"]);
+});

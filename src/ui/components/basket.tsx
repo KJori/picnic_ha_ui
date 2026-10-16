@@ -13,10 +13,12 @@ import { picnicInk } from "../lib/colour";
 import { byTime } from "../lib/format";
 import { href, navigate } from "../lib/router";
 import { cartModel, useCart } from "../state/cart";
+import { SaveListDialog } from "../pages/lists";
 import { forgetAccount, useProfileName } from "../state/account";
+import { itemsFromBasket } from "../state/lists";
 import { useSession, useT } from "../state/session";
 import { Dialog, ErrorView, Loaded, Spinner, Stepper, useDates, useLoad, useMoney, useToast } from "./common";
-import { useOpenProduct } from "./products";
+import { useOpenProduct, useTakeOut } from "./products";
 
 // ─── Lines ───────────────────────────────────────────────────────────────────
 
@@ -24,6 +26,7 @@ function Line({ item, editable }: { item: CartItem; editable: boolean }) {
   const { d } = useT();
   const cart = useCart();
   const open = useOpenProduct();
+  const takeOut = useTakeOut();
   const money = useMoney();
   const quantity = editable ? cart.quantity(item.productId) : item.quantity;
   if (editable && !item.isUnavailable && quantity === 0) return null;
@@ -36,7 +39,7 @@ function Line({ item, editable }: { item: CartItem; editable: boolean }) {
           maxCount={item.maxCount}
           name={item.name}
           onAdd={() => cart.add(item.productId, item.maxCount)}
-          onRemove={() => cart.remove(item.productId)}
+          onRemove={() => takeOut(item.productId, item.name, item.maxCount)}
         />
       ) : (
         <span className="count">{item.isUnavailable ? "–" : `${item.quantity}×`}</span>
@@ -288,6 +291,7 @@ export function Receipt() {
   const [armed, setArmed] = useState(false);
   const armTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
   const name = useProfileName();
+  const [saving, setSaving] = useState(false);
 
   const signOut = async () => {
     const result = await api("auth/logout", { method: "POST" });
@@ -366,12 +370,23 @@ export function Receipt() {
                 return;
               }
               setArmed(false);
-              void cart.clear().then((ok) => !ok && toast(t.clearCartError, "error"));
+              // What was there, to put back on Undo (as products: recipe groups are not kept).
+              const before = wantedFromBasket(data.items);
+              void cart.clear().then((ok) => {
+                if (!ok) return toast(t.clearCartError, "error");
+                toast(d.basketEmptied, "info", { label: d.undo, run: () => void cart.addMany(before) });
+              });
             }}
           >
             {armed ? d.clickAgainToEmpty : t.clearCartButton}
           </button>
         )}
+        {data && data.items.length > 0 && (
+          <button type="button" className="quiet" onClick={() => setSaving(true)}>
+            {d.saveAsList}
+          </button>
+        )}
+        {saving && <SaveListDialog onClose={() => setSaving(false)} />}
         <span className="who">
           {name ? d.signedInAs.replace("{name}", name) : ""}{" "}
           <button type="button" className="quiet" onClick={() => void signOut()}>
@@ -387,3 +402,7 @@ export function Receipt() {
     </div>
   );
 }
+
+/** The basket's products as a bulk change (for Undo after emptying it). */
+const wantedFromBasket = (items: CartItem[]) =>
+  itemsFromBasket(items).map((item) => ({ productId: item.product.id, count: item.count, maxCount: item.maxCount }));

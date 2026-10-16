@@ -11,6 +11,8 @@
  *   GET  selfcheck        tries each part against Picnic, read-only
  *   GET  raw              ?page=<page id>  what Picnic sends for a page, as a download
  *   GET  recipe-price     ?id=<recipe id>  price of a recipe's main ingredients, kept a day
+ *   GET  lists            the saved lists;  PUT lists {lists} replaces them all
+ *   GET  picks            the product chosen per pasted line;  PUT picks {term, product|null}
  */
 import { NextRequest, NextResponse } from "next/server";
 
@@ -61,6 +63,12 @@ export type Language = (typeof LANGUAGES)[number];
 /** What is kept of a starred product: enough to show it and add it. */
 export type SavedProduct = Pick<Product, "id" | "name" | "imageId" | "unitQuantity" | "displayPrice">;
 export type Shortcut = { label: string; query: string };
+/** A product on a list, with how many and how many Picnic allows. */
+export type ListItem = { product: SavedProduct; count: number; maxCount: number };
+/** A basket kept for another time ("weekly basics"). */
+export type ShoppingList = { id: string; name: string; items: ListItem[]; updatedAt: string };
+/** The product chosen for a line of a pasted list, by the line's words ("havermelk"). */
+export type Picks = Record<string, SavedProduct>;
 export type HistoryItem = { item: CartItem; times: number; lastBought: string };
 export type HistoryData = { builtAt: string; deliveries: number; items: HistoryItem[] };
 /** One step of the self-check. `key` names it for the page; `name` and `detail` are English, for bug reports. */
@@ -79,6 +87,10 @@ export type CheckKey =
 export type RecipePrice = { id: string; total: number; perServing: number; portions: number; at: string };
 
 const SAVED_MAX = 500;
+const LISTS_MAX = 30;
+const LIST_ITEMS_MAX = 200;
+const LIST_ID = /^[a-z0-9-]{1,40}$/;
+const PICKS_MAX = 500;
 const SHORTCUTS_MAX = 24;
 const HISTORY_DELIVERIES = 10;
 const HISTORY_MAX_AGE_MS = 12 * 60 * 60 * 1000;
@@ -144,6 +156,51 @@ function fromOldSaved(value: unknown): unknown {
   };
 }
 
+/** What is kept of a product sent by the page: the known fields only. */
+function savedSnapshot(product: Record<string, unknown>): SavedProduct | null {
+  const snapshot = {
+    id: product.id,
+    name: product.name,
+    imageId: product.imageId ?? "",
+    unitQuantity: product.unitQuantity ?? "",
+    displayPrice: product.displayPrice,
+  };
+  return isSavedProduct(snapshot) ? snapshot : null;
+}
+
+const isListItem = (value: unknown): value is ListItem =>
+  isObject(value) &&
+  isObject(value.product) &&
+  savedSnapshot(value.product) !== null &&
+  Number.isInteger(value.count) &&
+  (value.count as number) >= 1 &&
+  (value.count as number) <= 99 &&
+  Number.isInteger(value.maxCount) &&
+  (value.maxCount as number) >= 1 &&
+  (value.maxCount as number) <= 999;
+
+const snapshotItem = (item: ListItem): ListItem => ({
+  product: savedSnapshot(item.product as unknown as Record<string, unknown>)!,
+  count: Math.min(item.count, item.maxCount),
+  maxCount: item.maxCount,
+});
+
+const isShoppingList = (value: unknown): value is ShoppingList =>
+  isObject(value) &&
+  typeof value.id === "string" &&
+  LIST_ID.test(value.id) &&
+  text(value.name, 60) &&
+  typeof value.updatedAt === "string" &&
+  value.updatedAt.length <= 40 &&
+  Array.isArray(value.items) &&
+  value.items.length <= LIST_ITEMS_MAX &&
+  value.items.every(isListItem);
+
+/** "  2x Havermelk " and "havermelk" are the same line: lower case, single spaces. */
+export function pickTerm(words: string): string {
+  return words.trim().toLowerCase().replace(/\s+/g, " ").slice(0, 100);
+}
+
 const isShortcut = (value: unknown): value is Shortcut =>
   isObject(value) && text(value.label, 40) && text(value.query, 100);
 
@@ -198,8 +255,16 @@ export class DeskRoutes {
         return this.#raw(request);
       case "GET recipe-price":
         return this.#recipePrice(request);
+      case "GET lists":
+        return NextResponse.json({ lists: this.lists() });
+      case "PUT lists":
+        return this.#setLists(request);
+      case "GET picks":
+        return NextResponse.json({ picks: this.picks() });
+      case "PUT picks":
+        return this.#setPick(request);
     }
-    const known = ["state", "code", "image", "saved", "shortcuts", "history", "selfcheck", "raw", "recipe-price"];
+    const known = ["state", "code", "image", "saved", "shortcuts", "history", "selfcheck", "raw", "recipe-price", "lists", "picks"];
     return known.includes(segments.join("/")) ? error("Method not allowed.", 405) : error("Not found.", 404);
   }
 
@@ -278,20 +343,67 @@ export class DeskRoutes {
     const body = await request.json().catch(() => null);
     const product = isObject(body) ? body.product : undefined;
     if (!isObject(product)) return error("product is required", 400);
-    const snapshot = {
-      id: product.id,
-      name: product.name,
-      imageId: product.imageId ?? "",
-      unitQuantity: product.unitQuantity ?? "",
-      displayPrice: product.displayPrice,
-    };
-    if (!isSavedProduct(snapshot)) return error("product needs id, name and displayPrice", 400);
+    const snapshot = savedSnapshot(product);
+    if (!snapshot) return error("product needs id, name and displayPrice", 400);
     const saved = this.saved();
     const at = saved.findIndex((p) => p.id === snapshot.id);
     if (at >= 0) saved.splice(at, 1);
     else saved.unshift(snapshot);
     this.desk.store.write("saved.json", saved.slice(0, SAVED_MAX));
     return NextResponse.json({ products: saved.slice(0, SAVED_MAX), saved: at < 0 });
+  }
+
+  // ─── Lists ────────────────────────────────────────────────────────────────
+
+  lists(): ShoppingList[] {
+    const raw = this.desk.store.read<unknown[]>("lists.json", [], (v): v is unknown[] => Array.isArray(v));
+    return raw.filter(isShoppingList);
+  }
+
+  /** The page edits lists and sends them all back: few lists, small, from one household. */
+  async #setLists(request: NextRequest): Promise<Response> {
+    const body = await request.json().catch(() => null);
+    const lists = isObject(body) ? body.lists : undefined;
+    if (!Array.isArray(lists) || lists.length > LISTS_MAX || !lists.every(isShoppingList)) {
+      return error(`lists must be at most ${LISTS_MAX} lists of at most ${LIST_ITEMS_MAX} products, each with a name`, 400);
+    }
+    if (new Set(lists.map((l) => l.id)).size !== lists.length) return error("each list needs its own id", 400);
+    const clean: ShoppingList[] = lists.map((list) => ({
+      id: list.id,
+      name: list.name.trim(),
+      updatedAt: list.updatedAt,
+      // One line per product: a product twice on a list is counted together.
+      items: [...list.items.reduce((byId, item) => {
+        const known = byId.get(item.product.id);
+        byId.set(item.product.id, known ? { ...known, count: Math.min(known.maxCount, known.count + item.count) } : snapshotItem(item));
+        return byId;
+      }, new Map<string, ListItem>()).values()],
+    }));
+    this.desk.store.write("lists.json", clean);
+    return NextResponse.json({ lists: clean });
+  }
+
+  // ─── Picks for a pasted list ──────────────────────────────────────────────
+
+  picks(): Picks {
+    const raw = this.desk.store.read<Record<string, unknown>>("picks.json", {}, isObject);
+    return Object.fromEntries(Object.entries(raw).filter((entry): entry is [string, SavedProduct] => isSavedProduct(entry[1])));
+  }
+
+  async #setPick(request: NextRequest): Promise<Response> {
+    const body = await request.json().catch(() => null);
+    const term = isObject(body) && typeof body.term === "string" ? pickTerm(body.term) : "";
+    if (!term) return error("term is required: the words of a line", 400);
+    const picks = this.picks();
+    delete picks[term]; // set or forget; set puts it last, so the oldest go first when full
+    if (isObject(body) && body.product !== null) {
+      const product = isObject(body.product) ? savedSnapshot(body.product) : null;
+      if (!product) return error("product needs id, name and displayPrice", 400);
+      picks[term] = product;
+    }
+    const kept = Object.entries(picks).slice(-PICKS_MAX);
+    this.desk.store.write("picks.json", Object.fromEntries(kept));
+    return NextResponse.json({ picks: Object.fromEntries(kept) });
   }
 
   // ─── Shortcuts ────────────────────────────────────────────────────────────

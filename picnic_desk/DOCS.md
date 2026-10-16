@@ -68,9 +68,21 @@ basket as a till receipt on the right.
   star saves a product under **Saved**.
 - **Paste a list**: one product per line. Start a line with a number
   (`2 havermelk`, `3x tomatenblokjes`) and the first click adds that many.
+  The product you choose for a line is remembered: next time it comes first,
+  and **Put my … usual picks in the basket** adds every remembered line at
+  once. **Forget this pick** lets it choose again.
 - **Bought before**: everything from your last 10 orders, most often bought
   first. Rebuilt at most every 12 hours; **Refresh** rebuilds it now.
 - **Saved**: products you starred, kept by this app.
+- **Lists**: a basket kept for another time, such as "weekly basics". Choose
+  **Save as list** under the receipt. **Put in the basket** tops up: what is
+  already in the basket counts, so a list asking for two of something that is
+  in the basket once adds one. A list can be edited, renamed, replaced with
+  the current basket, or deleted.
+- **Undo**: taking the last one of a product out of the basket, emptying the
+  basket, and putting a list in the basket each show a notice with **Undo**.
+  After emptying, Undo puts the products back as products, not as the recipe
+  they came with.
 - **Recipes**: Picnic's recipes by category, search, recipes you saved on your
   Picnic account (♥), and a price on every card. Open a recipe to choose
   portions, untick what you have, **Swap** an ingredient, and add the rest:
@@ -108,7 +120,8 @@ In the app's own data folder:
 - `history.json`, `recipe_prices.json`: "Bought before" and the recipe card
   prices. **Sign out** deletes both. Left out of backups; they are built
   again when needed.
-- `saved.json`, `shortcuts.json`: saved products and shortcuts. These are in
+- `saved.json`, `shortcuts.json`, `lists.json`, `picks.json`: saved products,
+  shortcuts, lists and the products picked for pasted lines. These are in
   backups.
 - `picture-cache/`: Picnic's product and recipe pictures. Each is fetched from
   Picnic the first time it is shown and kept, so it keeps showing when

@@ -16,6 +16,24 @@ import { useT } from "../state/session";
 import { Badge, Img, Price, Stepper, useMoney, useToast } from "./common";
 
 /** Open a product's page over the current screen. */
+/**
+ * One fewer of a product. When that takes it out of the basket, a notice
+ * offers to put it back: easy to do by accident with a quick click.
+ */
+export function useTakeOut(): (productId: string, name: string, maxCount: number) => void {
+  const cart = useCart();
+  const toast = useToast();
+  const { d } = useT();
+  return (productId, name, maxCount) => {
+    const before = cart.quantity(productId);
+    if (!before) return;
+    cart.remove(productId);
+    if (before === 1) {
+      toast(d.removedOne.replace("{name}", name), "info", { label: d.undo, run: () => cart.add(productId, maxCount, 1) });
+    }
+  };
+}
+
 export function useOpenProduct(): (id: string) => void {
   const route = useRoute();
   return (id: string) => navigate(withQuery(route, { product: id }));
@@ -97,7 +115,18 @@ export function StarButton({ product }: { product: SavedProduct }) {
   );
 }
 
-export function ProductCell({ product, want = 1, note }: { product: Product; want?: number; note?: string }) {
+export function ProductCell({
+  product,
+  want = 1,
+  note,
+  onAdd,
+}: {
+  product: Product;
+  want?: number;
+  note?: string;
+  /** Called on every "+" (a pasted line remembers what was chosen for it). */
+  onAdd?: () => void;
+}) {
   const { t, d } = useT();
   const cart = useCart();
   const open = useOpenProduct();
@@ -112,8 +141,12 @@ export function ProductCell({ product, want = 1, note }: { product: Product; wan
     unitQuantity: product.unitQuantity,
     displayPrice: product.displayPrice,
   };
-  const add = () => cart.add(product.id, product.maxCount, quantity === 0 ? want : 1);
-  const remove = () => cart.remove(product.id);
+  const add = () => {
+    onAdd?.();
+    cart.add(product.id, product.maxCount, quantity === 0 ? want : 1);
+  };
+  const takeOut = useTakeOut();
+  const remove = () => takeOut(product.id, product.name, product.maxCount);
 
   // Keys on a product, as on the old desk.
   const onKeyDown = (event: KeyboardEvent<HTMLLIElement>) => {

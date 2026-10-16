@@ -269,25 +269,44 @@ export function Confirm({
 
 // ─── Notices ─────────────────────────────────────────────────────────────────
 
-type Notice = { id: number; text: string; tone: "info" | "error" };
-const NoticeContext = createContext<(text: string, tone?: "info" | "error") => void>(() => {});
+/** A button on a notice, such as Undo. */
+export type NoticeAction = { label: string; run: () => void };
+type Notice = { id: number; text: string; tone: "info" | "error"; action?: NoticeAction };
+type Show = (text: string, tone?: "info" | "error", action?: NoticeAction) => void;
+const NoticeContext = createContext<Show>(() => {});
 
 export const useToast = () => useContext(NoticeContext);
+
+/** How long a notice stays: longer with a button on it, so there is time to use it. */
+const NOTICE_MS = { info: 4500, error: 7000, action: 9000 };
 
 /** One notice at a time at the bottom left, as on the old desk. */
 export function ToastProvider({ children }: { children: ReactNode }) {
   const [notice, setNotice] = useState<Notice | null>(null);
   const counter = useRef(0);
-  const show = useCallback((text: string, tone: "info" | "error" = "info") => {
+  const show = useCallback<Show>((text, tone = "info", action) => {
     const id = ++counter.current;
-    setNotice({ id, text, tone });
-    setTimeout(() => setNotice((current) => (current?.id === id ? null : current)), tone === "error" ? 7000 : 4500);
+    setNotice({ id, text, tone, action });
+    setTimeout(() => setNotice((current) => (current?.id === id ? null : current)), action ? NOTICE_MS.action : NOTICE_MS[tone]);
   }, []);
   return (
     <NoticeContext.Provider value={show}>
       {children}
       <div className={`notice ${notice?.tone === "error" ? "error" : ""}`} role="status" aria-live="polite" hidden={!notice}>
         {notice?.text}
+        {notice?.action && (
+          <button
+            type="button"
+            className="quiet"
+            onClick={() => {
+              const { run } = notice.action!;
+              setNotice(null);
+              run();
+            }}
+          >
+            {notice.action.label}
+          </button>
+        )}
       </div>
     </NoticeContext.Provider>
   );

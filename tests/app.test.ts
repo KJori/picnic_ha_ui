@@ -467,6 +467,54 @@ describe("the desk's own routes", () => {
     assert.deepEqual(kept.body, old, "an old list beats none");
   });
 
+  test("lists: kept, cleaned, refused when malformed or too big", async () => {
+    const item = (id: string, count: number, maxCount = 99) => ({
+      product: { id, name: `Product ${id}`, imageId: "img", unitQuantity: "1 st", displayPrice: 100, extra: "dropped" },
+      count,
+      maxCount,
+    });
+    const list = { id: "weekly", name: "  Weekly basics ", updatedAt: "2026-10-16T10:00:00.000Z", items: [item("s1", 2), item("s1", 1), item("s2", 5, 3)] };
+    const saved = await desk.post("/api/desk/lists", { lists: [list] }, "PUT");
+    assert.equal(saved.status, 200, JSON.stringify(saved.body));
+    assert.equal(saved.body.lists[0].name, "Weekly basics");
+    assert.deepEqual(
+      saved.body.lists[0].items.map((i: { product: { id: string }; count: number }) => [i.product.id, i.count]),
+      [["s1", 3], ["s2", 3]],
+      "one line per product, counts within the maximum"
+    );
+    assert.equal(saved.body.lists[0].items[0].product.extra, undefined, "only the known fields are kept");
+    assert.deepEqual((await desk.get("/api/desk/lists")).body.lists, saved.body.lists);
+    const bad = [
+      { lists: "x" },
+      { lists: [{ ...list, id: "Has Spaces" }] },
+      { lists: [{ ...list, name: "" }] },
+      { lists: [{ ...list, items: [item("s1", 0)] }] },
+      { lists: [{ ...list, items: [item("s1", 100)] }] },
+      { lists: [list, list] },
+      { lists: Array.from({ length: 31 }, (_, i) => ({ ...list, id: `l${i}` })) },
+      { lists: [{ ...list, items: Array.from({ length: 201 }, (_, i) => item(`p${i}`, 1)) }] },
+    ];
+    for (const body of bad) assert.equal((await desk.post("/api/desk/lists", body, "PUT")).status, 400, JSON.stringify(body).slice(0, 60));
+    assert.deepEqual((await desk.get("/api/desk/lists")).body.lists, saved.body.lists, "nothing changed");
+    assert.equal((await desk.post("/api/desk/lists", { lists: [] }, "PUT")).body.lists.length, 0);
+  });
+
+  test("picks for a pasted list: by the line's words, forgotten on request, the oldest dropped when full", async () => {
+    const product = { id: "s1", name: "Havermelk", imageId: "img", unitQuantity: "1 l", displayPrice: 199 };
+    const set = await desk.post("/api/desk/picks", { term: "  Havermelk  ", product }, "PUT");
+    assert.equal(set.status, 200);
+    assert.deepEqual((await desk.get("/api/desk/picks")).body.picks, { havermelk: product });
+    await desk.post("/api/desk/picks", { term: "havermelk", product: null }, "PUT");
+    assert.deepEqual((await desk.get("/api/desk/picks")).body.picks, {});
+    for (const body of [{ term: "", product }, { term: "x", product: { id: "s1" } }, { product }]) {
+      assert.equal((await desk.post("/api/desk/picks", body, "PUT")).status, 400, JSON.stringify(body));
+    }
+    for (let i = 0; i < 502; i++) await desk.post("/api/desk/picks", { term: `word ${i}`, product }, "PUT");
+    const picks = (await desk.get("/api/desk/picks")).body.picks;
+    assert.equal(Object.keys(picks).length, 500);
+    assert.ok(!("word 0" in picks) && "word 501" in picks, "the oldest went");
+  });
+
   test("shortcuts: a list that is too long or malformed is refused, and nothing changes", async () => {
     const before = (await desk.get("/api/desk/shortcuts")).body.shortcuts;
     const tooMany = Array.from({ length: 25 }, (_, i) => ({ label: `s${i}`, query: `q${i}` }));

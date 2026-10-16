@@ -12,7 +12,7 @@ import { useCart } from "../state/cart";
 import { useT } from "../state/session";
 import { Boundary } from "./boundary";
 import { Dialog, Img, Loaded, PicnicLabel, Price, Stepper, useLoad, useMoney } from "./common";
-import { fromSlider, ProductGrid, StarButton } from "./products";
+import { fromSlider, ProductGrid, StarButton, useTakeOut } from "./products";
 
 /** Icons Picnic names for highlights, as picnic-web shows them. */
 const HIGHLIGHT_ICONS: Record<string, string> = {
@@ -71,6 +71,7 @@ export function ProductDialog({ id, onClose }: { id: string; onClose: () => void
 function ProductView({ product }: { product: ProductDetail }) {
   const { t, d } = useT();
   const cart = useCart();
+  const takeOut = useTakeOut();
   const money = useMoney();
   const quantity = cart.quantity(product.id);
   const [picture, setPicture] = useState(0);
@@ -134,7 +135,7 @@ function ProductView({ product }: { product: ProductDetail }) {
                 maxCount={product.maxCount}
                 name={product.name}
                 onAdd={() => cart.add(product.id, product.maxCount)}
-                onRemove={() => cart.remove(product.id)}
+                onRemove={() => takeOut(product.id, product.name, product.maxCount)}
               />
               <StarButton product={snapshot} />
             </span>

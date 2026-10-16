@@ -353,3 +353,11 @@ test("dates: in the shop's time zone wherever the browser is, nothing for an unr
   assert.equal(moneyFormat("en")(139), "€\u00a01,39", "with a no-break space, as Intl writes it");
   assert.equal(moneyFormat("en").plain(278), "2,78");
 });
+
+test("the page and the server key a pasted line's pick by the same words", async () => {
+  const { pickTerm: server } = await import("../src/server/desk-routes");
+  const { pickTerm: page } = await import("../src/ui/state/lists");
+  for (const words of ["Havermelk", "  havermelk ", "Tomaten  blokjes", "CRÈME fraîche", "x".repeat(120)]) {
+    assert.equal(page(words), server(words), words);
+  }
+});

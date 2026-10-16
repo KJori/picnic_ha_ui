@@ -73,7 +73,13 @@ before(async () => {
 after(async () => {
   await browser?.close();
   proxy?.close();
-  app?.kill();
+  // Stopping writes what is pending; remove the folder once it has.
+  if (app && app.exitCode === null) {
+    await new Promise((resolve) => {
+      app.once("exit", resolve);
+      app.kill();
+    });
+  }
   rmSync(dataDir, { recursive: true, force: true });
 });
 
@@ -157,7 +163,7 @@ describe("Picnic Desk in a browser", () => {
     const page = await openPage();
     await signIn(page);
     const tabs = await page.locator(".views a").allTextContents();
-    assert.deepEqual(tabs, ["Search", "Categories", "Paste a list", "Bought before", "Saved", "Recipes", "Orders"]);
+    assert.deepEqual(tabs, ["Search", "Categories", "Paste a list", "Bought before", "Saved", "Lists", "Recipes", "Orders"]);
     const shelf = await page.locator(".shelf").boundingBox();
     const till = await page.locator(".till").boundingBox();
     assert.ok(till.x > shelf.x + shelf.width - 1, "the receipt is to the right of the shelf");
@@ -470,6 +476,40 @@ describe("Picnic Desk in a browser", () => {
       await check("bought before");
       await go("/saved", ".views");
       await check("saved");
+      await page.evaluate(() =>
+        fetch("api/desk/lists", {
+          method: "PUT",
+          headers: { "x-desk-base": location.href, "content-type": "application/json" },
+          body: JSON.stringify({
+            lists: [{ id: "a11y", name: "Weekly", updatedAt: new Date().toISOString(), items: [{ product: { id: "s1004", name: "Tofu naturel", imageId: "demo-s1004", unitQuantity: "375 g", displayPrice: 179 }, count: 2, maxCount: 99 }] }],
+          }),
+        })
+      );
+      await go("/lists", ".list-card");
+      await check("lists");
+      await page.locator(".till").getByRole("button", { name: "Save as list" }).click();
+      await page.locator("dialog[open] #list-name").waitFor();
+      await check("save as list");
+      await page.keyboard.press("Escape");
+      // The other colour scheme's run put the list in the basket already: start empty.
+      await page.evaluate(() => fetch("api/cart", { method: "DELETE", headers: { "x-desk-base": location.href } }));
+      await page.reload();
+      await page.locator(".till .receipt .empty-basket").waitFor();
+      await page.locator(".list-card").getByRole("button", { name: "Put in the basket" }).click();
+      await page.locator(".notice:not([hidden])").getByRole("button", { name: "Undo" }).waitFor();
+      await check("a notice with Undo");
+      await page.evaluate(() =>
+        fetch("api/desk/picks", {
+          method: "PUT",
+          headers: { "x-desk-base": location.href, "content-type": "application/json" },
+          body: JSON.stringify({ term: "tofu", product: { id: "s1005", name: "Gerookte tofu", imageId: "demo-s1005", unitQuantity: "200 g", displayPrice: 219 } }),
+        })
+      );
+      await go("/list", ".paste");
+      await page.locator("#list-text").fill("2 tofu");
+      await page.locator(".paste button[type=submit]").click();
+      await page.locator(".pick-note").waitFor();
+      await check("pasted list with a pick");
       await go("/cookbook", ".recipe-card");
       await check("recipes");
       await page.locator(".recipe-card a.recipe").first().click();
@@ -574,6 +614,7 @@ describe("Picnic Desk in a browser", () => {
         ["/list", ".views"],
         ["/history", ".products .product, .hint"],
         ["/saved", ".views"],
+        ["/lists", ".views"],
         ["/cookbook", ".recipe-card"],
         ["/cookbook?plan=1", ".plan-bar, .recipe-card, .hint"],
         ["/orders", "table.orders"],
@@ -597,13 +638,163 @@ describe("Picnic Desk in a browser", () => {
       await page.locator(".recipe-card a.recipe").first().click();
       await page.locator(".ingredient").first().waitFor();
       await look("one recipe");
+      // A list, its save dialog, a notice with Undo, and a pasted line with a pick.
+      await page.locator(".till button", { hasText: "Bewaar als lijstje" }).click();
+      await page.locator("dialog[open] #list-name").waitFor();
+      await look("save as list");
+      await page.locator("dialog[open] button[type=submit]").click();
+      await page.goto(`${root}#/lists`);
+      await page.locator(".list-card").waitFor();
+      await look("lists");
+      await page.locator(".list-card .primary").click();
+      await page.locator(".notice:not([hidden])").waitFor();
+      await look("notice");
+      await page.goto(`${root}#/list`);
+      await page.locator("#list-text").fill("tofu");
+      await page.locator(".paste button[type=submit]").click();
+      await page.locator(".wanted .product .more").first().click();
+      await page.reload();
+      await page.locator(".paste button[type=submit]").click();
+      await page.locator(".pick-note").waitFor();
+      await look("pasted list with a pick");
       if (process.env.A11Y_REPORT) console.log([...found].join("\n"));
       assert.deepEqual([...found], []);
       await context.close();
     } finally {
-      dutch.kill();
+      // Stopping writes what is pending; remove the folder once it has.
+      await new Promise((resolve) => {
+        dutch.once("exit", resolve);
+        dutch.kill();
+      });
       rmSync(folder, { recursive: true, force: true });
     }
+  });
+
+  /** The demo basket is shared by the tests: start from an empty one. */
+  const emptyBasket = async (page) => {
+    await page.evaluate(() => fetch("api/cart", { method: "DELETE", headers: { "x-desk-base": location.href } }));
+    await page.reload();
+    await page.locator(".till .receipt .empty-basket").waitFor();
+  };
+  const notice = (page) => page.locator(".notice:not([hidden])");
+  /** Lists and picks are shared by the tests too (the accessibility runs make some). */
+  const forgetListsAndPicks = (page) =>
+    page.evaluate(async () => {
+      const headers = { "x-desk-base": location.href, "content-type": "application/json" };
+      await fetch("api/desk/lists", { method: "PUT", headers, body: JSON.stringify({ lists: [] }) });
+      for (const term of ["tofu", "havermelk"]) {
+        await fetch("api/desk/picks", { method: "PUT", headers, body: JSON.stringify({ term, product: null }) });
+      }
+    });
+
+  test("lists: save the basket, put it back topped up, undo, edit, delete", async () => {
+    const page = await openPage();
+    await signIn(page);
+    await forgetListsAndPicks(page);
+    await emptyBasket(page);
+    await page.goto(`${base}#/search?q=tofu`);
+    await cell(page, "s1004").locator(".more").click();
+    await cell(page, "s1004").locator(".more").click();
+    await page.goto(`${base}#/search?q=brood`);
+    await cell(page, "s1001").locator(".more").click();
+    await line(page, "s1001").waitFor();
+    await page.locator('.till .receipt[aria-busy="false"]').waitFor();
+
+    await page.locator(".till").getByRole("button", { name: "Save as list" }).click();
+    const dialog = page.getByRole("dialog");
+    await dialog.getByLabel("Name of the list").fill("Weekly");
+    await dialog.getByRole("button", { name: "Save" }).click();
+    await notice(page).filter({ hasText: "Saved as “Weekly”." }).waitFor();
+
+    // Emptying the basket can be undone.
+    await page.locator(".till").getByRole("button", { name: "Empty the basket" }).click();
+    await page.locator(".till").getByRole("button", { name: "Click again to empty it" }).click();
+    await notice(page).filter({ hasText: "The basket is empty." }).getByRole("button", { name: "Undo" }).click();
+    await line(page, "s1004").locator("output").filter({ hasText: "2" }).waitFor();
+    await line(page, "s1001").waitFor();
+
+    // With one tofu left, the list tops up to two and adds the bread.
+    await line(page, "s1004").locator(".less").click();
+    await page.locator(".till").getByRole("button", { name: "Empty the basket" }).click(); // arm, then let it lapse
+    await page.locator(".views").getByRole("link", { name: "Lists" }).click();
+    const card = page.locator(".list-card").first(); // the only list
+    await card.locator("h3", { hasText: "Weekly" }).waitFor();
+    await card.getByText("2 products").waitFor();
+    await page.waitForTimeout(4200); // the emptying confirmation lapses
+    await line(page, "s1001").locator(".less").click();
+    await page.locator('.till .receipt[aria-busy="false"]').waitFor();
+    assert.equal(await page.locator(".till .receipt .line[data-product='s1001']").count(), 0);
+    await card.getByRole("button", { name: "Put in the basket" }).click();
+    await notice(page).filter({ hasText: "2 products put in the basket." }).waitFor();
+    await line(page, "s1004").locator("output").filter({ hasText: "2" }).waitFor();
+    await line(page, "s1001").locator("output").filter({ hasText: "1" }).waitFor();
+    // Undo takes back exactly what the list added: one tofu and the bread.
+    await notice(page).getByRole("button", { name: "Undo" }).click();
+    await line(page, "s1004").locator("output").filter({ hasText: "1" }).waitFor();
+    await page.locator(".till .receipt .line[data-product='s1001']").waitFor({ state: "detached" });
+
+    // Edit: one more bread, no tofu, a new name; kept on the server.
+    await card.locator('.list-items li[data-product="s1001"] .more').click();
+    await card.locator('.list-items li[data-product="s1001"] output').filter({ hasText: "2" }).waitFor();
+    await card.getByRole("button", { name: "Take Tofu naturel off the list" }).click();
+    await card.getByRole("button", { name: "Rename" }).click();
+    await card.getByLabel("Name of the list").fill("Basics");
+    await card.getByRole("button", { name: "Save" }).click();
+    await page.reload();
+    const renamed = page.locator(".list-card").filter({ hasText: "Basics" });
+    await renamed.getByText("1 product", { exact: false }).waitFor();
+    assert.equal(await renamed.locator('.list-items li[data-product="s1004"]').count(), 0);
+    await shot(page, "14-lists");
+    await renamed.getByRole("button", { name: "Delete" }).click();
+    await renamed.getByRole("button", { name: "Click again to delete" }).click();
+    await page.getByText("No lists yet.").waitFor();
+    clean(page);
+    await page.context().close();
+  });
+
+  test("taking a product out of the basket can be undone", async () => {
+    const page = await openPage();
+    await signIn(page);
+    await emptyBasket(page);
+    await page.goto(`${base}#/search?q=tofu`);
+    await cell(page, "s1004").locator(".more").click();
+    await line(page, "s1004").waitFor();
+    await cell(page, "s1004").locator(".less").click();
+    await notice(page).filter({ hasText: "Tofu naturel taken out of the basket." }).getByRole("button", { name: "Undo" }).click();
+    await line(page, "s1004").locator("output").filter({ hasText: "1" }).waitFor();
+    clean(page);
+    await page.context().close();
+  });
+
+  test("a pasted list remembers the product picked for a line", async () => {
+    const page = await openPage();
+    await signIn(page);
+    await forgetListsAndPicks(page);
+    await emptyBasket(page);
+    const paste = async () => {
+      await page.goto(`${base}#/list`);
+      await page.getByLabel(/one product per line/i).fill("2 tofu\nhavermelk");
+      await page.getByRole("button", { name: "Find these" }).click();
+      await page.locator(".wanted").first().locator(".products .product").first().waitFor();
+    };
+    await paste();
+    const tofu = page.locator(".wanted").filter({ has: page.locator("h3", { hasText: "tofu" }) });
+    // Not the first match: the smoked one.
+    await tofu.locator('.product[data-product="s1005"] .more').click();
+    await line(page, "s1005").locator("output").filter({ hasText: "2" }).waitFor();
+    await emptyBasket(page);
+
+    await paste();
+    const again = page.locator(".wanted").filter({ has: page.locator("h3", { hasText: "tofu" }) });
+    await again.locator(".pick-note").filter({ hasText: "Gerookte tofu" }).waitFor();
+    assert.equal(await again.locator(".products .product").first().getAttribute("data-product"), "s1005", "the pick comes first");
+    await page.getByRole("button", { name: "Put my 1 usual picks in the basket" }).click();
+    await line(page, "s1005").locator("output").filter({ hasText: "2" }).waitFor();
+    await again.getByRole("button", { name: "Forget this pick" }).click();
+    await again.locator(".pick-note").waitFor({ state: "detached" });
+    assert.equal(await page.getByRole("button", { name: /usual picks/ }).count(), 0);
+    clean(page);
+    await page.context().close();
   });
 
   // Answers in a shape the page does not expect (the app updated while the page stayed open):

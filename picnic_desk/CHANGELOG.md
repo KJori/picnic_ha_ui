@@ -36,6 +36,12 @@ it does what picnic-web does, with the same handling of Picnic's answers.
 - Home Assistant restarts the app when it stops answering (watchdog).
 - An icon and a logo for the app store.
 - A page left open while the app was updated says so and offers a reload.
+- Lists: save the basket as a list ("weekly basics") and put it back in one
+  go, topping up what is already in the basket.
+- A pasted list remembers the product picked for each line and can add all
+  remembered lines at once.
+- Undo after taking the last one of a product out, emptying the basket, or
+  putting a list in the basket.
 
 ### Changed
 

@@ -19,6 +19,14 @@ type CartStatus = "loading" | "ready" | "error";
 
 type Send = (productId: string, action: "add" | "remove", count: number) => Promise<Result<CartData>>;
 
+/** A product to put in the basket in one go (a list, the picks of a pasted list). */
+export type Wanted = { productId: string; count: number; maxCount: number };
+/** What a bulk change did: the changes that went through (for undo) and the products Picnic refused. */
+export type BulkResult = { changed: { productId: string; delta: number }[]; failed: string[] };
+
+/** Products changed at the same time in one go, so a long list does not set off Picnic's rate limit. */
+const BULK_AT_ONCE = 3;
+
 const defaultSend: Send = (productId, action, count) =>
   api<CartData>("cart", { method: "POST", body: { productId, action, count } });
 
@@ -39,6 +47,8 @@ export class CartModel {
   #refreshing: Promise<void> | null = null;
   /** Goes up when the basket is emptied or forgotten; older answers no longer count. */
   #epoch = 0;
+  /** Product id → who waits for all its changes to be answered, and whether the last one worked. */
+  readonly #waiting = new Map<string, ((ok: boolean) => void)[]>();
   onError: (message: string) => void = () => {};
 
   constructor(
@@ -114,7 +124,10 @@ export class CartModel {
     if (this.#inFlight.has(productId)) return;
     const delta = this.#queued.get(productId) ?? 0;
     this.#queued.delete(productId);
-    if (!delta) return;
+    if (!delta) {
+      this.#settle(productId, true); // clicks that cancelled out: nothing left to send
+      return;
+    }
 
     this.#inFlight.add(productId);
     const order = ++this.#sent;
@@ -129,6 +142,7 @@ export class CartModel {
     if (epoch !== this.#epoch) {
       // The basket was emptied or forgotten meanwhile: what this was based on is gone.
       if (this.#queued.has(productId)) void this.#flush(productId);
+      else this.#settle(productId, false);
       return;
     }
 
@@ -153,7 +167,63 @@ export class CartModel {
     }
     this.#emit();
     if (this.#queued.has(productId)) void this.#flush(productId);
-    else if (!this.busy && order < this.#shown) void this.refresh(); // an answer was skipped: settle on Picnic's state
+    else {
+      this.#settle(productId, result.ok);
+      if (!this.busy && order < this.#shown) void this.refresh(); // an answer was skipped: settle on Picnic's state
+    }
+  }
+
+  #settle(productId: string, ok: boolean): void {
+    const waiting = this.#waiting.get(productId);
+    if (!waiting || this.#inFlight.has(productId) || this.#queued.has(productId)) return;
+    this.#waiting.delete(productId);
+    waiting.forEach((resolve) => resolve(ok));
+  }
+
+  /** Resolves when every change for the product has been answered: true when the last one went through. */
+  #answered(productId: string): Promise<boolean> {
+    if (!this.#inFlight.has(productId) && !this.#queued.has(productId)) return Promise.resolve(true);
+    return new Promise((resolve) => this.#waiting.set(productId, [...(this.#waiting.get(productId) ?? []), resolve]));
+  }
+
+  /**
+   * Put several products in the basket, a few at a time. With `topUp`, what
+   * is already in the basket counts: a list asking for 2 of something that is
+   * in the basket once adds 1. Each product keeps to its maximum.
+   */
+  async addMany(items: Wanted[], { topUp = true }: { topUp?: boolean } = {}): Promise<BulkResult> {
+    const result: BulkResult = { changed: [], failed: [] };
+    const work = items.filter((item) => item.count > 0);
+    let next = 0;
+    const worker = async () => {
+      while (next < work.length) {
+        const item = work[next++];
+        const have = this.quantity(item.productId);
+        const room = Math.max(0, item.maxCount - have);
+        const delta = Math.min(room, topUp ? Math.max(0, item.count - have) : item.count);
+        if (!delta) continue;
+        this.#change(item.productId, delta);
+        if (await this.#answered(item.productId)) result.changed.push({ productId: item.productId, delta });
+        else result.failed.push(item.productId);
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(BULK_AT_ONCE, work.length) }, worker));
+    return result;
+  }
+
+  /** Take back what `addMany` did (undo). */
+  async takeBack(changed: BulkResult["changed"]): Promise<void> {
+    let next = 0;
+    const worker = async () => {
+      while (next < changed.length) {
+        const { productId, delta } = changed[next++];
+        const amount = Math.min(delta, this.quantity(productId));
+        if (!amount) continue;
+        this.#change(productId, -amount);
+        await this.#answered(productId);
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(BULK_AT_ONCE, changed.length) }, worker));
   }
 
   #accept(cart: CartData): void {
@@ -199,6 +269,7 @@ export class CartModel {
       this.#epoch += 1;
       this.#pending.clear();
       this.#queued.clear();
+      this.#settleAll(false);
       this.accept(result.data);
       return true;
     }
@@ -206,9 +277,16 @@ export class CartModel {
     return false;
   }
 
+  #settleAll(ok: boolean): void {
+    const all = [...this.#waiting.values()];
+    this.#waiting.clear();
+    all.forEach((waiting) => waiting.forEach((resolve) => resolve(ok)));
+  }
+
   /** Forget everything, e.g. after signing out. */
   reset(): void {
     this.#epoch += 1;
+    this.#settleAll(false);
     this.#refreshing = null;
     this.cart = null;
     this.status = "loading";

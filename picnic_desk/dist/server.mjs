@@ -5722,6 +5722,10 @@ var isObject = (value) => typeof value === "object" && value !== null && !Array.
 // src/server/desk-routes.ts
 var LANGUAGES = ["en", "nl", "de", "fr"];
 var SAVED_MAX = 500;
+var LISTS_MAX = 30;
+var LIST_ITEMS_MAX = 200;
+var LIST_ID = /^[a-z0-9-]{1,40}$/;
+var PICKS_MAX = 500;
 var SHORTCUTS_MAX = 24;
 var HISTORY_DELIVERIES = 10;
 var HISTORY_MAX_AGE_MS = 12 * 60 * 60 * 1e3;
@@ -5768,6 +5772,26 @@ function fromOldSaved(value) {
     unitQuantity: typeof value.unit === "string" ? value.unit : "",
     displayPrice: typeof value.price === "number" ? value.price : 0
   };
+}
+function savedSnapshot(product) {
+  const snapshot = {
+    id: product.id,
+    name: product.name,
+    imageId: product.imageId ?? "",
+    unitQuantity: product.unitQuantity ?? "",
+    displayPrice: product.displayPrice
+  };
+  return isSavedProduct(snapshot) ? snapshot : null;
+}
+var isListItem = (value) => isObject(value) && isObject(value.product) && savedSnapshot(value.product) !== null && Number.isInteger(value.count) && value.count >= 1 && value.count <= 99 && Number.isInteger(value.maxCount) && value.maxCount >= 1 && value.maxCount <= 999;
+var snapshotItem = (item) => ({
+  product: savedSnapshot(item.product),
+  count: Math.min(item.count, item.maxCount),
+  maxCount: item.maxCount
+});
+var isShoppingList = (value) => isObject(value) && typeof value.id === "string" && LIST_ID.test(value.id) && text(value.name, 60) && typeof value.updatedAt === "string" && value.updatedAt.length <= 40 && Array.isArray(value.items) && value.items.length <= LIST_ITEMS_MAX && value.items.every(isListItem);
+function pickTerm(words) {
+  return words.trim().toLowerCase().replace(/\s+/g, " ").slice(0, 100);
 }
 var isShortcut = (value) => isObject(value) && text(value.label, 40) && text(value.query, 100);
 var isHistory = (value) => isObject(value) && typeof value.builtAt === "string" && Array.isArray(value.items);
@@ -5817,8 +5841,16 @@ var DeskRoutes = class {
         return this.#raw(request);
       case "GET recipe-price":
         return this.#recipePrice(request);
+      case "GET lists":
+        return NextResponse.json({ lists: this.lists() });
+      case "PUT lists":
+        return this.#setLists(request);
+      case "GET picks":
+        return NextResponse.json({ picks: this.picks() });
+      case "PUT picks":
+        return this.#setPick(request);
     }
-    const known = ["state", "code", "image", "saved", "shortcuts", "history", "selfcheck", "raw", "recipe-price"];
+    const known = ["state", "code", "image", "saved", "shortcuts", "history", "selfcheck", "raw", "recipe-price", "lists", "picks"];
     return known.includes(segments.join("/")) ? error("Method not allowed.", 405) : error("Not found.", 404);
   }
   state(user = null) {
@@ -5886,20 +5918,61 @@ var DeskRoutes = class {
     const body = await request.json().catch(() => null);
     const product = isObject(body) ? body.product : void 0;
     if (!isObject(product)) return error("product is required", 400);
-    const snapshot = {
-      id: product.id,
-      name: product.name,
-      imageId: product.imageId ?? "",
-      unitQuantity: product.unitQuantity ?? "",
-      displayPrice: product.displayPrice
-    };
-    if (!isSavedProduct(snapshot)) return error("product needs id, name and displayPrice", 400);
+    const snapshot = savedSnapshot(product);
+    if (!snapshot) return error("product needs id, name and displayPrice", 400);
     const saved = this.saved();
     const at = saved.findIndex((p) => p.id === snapshot.id);
     if (at >= 0) saved.splice(at, 1);
     else saved.unshift(snapshot);
     this.desk.store.write("saved.json", saved.slice(0, SAVED_MAX));
     return NextResponse.json({ products: saved.slice(0, SAVED_MAX), saved: at < 0 });
+  }
+  // ─── Lists ────────────────────────────────────────────────────────────────
+  lists() {
+    const raw = this.desk.store.read("lists.json", [], (v) => Array.isArray(v));
+    return raw.filter(isShoppingList);
+  }
+  /** The page edits lists and sends them all back: few lists, small, from one household. */
+  async #setLists(request) {
+    const body = await request.json().catch(() => null);
+    const lists = isObject(body) ? body.lists : void 0;
+    if (!Array.isArray(lists) || lists.length > LISTS_MAX || !lists.every(isShoppingList)) {
+      return error(`lists must be at most ${LISTS_MAX} lists of at most ${LIST_ITEMS_MAX} products, each with a name`, 400);
+    }
+    if (new Set(lists.map((l) => l.id)).size !== lists.length) return error("each list needs its own id", 400);
+    const clean = lists.map((list) => ({
+      id: list.id,
+      name: list.name.trim(),
+      updatedAt: list.updatedAt,
+      // One line per product: a product twice on a list is counted together.
+      items: [...list.items.reduce((byId, item) => {
+        const known = byId.get(item.product.id);
+        byId.set(item.product.id, known ? { ...known, count: Math.min(known.maxCount, known.count + item.count) } : snapshotItem(item));
+        return byId;
+      }, /* @__PURE__ */ new Map()).values()]
+    }));
+    this.desk.store.write("lists.json", clean);
+    return NextResponse.json({ lists: clean });
+  }
+  // ─── Picks for a pasted list ──────────────────────────────────────────────
+  picks() {
+    const raw = this.desk.store.read("picks.json", {}, isObject);
+    return Object.fromEntries(Object.entries(raw).filter((entry) => isSavedProduct(entry[1])));
+  }
+  async #setPick(request) {
+    const body = await request.json().catch(() => null);
+    const term = isObject(body) && typeof body.term === "string" ? pickTerm(body.term) : "";
+    if (!term) return error("term is required: the words of a line", 400);
+    const picks = this.picks();
+    delete picks[term];
+    if (isObject(body) && body.product !== null) {
+      const product = isObject(body.product) ? savedSnapshot(body.product) : null;
+      if (!product) return error("product needs id, name and displayPrice", 400);
+      picks[term] = product;
+    }
+    const kept = Object.entries(picks).slice(-PICKS_MAX);
+    this.desk.store.write("picks.json", Object.fromEntries(kept));
+    return NextResponse.json({ picks: Object.fromEntries(kept) });
   }
   // ─── Shortcuts ────────────────────────────────────────────────────────────
   shortcuts() {
