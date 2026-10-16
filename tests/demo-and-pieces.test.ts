@@ -433,3 +433,14 @@ test("ordering results: by price, or per kilo or litre with pieces and unreadabl
   assert.deepEqual(ids("price"), ["unreadable", "pieces", "milk", "small-dear", "big-cheap", "sold-out"]);
   assert.deepEqual(ids("unit"), ["milk", "big-cheap", "small-dear", "pieces", "unreadable", "sold-out"]);
 });
+
+test("today and tomorrow are counted in the shop's time zone", async () => {
+  const { dayOffset } = await import("../src/ui/lib/format");
+  const now = Date.parse("2026-10-16T22:30:00Z"); // 00:30 on the 17th in Amsterdam
+  const zone = "Europe/Amsterdam";
+  assert.equal(dayOffset("2026-10-17T17:00:00+02:00", now, zone), 0, "already the 17th in Amsterdam");
+  assert.equal(dayOffset("2026-10-18T08:00:00+02:00", now, zone), 1);
+  assert.equal(dayOffset("2026-10-16T18:00:00+02:00", now, zone), -1);
+  assert.equal(dayOffset("2026-10-26T09:00:00+01:00", now, zone), 9, "across the change to winter time");
+  assert.equal(dayOffset("nonsense", now, zone), null);
+});

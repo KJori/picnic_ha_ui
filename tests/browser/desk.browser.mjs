@@ -361,7 +361,8 @@ describe("Picnic Desk in a browser", () => {
     const page = await openPage();
     await signIn(page);
     await page.locator(".views").getByRole("link", { name: "Orders" }).click();
-    await page.locator("table.orders").getByText("Follow live").waitFor();
+    // An order whose van is driving reads "On the way", as in the app.
+    await page.locator("table.orders").getByText("On the way").waitFor();
     await shot(page, "09-orders");
     await page.locator('table.orders a[href*="demo-delivery-current"]').click();
     await page.locator("svg.route").waitFor();
@@ -861,6 +862,51 @@ describe("Picnic Desk in a browser", () => {
     assert.deepEqual(second.problems, []);
     clean(first);
     await first.context().close();
+  });
+
+  test("an order on its way shows at the top of the desk", async () => {
+    const page = await openPage();
+    await signIn(page);
+    const at = (days, hour) => {
+      const d = new Date();
+      d.setDate(d.getDate() + days);
+      d.setHours(hour, 0, 0, 0);
+      return d.toISOString();
+    };
+    const order = (id, days, items) => ({
+      id, status: "CURRENT", creationTime: at(-1, 20), windowStart: at(days, 17), windowEnd: at(days, 18),
+      deliveryWindowText: "", orderCount: 1, totalPrice: 5430, itemCount: items,
+    });
+    await page.route(/\/api\/deliveries\?status=CURRENT$/, (route) =>
+      route.fulfill({ json: { deliveries: [order("tomorrow-order", 1, 23), order("today-order", 0, 12)] } })
+    );
+    const eta = Date.now() + 20 * 60_000;
+    await page.route(/\/api\/deliveries\/today-order\/position$/, (route) =>
+      route.fulfill({ json: { version: 1, scenario_in_progress: true, query_interval: 15000, eta } })
+    );
+    let tomorrowAsked = 0;
+    await page.route(/\/api\/deliveries\/tomorrow-order\/position$/, (route) => {
+      tomorrowAsked++;
+      return route.fulfill({ json: { scenario_in_progress: false } });
+    });
+    await page.reload();
+    const bar = page.locator(".next-delivery-bar");
+    await bar.locator(".next-delivery").first().waitFor();
+    // Times read in the shop's time zone, whatever the browser's (this one runs on UTC).
+    const clock = (value) => new Intl.DateTimeFormat("en-GB", { hour: "2-digit", minute: "2-digit", timeZone: "Europe/Amsterdam" }).format(new Date(value));
+    const tomorrow = bar.locator('[data-order="tomorrow-order"]');
+    await tomorrow.getByText(`Your order arrives tomorrow, ${clock(at(1, 17))} to ${clock(at(1, 18))}.`).waitFor();
+    await tomorrow.getByText("23 products").waitFor();
+    assert.equal(await tomorrow.getByRole("link", { name: "View order" }).getAttribute("href"), "#/orders/tomorrow-order");
+    const today = bar.locator('[data-order="today-order"]');
+    await today.getByText(`Your order is on its way, expected around ${clock(eta)}.`).waitFor();
+    assert.equal(await bar.locator(".next-delivery").first().getAttribute("data-order"), "today-order", "the soonest first");
+    await today.getByRole("link", { name: "Follow live" }).waitFor();
+    assert.equal(tomorrowAsked, 0, "the van is not asked about before the day of delivery");
+    await shot(page, "15-next-delivery");
+    await page.unroute(/\/api\/deliveries\?status=CURRENT$/);
+    clean(page);
+    await page.context().close();
   });
 
   // Answers in a shape the page does not expect (the app updated while the page stayed open):

@@ -96,6 +96,10 @@ basket as a till receipt on the right.
   they go into the basket as that recipe, as in the app. **Meal plan**: tick
   **Plan** on recipes you want, **Fill the plan** picks the rest so that packs
   are shared, and **Show shopping list** adds everything at once.
+- **Your order**: an order you placed shows above the search box: "Your order
+  arrives tomorrow, 17:00 to 18:00", and once the van is driving "Your order is
+  on its way, expected around 17:24", with a link to follow it live. Times are
+  the shop's local time.
 - **Orders**: your orders in a table. An order on its way shows the van's
   route and expected arrival. Cancel an order, e-mail the invoice again, rate
   a delivery, or put an old order in the basket again. The parcel service is

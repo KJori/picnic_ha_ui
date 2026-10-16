@@ -6,6 +6,7 @@ import { useEffect } from "react";
 
 import { Receipt } from "./components/basket";
 import { Boundary, PageBoundary } from "./components/boundary";
+import { NextDelivery } from "./components/next-delivery";
 import { ToastProvider, useToast } from "./components/common";
 import { ProductDialog } from "./components/product-dialog";
 import { href, navigate, type Route, useRoute, withQuery } from "./lib/router";
@@ -136,6 +137,9 @@ function Desk() {
   return (
     <div className="desk">
       <main className="shelf" id="main">
+        <Boundary>
+          <NextDelivery />
+        </Boundary>
         <header className="top">
           <SearchBox route={route} />
           <Tabs route={route} />

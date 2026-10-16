@@ -47,7 +47,22 @@ export function moneyFormat(language: Language): Money {
   return money;
 }
 
+/**
+ * Days from `now` to `value` in the shop's time zone: 0 today, 1 tomorrow,
+ * -1 yesterday; null for an unreadable date.
+ */
+export function dayOffset(value: DateValue, now: number, timeZone: string): number | null {
+  const date = instant(value);
+  if (!date) return null;
+  // en-CA writes 2026-10-16: a calendar day in that zone, compared as a date.
+  const day = new Intl.DateTimeFormat("en-CA", { timeZone, year: "numeric", month: "2-digit", day: "2-digit" });
+  const days = (d: Date) => Date.parse(`${day.format(d)}T00:00:00Z`) / 86_400_000;
+  return Math.round(days(date) - days(new Date(now)));
+}
+
 export type Dates = {
+  /** The shop's time zone, e.g. "Europe/Amsterdam". */
+  zone: string;
   /** "Thu 15 Oct" */
   day: (v: DateValue) => string;
   /** "Thu" */
@@ -80,6 +95,7 @@ export function dateFormat(language: Language, country: CountryCode): Dates {
     const day = make({ weekday: "short", day: "numeric", month: "short" });
     const clock = make({ hour: "2-digit", minute: "2-digit" });
     dates = {
+      zone: timeZone,
       day,
       weekday: make({ weekday: "short" }),
       clock,

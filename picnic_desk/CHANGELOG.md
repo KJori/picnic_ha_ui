@@ -46,6 +46,9 @@ it does what picnic-web does, with the same handling of Picnic's answers.
   price or by price per kilo or litre.
 - Open tabs keep each other up to date at once; changes from the phone app
   show within a minute.
+- An order you placed shows above the search box: when it arrives, and once
+  the van is driving, that it is on its way with the expected time. In the
+  orders table a current order reads "Planned" or "On the way".
 
 ### Changed
 

@@ -14,6 +14,7 @@ import type {
 import { parseDeliveryTracking } from "@/lib/delivery/parse-delivery-tracking";
 
 import { Lines, Sums } from "../components/basket";
+import { refreshCurrentOrders } from "../state/current-orders";
 import { Confirm, Hint, Loaded, useDates, useLoad, useMoney, useTitle, useToast } from "../components/common";
 import { api } from "../lib/api";
 import { picnicInk } from "../lib/colour";
@@ -53,7 +54,7 @@ export function OrdersView({ route }: { route: Route }) {
   const label = { "": t.deliveriesTabAll, CURRENT: t.deliveriesTabCurrent, COMPLETED: t.deliveriesTabCompleted, CANCELLED: t.deliveriesTabCancelled };
   const empty = { "": t.deliveriesEmptyAll, CURRENT: t.deliveriesEmptyCurrent, COMPLETED: t.deliveriesEmptyCompleted, CANCELLED: t.deliveriesEmptyCancelled };
   const statusText = (s: string, id: string) =>
-    s === "CURRENT" ? (live.has(id) ? t.deliveriesLiveTrack : t.deliveriesStatusCurrent) : s === "CANCELLED" ? t.deliveriesStatusCancelled : t.deliveriesStatusDelivered;
+    s === "CURRENT" ? (live.has(id) ? t.deliveriesStatusEnRoute : t.deliveriesStatusPlanned) : s === "CANCELLED" ? t.deliveriesStatusCancelled : t.deliveriesStatusDelivered;
 
   return (
     <>
@@ -232,6 +233,7 @@ export function OrderView({ deliveryId }: { deliveryId: string }) {
           onCancel={() => setAskCancel(false)}
           onConfirm={async () => {
             const result = await act("cancel", t.deliveriesCancelSuccess, t.deliveriesCancelError);
+            void refreshCurrentOrders();
             setAskCancel(false);
             if (result.ok) reload();
           }}

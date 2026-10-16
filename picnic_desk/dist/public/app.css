@@ -491,6 +491,17 @@ button { cursor: pointer; }
   background: var(--tag); color: var(--tag-ink); font-size: .875rem; font-weight: 600; z-index: 9;
 }
 
+/* The order on its way, above the search box. */
+.next-delivery-bar { margin: 0 0 1rem; }
+.next-delivery {
+  display: flex; flex-wrap: wrap; align-items: baseline; gap: .4rem .9rem; margin: 0 0 .4rem;
+  padding: .6rem .9rem; background: var(--board); border: 1px solid var(--rule); border-left: 4px solid var(--crate); border-radius: 4px;
+}
+.next-delivery .what { font-weight: 700; }
+.next-delivery .hint-inline { color: var(--soft); }
+.next-delivery a { margin-left: auto; color: inherit; font-weight: 600; }
+.next-delivery.live { border-left-color: var(--tag); }
+
 /* The app was updated while the page stayed open. */
 .updated {
   display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: .6rem;

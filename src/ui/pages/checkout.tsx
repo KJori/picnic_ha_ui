@@ -20,6 +20,7 @@ import type {
 } from "@/lib/core/checkout-types";
 
 import { SlotLine } from "../components/basket";
+import { refreshCurrentOrders } from "../state/current-orders";
 import { Confirm, Dialog, ErrorView, Price, Spinner, useDates, useLoad, useTitle, useToast } from "../components/common";
 import { api } from "../lib/api";
 import { paymentAddress } from "../lib/payment";
@@ -281,6 +282,7 @@ function PaymentWatch({ pending, payUrl, onDone }: { pending: Pending; payUrl: s
     setConfirmProblem(null);
     onDone();
     toast(d.orderPlaced);
+    void refreshCurrentOrders();
     await cartModel.refresh();
     navigate("/orders");
   }, [pending, onDone, toast, t.checkoutConfirmError, d.orderPlaced]);

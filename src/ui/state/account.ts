@@ -9,6 +9,7 @@ import type { ProfileData } from "@/lib/core/user-types";
 
 import { api } from "../lib/api";
 import { cartModel } from "./cart";
+import { forgetCurrentOrders } from "./current-orders";
 import { forgetSaved } from "./saved";
 import { tell } from "./sync";
 
@@ -52,6 +53,7 @@ export function forgetAccount({ signingOut = false, quietly = false }: { signing
   changed();
   cartModel.reset();
   forgetSaved();
+  forgetCurrentOrders();
   if (signingOut) {
     try {
       for (const key of Object.keys(localStorage)) {
