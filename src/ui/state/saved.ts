@@ -36,7 +36,7 @@ function loadStarred(force = false): Promise<void> {
   if (starred.value && !force) return Promise.resolve();
   starredLoading ??= api<{ products: SavedProduct[] }>("desk/saved").then((result) => {
     starredLoading = null;
-    if (result.ok) starred.set(result.data.products);
+    if (result.ok && Array.isArray(result.data?.products)) starred.set(result.data.products);
     else if (!starred.value) starred.set([]);
   });
   return starredLoading;
@@ -52,7 +52,8 @@ export async function toggleStar(product: SavedProduct, onError: (message: strin
   const isStarred = before.some((p) => p.id === product.id);
   starred.set(isStarred ? before.filter((p) => p.id !== product.id) : [product, ...before]);
   const result = await api<{ products: SavedProduct[] }>("desk/saved", { method: "POST", body: { product } });
-  if (result.ok) starred.set(result.data.products);
+  if (result.ok && Array.isArray(result.data?.products)) starred.set(result.data.products);
+  else if (result.ok) void loadStarred(true);
   else {
     starred.set(before);
     onError(result.error);
@@ -71,7 +72,7 @@ export function useSavedRecipes(): ReadonlySet<string> {
     if (savedRecipesLoaded) return;
     savedRecipesLoaded = true;
     void api<SavedRecipesApiResponse>("recipe/saved").then((result) => {
-      if (result.ok) savedRecipes.set(new Set(result.data.recipeIds));
+      if (result.ok && Array.isArray(result.data?.recipeIds)) savedRecipes.set(new Set(result.data.recipeIds));
       else savedRecipesLoaded = false;
     });
   }, []);

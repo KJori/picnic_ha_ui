@@ -35,6 +35,7 @@ it does what picnic-web does, with the same handling of Picnic's answers.
   others see "Not your Picnic account" unless named in `allowed_users`.
 - Home Assistant restarts the app when it stops answering (watchdog).
 - An icon and a logo for the app store.
+- A page left open while the app was updated says so and offers a reload.
 
 ### Changed
 
@@ -45,6 +46,8 @@ it does what picnic-web does, with the same handling of Picnic's answers.
   self-check, the keyboard and prices on recipe cards. picnic-web's screens
   are made for a phone; here its parts are laid out for a desk: aisles beside
   the shelf, the week of delivery times in one grid, orders in a table.
+- Delivery times and dates are shown in the shop's time zone, also when the
+  page is opened from abroad.
 - Every screen meets WCAG AA contrast in the light and the dark theme, buttons
   are at least 24 px, and Picnic's own colours are adjusted for the dark theme.
 

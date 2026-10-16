@@ -16,44 +16,18 @@ import {
 import type { Badge as BadgeData } from "@/lib/core/types";
 
 import { picnicInk, picnicLabel } from "../lib/colour";
+import { dateFormat, moneyFormat } from "../lib/format";
 import { useT } from "../state/session";
 
 // ─── Money and dates ─────────────────────────────────────────────────────────
 
-/** Euro amounts are written the Picnic way for the country ("€ 1,39" in Dutch and English). */
-const MONEY_LOCALES = { en: "nl-NL", nl: "nl-NL", de: "de-DE", fr: "fr-FR" } as const;
-const DATE_LOCALES = { en: "en-GB", nl: "nl-NL", de: "de-DE", fr: "fr-FR" } as const;
-
 export function useMoney() {
-  const { language } = useT();
-  const currency = new Intl.NumberFormat(MONEY_LOCALES[language], { style: "currency", currency: "EUR" });
-  const number = new Intl.NumberFormat(MONEY_LOCALES[language], { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-  const money = (cents: number) => currency.format(cents / 100);
-  /** Without the euro sign, as on the receipt: "2,78". */
-  money.plain = (cents: number) => number.format(cents / 100);
-  return money;
+  return moneyFormat(useT().language);
 }
 
 export function useDates() {
-  const { language } = useT();
-  const locale = DATE_LOCALES[language];
-  const day = new Intl.DateTimeFormat(locale, { weekday: "short", day: "numeric", month: "short" });
-  const weekday = new Intl.DateTimeFormat(locale, { weekday: "short" });
-  const clock = new Intl.DateTimeFormat(locale, { hour: "2-digit", minute: "2-digit" });
-  const long = new Intl.DateTimeFormat(locale, { weekday: "long", day: "numeric", month: "long", year: "numeric" });
-  const short = new Intl.DateTimeFormat(locale, { day: "numeric", month: "short" });
-  const at = (value: string | number | null | undefined) => (value === null || value === undefined ? null : new Date(value));
-  return {
-    day: (v: string | number | null | undefined) => (at(v) ? day.format(at(v)!) : ""),
-    weekday: (v: string | number | null | undefined) => (at(v) ? weekday.format(at(v)!) : ""),
-    clock: (v: string | number | null | undefined) => (at(v) ? clock.format(at(v)!) : ""),
-    long: (v: string | number | null | undefined) => (at(v) ? long.format(at(v)!) : ""),
-    /** "15 Oct" */
-    short: (v: string | number | null | undefined) => (at(v) ? short.format(at(v)!) : ""),
-    /** "Thu 15 Oct, 17:00 to 18:00" */
-    window: (start: string | null | undefined, end: string | null | undefined, to: string) =>
-      start ? `${day.format(new Date(start))}, ${clock.format(new Date(start))}${end ? ` ${to} ${clock.format(new Date(end))}` : ""}` : "",
-  };
+  const { language, country } = useT();
+  return dateFormat(language, country);
 }
 
 export function Price({ cents, was, color }: { cents: number; was?: number | null; color?: string | null }) {

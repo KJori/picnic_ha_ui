@@ -5654,13 +5654,16 @@ var Pictures = class {
 // src/server/store.ts
 import { closeSync, fsyncSync, mkdirSync as mkdirSync2, openSync, readFileSync, renameSync, rmSync, writeSync } from "node:fs";
 import { join as join2 } from "node:path";
+var SOON_MS = 3e3;
 var Store = class {
   constructor(dir) {
     this.dir = dir;
     mkdirSync2(dir, { recursive: true, mode: 448 });
   }
   dir;
-  read(name, fallback, check) {
+  #soon = /* @__PURE__ */ new Map();
+  #timer = null;
+  #readFile(name, fallback, check) {
     try {
       const value = JSON.parse(readFileSync(join2(this.dir, name), "utf8"));
       return check(value) ? value : fallback;
@@ -5668,19 +5671,49 @@ var Store = class {
       return fallback;
     }
   }
-  write(name, value) {
+  read(name, fallback, check) {
+    if (this.#soon.has(name)) {
+      const value = this.#soon.get(name);
+      return check(value) ? value : fallback;
+    }
+    return this.#readFile(name, fallback, check);
+  }
+  write(name, value, { durable = true } = {}) {
+    this.#soon.delete(name);
     const path = join2(this.dir, name);
     const temporary = `${path}.${process.pid}.tmp`;
     const fd = openSync(temporary, "w", 384);
     try {
-      writeSync(fd, JSON.stringify(value, null, 1));
-      fsyncSync(fd);
+      writeSync(fd, durable ? JSON.stringify(value, null, 1) : JSON.stringify(value));
+      if (durable) fsyncSync(fd);
     } finally {
       closeSync(fd);
     }
     renameSync(temporary, path);
   }
+  /** Write a cache a little later; several changes in a row become one write. */
+  writeSoon(name, value) {
+    this.#soon.set(name, value);
+    if (this.#timer) return;
+    this.#timer = setTimeout(() => this.flush(), SOON_MS);
+    this.#timer.unref();
+  }
+  /** Write what is waiting now (when stopping). */
+  flush() {
+    if (this.#timer) clearTimeout(this.#timer);
+    this.#timer = null;
+    const waiting = [...this.#soon];
+    this.#soon.clear();
+    for (const [name, value] of waiting) {
+      try {
+        this.write(name, value, { durable: false });
+      } catch (error2) {
+        console.error(`[store] cannot write ${name}:`, error2 instanceof Error ? error2.message : error2);
+      }
+    }
+  }
   remove(name) {
+    this.#soon.delete(name);
     rmSync(join2(this.dir, name), { force: true });
   }
 };
@@ -5935,7 +5968,7 @@ var DeskRoutes = class {
           const known = byProduct.get(item.productId);
           if (known) {
             known.times += 1;
-            if (when > known.lastBought) known.lastBought = when;
+            if (Date.parse(when) > Date.parse(known.lastBought)) known.lastBought = when;
           } else {
             byProduct.set(item.productId, { item, times: 1, lastBought: when });
           }
@@ -5943,7 +5976,7 @@ var DeskRoutes = class {
       }
     });
     const items = [...byProduct.values()].sort(
-      (a, b) => b.times - a.times || b.lastBought.localeCompare(a.lastBought) || a.item.name.localeCompare(b.item.name)
+      (a, b) => b.times - a.times || (Date.parse(b.lastBought) || 0) - (Date.parse(a.lastBought) || 0) || a.item.name.localeCompare(b.item.name)
     );
     const data = {
       builtAt: new Date((this.desk.options.now ?? Date.now)()).toISOString(),
@@ -6016,7 +6049,7 @@ var DeskRoutes = class {
         ids.sort((a, b) => prices[a].at.localeCompare(prices[b].at));
         for (const old of ids.slice(0, ids.length - RECIPE_PRICES_MAX)) delete prices[old];
       }
-      this.desk.store.write("recipe_prices.json", prices);
+      this.desk.store.writeSoon("recipe_prices.json", prices);
       return NextResponse.json(entry);
     } finally {
       const next = this.#priceWaiting.shift();
@@ -12764,6 +12797,7 @@ function startDesk(env = process.env) {
     );
   });
   const stop = () => {
+    desk.store.flush();
     server.close(() => process.exit(0));
     server.closeIdleConnections();
     setTimeout(() => {

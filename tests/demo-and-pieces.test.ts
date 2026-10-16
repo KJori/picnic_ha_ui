@@ -3,7 +3,7 @@
  * rules of their own.
  */
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -301,4 +301,55 @@ test("Picnic's colours: only plain colour values, and readable ink on Picnic's o
   assert.equal(inkFor("#4B8505"), "#111111");
   assert.equal(picnicLabel("#333", "YELLOW2").className, "picnic-ink", "an unknown background is dropped");
   assert.deepEqual(picnicInk("url(x)"), {});
+});
+
+test("a cache written soon: one write for many changes, nothing left after a removal, all written when stopping", async () => {
+  const { Store } = await import("../src/server/store");
+  const dir = mkdtempSync(join(tmpdir(), "store-"));
+  const store = new Store(dir);
+  const isRecord = (v: unknown): v is Record<string, number> => typeof v === "object" && v !== null;
+  store.writeSoon("prices.json", { a: 1 });
+  store.writeSoon("prices.json", { a: 2 });
+  assert.deepEqual(store.read("prices.json", {}, isRecord), { a: 2 }, "read sees the waiting value");
+  assert.deepEqual(readdirSync(dir), [], "not written yet");
+  store.flush();
+  assert.deepEqual(JSON.parse(readFileSync(join(dir, "prices.json"), "utf8")), { a: 2 });
+  store.writeSoon("prices.json", { a: 3 });
+  store.remove("prices.json"); // signing out
+  store.flush();
+  assert.deepEqual(readdirSync(dir), [], "a removal cancels the waiting write");
+  store.writeSoon("prices.json", { a: 4 });
+  store.write("prices.json", { a: 5 });
+  store.flush();
+  assert.deepEqual(JSON.parse(readFileSync(join(dir, "prices.json"), "utf8")), { a: 5 }, "a direct write wins");
+});
+
+test("dates: in the shop's time zone wherever the browser is, nothing for an unreadable date, ordered by the moment", async () => {
+  const { byTime, dateFormat, moneyFormat } = await import("../src/ui/lib/format");
+  const zone = process.env.TZ;
+  process.env.TZ = "America/New_York"; // the page opened abroad
+  try {
+    const dates = dateFormat("en", "NL");
+    assert.equal(dates.clock("2026-10-20T17:00:00+02:00"), "17:00", "summer time in Enschede");
+    assert.equal(dates.clock("2026-11-20T17:00:00+01:00"), "17:00", "winter time");
+    assert.equal(dates.window("2026-10-20T17:00:00+02:00", "2026-10-20T18:00:00+02:00", "to"), "Tue 20 Oct, 17:00 to 18:00");
+    assert.equal(dates.day("2026-10-20T23:30:00+02:00"), "Tue 20 Oct", "late evening stays on its own day");
+  } finally {
+    if (zone === undefined) delete process.env.TZ;
+    else process.env.TZ = zone;
+  }
+  const dates = dateFormat("nl", "NL");
+  for (const bad of ["", "not a date", null, undefined, "2026-13-45"]) {
+    assert.equal(dates.clock(bad), "", String(bad));
+    assert.equal(dates.window(bad, bad, "tot"), "", String(bad));
+  }
+  assert.equal(dateFormat("nl", "NL"), dates, "made once");
+  // The night the clocks go back: 02:30 summer time comes before 02:10 winter time,
+  // although its text sorts after it.
+  const summer = "2026-10-25T02:30:00+02:00";
+  const winter = "2026-10-25T02:10:00+01:00";
+  assert.ok(summer > winter, "as text, the later one");
+  assert.ok(byTime(summer, winter) < 0, "by the moment, the earlier one");
+  assert.equal(moneyFormat("en")(139), "€\u00a01,39", "with a no-break space, as Intl writes it");
+  assert.equal(moneyFormat("en").plain(278), "2,78");
 });

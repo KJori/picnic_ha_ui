@@ -7,7 +7,7 @@ import { useEffect, useState } from "react";
 import type { SearchApiResponse } from "@/lib/core/types";
 
 import type { Check, HistoryData } from "../../server/desk-routes";
-import { ErrorView, Hint, Loaded, Spinner, useLoad, useTitle } from "../components/common";
+import { ErrorView, Hint, Loaded, Spinner, useDates, useLoad, useTitle } from "../components/common";
 import { fromCartItem, fromSaved, ProductCell, ProductGrid } from "../components/products";
 import { api } from "../lib/api";
 import { parseListLine } from "../lib/list";
@@ -21,13 +21,13 @@ const SOURCE = typeof DESK_SOURCE === "string" ? DESK_SOURCE : "https://github.c
 // ─── Bought before ───────────────────────────────────────────────────────────
 
 export function HistoryView() {
-  const { d, language } = useT();
+  const { d } = useT();
   useTitle(d.boughtBefore);
   const [round, setRound] = useState(0);
   const [load, reload] = useLoad<HistoryData>(`history:${round}`, (signal) =>
     api(`desk/history${round ? "?refresh=1" : ""}`, { signal })
   );
-  const when = new Intl.DateTimeFormat(language === "en" ? "en-GB" : language, { day: "numeric", month: "short" });
+  const dates = useDates();
   return (
     <>
       <div className="view-bar">
@@ -43,7 +43,7 @@ export function HistoryView() {
               products={data.items.map((entry) => fromCartItem(entry.item))}
               notes={(product) => {
                 const entry = data.items.find((e) => e.item.productId === product.id);
-                return entry ? d.timesBought.replace("{n}", String(entry.times)).replace("{date}", when.format(new Date(entry.lastBought))) : undefined;
+                return entry ? d.timesBought.replace("{n}", String(entry.times)).replace("{date}", dates.short(entry.lastBought)) : undefined;
               }}
             />
           ) : (

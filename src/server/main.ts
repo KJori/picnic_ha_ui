@@ -87,6 +87,7 @@ export function startDesk(env: NodeJS.ProcessEnv = process.env) {
   // it. Finish what is running, close idle connections, and do not wait for
   // a slow request longer than that.
   const stop = () => {
+    desk.store.flush();
     server.close(() => process.exit(0));
     server.closeIdleConnections();
     setTimeout(() => {

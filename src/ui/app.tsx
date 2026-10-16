@@ -2,9 +2,10 @@
  * The desk: the shelf on the left under a big search box and a row of tabs,
  * the basket as a till receipt on the right, product pages as a sheet on top.
  */
-import { Component, type ReactNode, useEffect } from "react";
+import { useEffect } from "react";
 
 import { Receipt } from "./components/basket";
+import { Boundary, PageBoundary } from "./components/boundary";
 import { ToastProvider, useToast } from "./components/common";
 import { ProductDialog } from "./components/product-dialog";
 import { href, navigate, type Route, useRoute, withQuery } from "./lib/router";
@@ -20,16 +21,18 @@ import { SessionProvider, useSession, useT } from "./state/session";
 
 export function App() {
   return (
-    <SessionProvider>
-      <ToastProvider>
-        <Gate />
-      </ToastProvider>
-    </SessionProvider>
+    <PageBoundary>
+      <SessionProvider>
+        <ToastProvider>
+          <Gate />
+        </ToastProvider>
+      </SessionProvider>
+    </PageBoundary>
   );
 }
 
 function Gate() {
-  const { state } = useSession();
+  const { state, outdated } = useSession();
   const { d } = useT();
   if (state?.notYours) {
     return (
@@ -43,6 +46,14 @@ function Gate() {
   }
   return (
     <>
+      {outdated && (
+        <p className="updated" role="status">
+          {d.appUpdated}{" "}
+          <button type="button" className="secondary" onClick={() => window.location.reload()}>
+            {d.reloadPage}
+          </button>
+        </p>
+      )}
       {state?.signedIn ? <Desk /> : <LoginPage />}
       {state?.demo && <p className="demo">{d.demoBadge}</p>}
     </>
@@ -64,7 +75,7 @@ function canonical(route: Route): string | null {
 function Desk() {
   const route = useRoute();
   const toast = useToast();
-  const { t, d } = useT();
+  const { t } = useT();
 
   useEffect(() => {
     const to = canonical(route);
@@ -116,17 +127,17 @@ function Desk() {
           <Tabs route={route} />
         </header>
         <section className="view">
-          <Boundary key={route.path} message={d.viewBroke} retry={t.retryButton}>
+          <Boundary key={route.path}>
             <View route={route} />
           </Boundary>
         </section>
       </main>
       <aside className="till" aria-label={t.cartTitle}>
-        <Boundary message={d.viewBroke} retry={t.retryButton}>
+        <Boundary>
           <Receipt />
         </Boundary>
       </aside>
-      {productId && <ProductDialog id={productId} onClose={() => navigate(withQuery(route, { product: null }), true)} />}
+      {productId && <ProductDialog key={productId} id={productId} onClose={() => navigate(withQuery(route, { product: null }), true)} />}
     </div>
   );
 }
@@ -194,28 +205,4 @@ function NotFound() {
       {d.notFound} <a href={href("/search")}>{d.search}</a>
     </p>
   );
-}
-
-type BoundaryProps = { children: ReactNode; message: string; retry: string };
-
-/** A view that breaks shows a message and a way back, not a blank shelf. */
-class Boundary extends Component<BoundaryProps, { error: Error | null }> {
-  override state = { error: null as Error | null };
-  static getDerivedStateFromError(error: Error) {
-    return { error };
-  }
-  override componentDidCatch(error: Error) {
-    console.error("[Picnic Desk]", error);
-  }
-  override render() {
-    if (!this.state.error) return this.props.children;
-    return (
-      <div className="trouble" role="alert">
-        <p>{this.props.message.replace("{message}", this.state.error.message)}</p>
-        <button type="button" className="secondary" onClick={() => this.setState({ error: null })}>
-          {this.props.retry}
-        </button>
-      </div>
-    );
-  }
 }

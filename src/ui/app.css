@@ -461,6 +461,13 @@ button { cursor: pointer; }
   background: var(--tag); color: var(--tag-ink); font-size: .875rem; font-weight: 600; z-index: 9;
 }
 
+/* The app was updated while the page stayed open. */
+.updated {
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: .6rem;
+  margin: 0; padding: .55rem 1rem; background: var(--tag); color: var(--tag-ink); font-weight: 600;
+}
+.updated .secondary { color: var(--tag-ink); border-color: var(--tag-ink); }
+
 /* ------------------------------------------------------------------ narrow */
 
 @media (max-width: 60rem) {

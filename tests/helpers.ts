@@ -53,7 +53,8 @@ export class FakePicnic {
       const path = url.pathname.replace(/^\/api\/\d+/, "") + url.search;
       const route = this.#routes.find((r) => r.method === method && r.pattern.test(path));
       if (!route) return json({ error: { message: `no fake for ${method} ${path}` } }, { status: 599, statusText: "Unfaked" });
-      return typeof route.answer === "function" ? route.answer(seen) : route.answer.clone();
+      const answer = Promise.resolve(typeof route.answer === "function" ? route.answer(seen) : route.answer.clone());
+      return abortable(answer, init?.signal ?? undefined);
     }) as typeof fetch;
     return this;
   }
@@ -128,6 +129,37 @@ export async function runDesk(options: Partial<DeskOptions> = {}): Promise<Runni
       rmSync(dataDir, { recursive: true, force: true });
     },
   };
+}
+
+/**
+ * Like real fetch: an aborted signal (the app's time limit) ends the wait for
+ * an answer, and ends reading a body that is still coming.
+ */
+async function abortable(answer: Promise<Response>, signal: AbortSignal | undefined): Promise<Response> {
+  if (!signal) return answer;
+  signal.throwIfAborted();
+  const aborted = new Promise<never>((_, reject) => signal.addEventListener("abort", () => reject(signal.reason), { once: true }));
+  const response = await Promise.race([answer, aborted]);
+  if (!response.body) return response;
+  const reader = response.body.getReader();
+  const body = new ReadableStream<Uint8Array>({
+    start(controller) {
+      signal.addEventListener("abort", () => controller.error(signal.reason), { once: true });
+    },
+    async pull(controller) {
+      try {
+        const { done, value } = await reader.read();
+        if (done) controller.close();
+        else controller.enqueue(value);
+      } catch (error) {
+        controller.error(error);
+      }
+    },
+    cancel(reason) {
+      return reader.cancel(reason);
+    },
+  });
+  return new Response(body, { status: response.status, statusText: response.statusText, headers: response.headers });
 }
 
 /** fetch as it was before any fake was installed. */

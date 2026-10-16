@@ -22,7 +22,15 @@ type SessionValue = {
   refresh: () => Promise<DeskState | null>;
   /** The server said the Picnic session is gone. */
   expire: () => void;
+  /** The app was updated while this page stayed open: its answers may not fit this page any more. */
+  outdated: boolean;
 };
+
+declare const DESK_VERSION: string;
+/** The version this page was built as; null when not built (tests). */
+const PAGE_VERSION = typeof DESK_VERSION === "string" ? DESK_VERSION : null;
+/** Coming back to the tab after this long asks the server again (signed out elsewhere, updated). */
+const STATE_AGAIN_AFTER_MS = 60_000;
 
 const SessionContext = createContext<SessionValue | null>(null);
 
@@ -74,6 +82,21 @@ export function SessionProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => onSignedOut(expire), [expire]);
 
+  useEffect(() => {
+    let last = Date.now();
+    const onVisible = () => {
+      if (document.visibilityState !== "visible" || Date.now() - last < STATE_AGAIN_AFTER_MS) return;
+      last = Date.now();
+      void refresh();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    window.addEventListener("focus", onVisible);
+    return () => {
+      document.removeEventListener("visibilitychange", onVisible);
+      window.removeEventListener("focus", onVisible);
+    };
+  }, [refresh]);
+
   const language: Language = state?.language ?? "en";
   useEffect(() => {
     // Screen readers and hyphenation follow the page's language.
@@ -89,6 +112,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       demo: state?.demo ?? false,
       refresh,
       expire,
+      outdated: Boolean(PAGE_VERSION && state && state.version !== PAGE_VERSION),
     }),
     [state, language, refresh, expire]
   );

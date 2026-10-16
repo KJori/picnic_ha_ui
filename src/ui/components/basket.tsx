@@ -10,6 +10,7 @@ import type { CartData, CartFooterData, CartItem, CartRecipeGroup, DepositEntry,
 
 import { api } from "../lib/api";
 import { picnicInk } from "../lib/colour";
+import { byTime } from "../lib/format";
 import { href, navigate } from "../lib/router";
 import { cartModel, useCart } from "../state/cart";
 import { forgetAccount, useProfileName } from "../state/account";
@@ -191,7 +192,7 @@ function SlotPicker({ onClose, onChosen }: { onClose: () => void; onChosen: (car
           return (
             <div className="week" style={{ gridTemplateColumns: `repeat(${data.dayGroups.length}, minmax(7.5rem, 1fr))` }}>
               {data.dayGroups.map((day) => {
-                const slots = [...day.greenSlots, ...day.regularSlots].sort((a, b) => a.windowStart.localeCompare(b.windowStart));
+                const slots = [...day.greenSlots, ...day.regularSlots].sort((a, b) => byTime(a.windowStart, b.windowStart));
                 return (
                   <section key={day.date} className="day" aria-label={`${day.dayLabel} ${day.dateLabel}`}>
                     <h3>

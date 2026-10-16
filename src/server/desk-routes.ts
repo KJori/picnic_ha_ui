@@ -362,7 +362,7 @@ export class DeskRoutes {
           const known = byProduct.get(item.productId);
           if (known) {
             known.times += 1;
-            if (when > known.lastBought) known.lastBought = when;
+            if (Date.parse(when) > Date.parse(known.lastBought)) known.lastBought = when;
           } else {
             byProduct.set(item.productId, { item, times: 1, lastBought: when });
           }
@@ -370,7 +370,10 @@ export class DeskRoutes {
       }
     });
     const items = [...byProduct.values()].sort(
-      (a, b) => b.times - a.times || b.lastBought.localeCompare(a.lastBought) || a.item.name.localeCompare(b.item.name)
+      (a, b) =>
+        b.times - a.times ||
+        (Date.parse(b.lastBought) || 0) - (Date.parse(a.lastBought) || 0) ||
+        a.item.name.localeCompare(b.item.name)
     );
     const data: HistoryData = {
       builtAt: new Date((this.desk.options.now ?? Date.now)()).toISOString(),
@@ -450,7 +453,7 @@ export class DeskRoutes {
         ids.sort((a, b) => prices[a].at.localeCompare(prices[b].at));
         for (const old of ids.slice(0, ids.length - RECIPE_PRICES_MAX)) delete prices[old];
       }
-      this.desk.store.write("recipe_prices.json", prices);
+      this.desk.store.writeSoon("recipe_prices.json", prices);
       return NextResponse.json(entry);
     } finally {
       // Hand the slot straight to the next one waiting, or give it back.

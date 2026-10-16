@@ -605,4 +605,54 @@ describe("Picnic Desk in a browser", () => {
       rmSync(folder, { recursive: true, force: true });
     }
   });
+
+  // Answers in a shape the page does not expect (the app updated while the page stayed open):
+  // each part of the desk shows its own message, nothing escapes, nothing goes blank.
+  test("odd answers break one part at a time, never the whole page", async () => {
+    const page = await openPage();
+    await signIn(page);
+    const escaped = [];
+    page.on("pageerror", (e) => escaped.push(e.message));
+    const shapes = [{}, [], null, { items: "x", products: {}, recipes: "x", deliveries: 5, nodes: "x", sections: {}, checks: "x" }];
+    const screens = ["/search?q=tofu", "/search?q=tofu,brood", "/categories/l1-brood", "/search?q=tofu&product=s1004", "/list", "/history", "/saved", "/cookbook", "/orders", "/orders/demo-delivery-1", "/parcels", "/checkout", "/check"];
+    const blank = [];
+    for (const shape of shapes) {
+      await page.route(/\/api\/(?!desk\/state|auth\/)/, (route) =>
+        route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(shape) })
+      );
+      for (const screen of screens) {
+        await page.goto(`${base}#${screen}`);
+        await page.waitForTimeout(400);
+        // The tabs and the search box stay: the desk is still there around the broken part.
+        if (!(await page.locator(".views a").count()) || !(await page.locator("#q").count())) blank.push(`${JSON.stringify(shape)} ${screen}`);
+      }
+      await page.unroute(/\/api\/(?!desk\/state|auth\/)/);
+    }
+    assert.deepEqual(blank, [], "no blank desk");
+    assert.deepEqual([...new Set(escaped)], [], "nothing escaped");
+    page.problems.length = 0; // the console logs each caught break; those are expected here
+    await page.context().close();
+  });
+
+  test("a page left open while the app was updated says so and offers a reload", async () => {
+    const page = await openPage();
+    await signIn(page);
+    await page.route("**/api/desk/state", async (route) => {
+      const answer = await route.fetch();
+      const state = await answer.json();
+      await route.fulfill({ response: answer, json: { ...state, version: "9.9.9" } });
+    });
+    await page.evaluate(() => {
+      // Coming back to the tab after a while asks the server again.
+      Date.now = ((now) => () => now() + 5 * 60 * 1000)(Date.now);
+      window.dispatchEvent(new Event("focus"));
+    });
+    await page.locator(".updated").getByRole("button", { name: "Reload the page" }).waitFor();
+    await page.unroute("**/api/desk/state");
+    await page.locator(".updated").getByRole("button", { name: "Reload the page" }).click();
+    await page.locator(".views").waitFor();
+    assert.equal(await page.locator(".updated").count(), 0, "gone after reloading into the new version");
+    clean(page);
+    await page.context().close();
+  });
 });

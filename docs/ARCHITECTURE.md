@@ -75,7 +75,12 @@ one already shown, and fetches the basket again after a failure.
   first when it is full). At most six go to Picnic at a time, and many cells
   asking for one picture cause one fetch. picnic-web loads pictures straight
   from Picnic in the browser instead.
-- Recipe card prices are worked out two at a time and kept for a day.
+- Recipe card prices are worked out two at a time and kept for a day; the
+  price file is written at most every few seconds (`Store.writeSoon`), and on
+  stopping.
+- The page notices when the app was updated while it stayed open, offers a
+  reload, and each part of the desk (and the product page) breaks on its own.
+- Dates are shown in the shop's time zone and compared as moments.
 - Request bodies are capped; static files cannot leave their folder.
 
 ## Security and privacy
@@ -120,6 +125,13 @@ one already shown, and fetches the basket again after a failure.
   meets WCAG AA contrast, buttons are at least 24 px, headings do not skip a
   level, and keyboard focus shows. A Dutch desk shows no English string from
   the page's own tables.
+- `tests/resilience.test.ts`: every route against nine kinds of garbled
+  Picnic answer (nothing, wrong types, HTML, nonsense RSC, errors) and a
+  Picnic that never answers: always JSON in time, never a 500, still signed
+  in afterwards. In the browser, answers in shapes the page does not expect
+  break one part of the desk at a time, never the whole page.
+- `tests/soak.mjs` (by hand, minutes): tens of thousands of mixed requests;
+  memory, open handles and answer times stay flat.
 - `tests/app-config.test.ts`: options, schema and the option translations
   agree; the version matches everywhere; the app asks Home Assistant for no
   extra rights.

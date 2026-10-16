@@ -10,6 +10,7 @@ import { renderMarkdownBold } from "@/lib/pml/render-markdown-bold";
 import { api } from "../lib/api";
 import { useCart } from "../state/cart";
 import { useT } from "../state/session";
+import { Boundary } from "./boundary";
 import { Dialog, Img, Loaded, PicnicLabel, Price, Stepper, useLoad, useMoney } from "./common";
 import { fromSlider, ProductGrid, StarButton } from "./products";
 
@@ -50,12 +51,14 @@ const NUTRITION_TITLE = /voedingswaarde|nährwert|naehrwert|valeurs? nutritionne
 export function ProductDialog({ id, onClose }: { id: string; onClose: () => void }) {
   const { d } = useT();
   const [load, reload] = useLoad<ProductDetail>(id, (signal) => api(`product/${encodeURIComponent(id)}`, { signal }));
-  const title = load.status === "ready" ? load.data.name : d.product;
+  const title = (load.status === "ready" && load.data?.name) || d.product;
   return (
     <Dialog title={title} onClose={onClose} className="product-sheet">
-      <Loaded load={load} retry={reload}>
-        {(product) => <ProductView product={product} />}
-      </Loaded>
+      <Boundary>
+        <Loaded load={load} retry={reload}>
+          {(product) => <ProductView product={product} />}
+        </Loaded>
+      </Boundary>
       <p className="hint">
         <a className="quiet" href={`api/desk/raw?${new URLSearchParams({ page: `product-details-page-root?id=${id}` })}`} download>
           {d.downloadRaw}

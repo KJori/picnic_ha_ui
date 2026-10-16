@@ -521,6 +521,7 @@ describe("the desk's own routes", () => {
     // Asked again, also at the same moment: answered from what is kept.
     await Promise.all([desk.get(`/api/desk/recipe-price?id=${id(1)}`), desk.get(`/api/desk/recipe-price?id=${id(1)}`)]);
     assert.equal(pageCalls, calls);
+    desk.desk.store.flush(); // written a few seconds later, or when the app stops
     const kept = JSON.parse(readFileSync(join(desk.dataDir, "recipe_prices.json"), "utf8"));
     assert.equal(Object.keys(kept).length, 6);
     assert.equal((await desk.get("/api/desk/recipe-price?id=nope")).status, 400);
