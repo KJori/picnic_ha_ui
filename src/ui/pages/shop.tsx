@@ -10,7 +10,7 @@ import type { RscPageModel } from "@/lib/rsc/rsc-page-types";
 
 import type { Shortcut } from "../../server/desk-routes";
 import { ErrorView, Hint, Loaded, Spinner, useLoad, useTitle, useToast } from "../components/common";
-import { ProductGrid, ProductSections } from "../components/products";
+import { ProductGrid, ProductSections, SortChoice } from "../components/products";
 import { Aisles, RscPageView } from "../components/rsc";
 import { api } from "../lib/api";
 import { href, navigate, type Route } from "../lib/router";
@@ -106,10 +106,11 @@ function ManySearches({ terms }: { terms: string[] }) {
     <Loaded load={load} retry={reload}>
       {(groups) => (
         <>
+          <SortChoice />
           {groups.map(({ term, products }) => (
             <section key={term} className="group">
               <h3>{term}</h3>
-              {products.length ? <ProductGrid products={products} /> : <Hint>{d.noMatchWord}</Hint>}
+              {products.length ? <ProductGrid products={products} sortable /> : <Hint>{d.noMatchWord}</Hint>}
             </section>
           ))}
         </>

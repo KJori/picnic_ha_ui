@@ -472,6 +472,8 @@ button { cursor: pointer; }
 .save-list input { padding: .55rem .6rem; border: 1px solid var(--soft); border-radius: 4px; background: var(--board); color: var(--ink); font: inherit; }
 .wanted .pick-note { display: flex; align-items: center; gap: .6rem; margin: 0 0 .3rem; font-size: .875rem; color: var(--soft); }
 .picks-bar { margin: 1rem 0 0; }
+.chips.sort { align-items: center; margin: .2rem 0 .8rem; }
+.chips.sort .hint-inline { color: var(--soft); font-size: .875rem; margin-right: .2rem; }
 
 /* ----------------------------------------------------------------- notices */
 

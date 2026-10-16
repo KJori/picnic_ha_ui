@@ -10,6 +10,7 @@ import type { ProfileData } from "@/lib/core/user-types";
 import { api } from "../lib/api";
 import { cartModel } from "./cart";
 import { forgetSaved } from "./saved";
+import { tell } from "./sync";
 
 let profileName: string | null = null;
 let profileLoading = false;
@@ -44,7 +45,9 @@ const BROWSER_KEY_PREFIX = "picnic_desk_";
  * clears what this page keeps in the browser, which another Home Assistant
  * user on the same browser could otherwise read.
  */
-export function forgetAccount({ signingOut = false }: { signingOut?: boolean } = {}): void {
+export function forgetAccount({ signingOut = false, quietly = false }: { signingOut?: boolean; quietly?: boolean } = {}): void {
+  // Other tabs follow: they ask the app whether anyone is signed in now.
+  if (!quietly) tell({ type: "session" });
   profileName = null;
   changed();
   cartModel.reset();

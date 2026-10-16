@@ -11,6 +11,7 @@ import type { CartItem } from "@/lib/core/types";
 import type { ListItem, Picks, SavedProduct, ShoppingList } from "../../server/desk-routes";
 import { api } from "../lib/api";
 import type { Wanted } from "./cart";
+import { hear, tell } from "./sync";
 
 class Store<T> {
   value: T;
@@ -56,6 +57,7 @@ export async function saveLists(next: ShoppingList[]): Promise<string | null> {
   const result = await api<{ lists: ShoppingList[] }>("desk/lists", { method: "PUT", body: { lists: next } });
   if (result.ok && Array.isArray(result.data?.lists)) {
     lists.set(result.data.lists);
+    tell({ type: "lists", lists: result.data.lists });
     return null;
   }
   lists.set(before);
@@ -124,6 +126,12 @@ export async function setPick(words: string, product: SavedProduct | null): Prom
   else delete next[term];
   picks.set(next);
   const result = await api<{ picks: Picks }>("desk/picks", { method: "PUT", body: { term, product } });
-  if (result.ok && result.data?.picks) picks.set(result.data.picks);
-  else picks.set(before);
+  if (result.ok && result.data?.picks) {
+    picks.set(result.data.picks);
+    tell({ type: "picks", picks: result.data.picks });
+  } else picks.set(before);
 }
+
+// What another tab saved shows here at once.
+hear("lists", (message) => lists.set(message.lists));
+hear("picks", (message) => picks.set(message.picks));

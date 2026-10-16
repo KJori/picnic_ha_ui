@@ -42,6 +42,10 @@ it does what picnic-web does, with the same handling of Picnic's answers.
   remembered lines at once.
 - Undo after taking the last one of a product out, emptying the basket, or
   putting a list in the basket.
+- Price per kilo, litre or piece under every product, and ordering results by
+  price or by price per kilo or litre.
+- Open tabs keep each other up to date at once; changes from the phone app
+  show within a minute.
 
 ### Changed
 

@@ -265,3 +265,29 @@ test("a bulk change does not wait forever when the basket is emptied or forgotte
   const result = await running;
   assert.deepEqual(result.failed, ["s1"]);
 });
+
+test("another tab's basket shows at once, and is told on; with clicks of its own on their way, a tab asks Picnic afterwards", async () => {
+  const server = fakeServer({ s1: 1 });
+  const told: CartData[] = [];
+  const cart = new CartModel(server.send, server.load);
+  cart.onShown = (c) => told.push(c);
+  await cart.refresh();
+  assert.equal(told.length, 1, "what this tab got from Picnic is told");
+
+  cart.fromOtherTab(cartOf({ s1: 1, s2: 3 }));
+  assert.equal(cart.quantity("s2"), 3, "shown at once");
+  assert.equal(told.length, 1, "not told back");
+
+  // Now this tab has a click on its way when the other tab's basket arrives.
+  const loadsBefore = server.loads();
+  cart.add("s1");
+  cart.fromOtherTab(cartOf({ s1: 1, s2: 5 }));
+  assert.equal(cart.quantity("s1"), 2, "its own click is not undone");
+  server.state.s2 = 5; // what the other tab did, at Picnic
+  server.waiting.shift()!.release();
+  await settle();
+  await settle();
+  assert.ok(server.loads() > loadsBefore, "asked Picnic once its own click was answered");
+  assert.equal(cart.quantity("s2"), 5);
+  assert.equal(cart.quantity("s1"), 2);
+});

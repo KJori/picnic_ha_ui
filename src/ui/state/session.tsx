@@ -8,6 +8,8 @@ import type { CountryCode } from "@/lib/core/types";
 import type { DeskState } from "../../server/desk-routes";
 import { deskStrings, type DeskStrings, picnicStrings, type Language } from "../i18n";
 import { api, onSignedOut } from "../lib/api";
+import { forgetAccount } from "./account";
+import { hear } from "./sync";
 import type { Translations } from "@/lib/core/i18n";
 
 type SessionValue = {
@@ -81,6 +83,17 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   }, []);
 
   useEffect(() => onSignedOut(expire), [expire]);
+
+  // Another tab signed in or out: this one follows at once.
+  useEffect(
+    () =>
+      hear("session", () => {
+        void refresh().then((now) => {
+          if (!now?.signedIn) forgetAccount({ quietly: true });
+        });
+      }),
+    [refresh]
+  );
 
   useEffect(() => {
     let last = Date.now();

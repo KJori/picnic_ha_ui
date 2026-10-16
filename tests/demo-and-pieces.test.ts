@@ -361,3 +361,75 @@ test("the page and the server key a pasted line's pick by the same words", async
     assert.equal(page(words), server(words), words);
   }
 });
+
+test("price per kilo, litre or piece: plain pack sizes are read, anything else gives nothing", async () => {
+  const { packSize, unitPrice } = await import("../src/ui/lib/unit-price");
+  const cases: [string, number, string | null][] = [
+    // as seen in Picnic's pages
+    ["500 gram", 179, "358/kg"],
+    ["12g", 99, "8250/kg"],
+    ["4 Stück", 300, "75/piece"],
+    ["12 Stück", 600, "50/piece"],
+    // the usual shapes
+    ["500 g", 179, "358/kg"],
+    ["1 kg", 249, "249/kg"],
+    ["1,5 kg", 300, "200/kg"],
+    ["1.5 kg", 300, "200/kg"],
+    ["1.000 gram", 500, "500/kg"],
+    ["ca. 1 kg", 450, "450/kg"],
+    ["1 l", 239, "239/l"],
+    ["1 liter", 239, "239/l"],
+    ["330 ml", 99, "300/l"],
+    ["75 cl", 600, "800/l"],
+    ["6 x 330 ml", 594, "300/l"],
+    ["6x0,33 l", 594, "300/l"],
+    ["2 x 125 gram", 250, "1000/kg"],
+    ["4 stuks", 200, "50/piece"],
+    // not plain sizes: nothing
+    ["1 stuk", 99, null],
+    ["per stuk", 99, null],
+    ["3 bollen", 99, null],
+    ["300 g, uitlekgewicht 180 g", 199, null],
+    ["1 bos", 129, null],
+    ["", 99, null],
+    ["500 g", 0, null],
+    ["0 g", 99, null],
+    ["0.5 mg", 99, null],
+  ];
+  for (const [size, cents, expected] of cases) {
+    const found = unitPrice(cents, size);
+    assert.equal(found ? `${found.cents}/${found.per}` : null, expected, `${size} at ${cents}`);
+  }
+  assert.deepEqual(packSize("6 x 330 ml"), { amount: 1980, per: "l" });
+});
+
+test("price per kilo agrees with the one Picnic itself prints on its product page", async () => {
+  const { parseProductDetailPage } = await import("@/lib/product/parse-fusion-product");
+  const { unitPrice } = await import("../src/ui/lib/unit-price");
+  const { fixture } = await import("./helpers");
+  const product = parseProductDetailPage(fixture("product_details_page_nl.json"), "s1018620");
+  const ours = unitPrice(product.displayPrice, product.unitQuantity);
+  const picnic = /€\s*([\d.,]+)\s*\/\s*(kg|l)/i.exec(product.unitPrice ?? "");
+  assert.ok(picnic, `Picnic's unit price: ${product.unitPrice}`);
+  assert.ok(ours, `ours, from "${product.unitQuantity}" at ${product.displayPrice}`);
+  assert.equal(ours.per, picnic[2].toLowerCase());
+  const theirs = Math.round(Number(picnic[1].replace(",", ".")) * 100);
+  assert.ok(Math.abs(ours.cents - theirs) <= 1, `ours ${ours.cents} vs Picnic's ${theirs} (${product.unitQuantity}, ${product.displayPrice})`);
+});
+
+test("ordering results: by price, or per kilo or litre with pieces and unreadable sizes after, sold out last", async () => {
+  const { sortProducts } = await import("../src/ui/lib/unit-price");
+  const p = (id: string, displayPrice: number, unitQuantity: string, isUnavailable = false) => ({ id, displayPrice, unitQuantity, isUnavailable });
+  const products = [
+    p("small-dear", 199, "250 g"), // €7.96/kg
+    p("big-cheap", 399, "1 kg"), // €3.99/kg
+    p("pieces", 100, "4 stuks"),
+    p("unreadable", 50, "1 bos"),
+    p("sold-out", 10, "1 kg", true),
+    p("milk", 119, "1 l"), // €1.19/l
+  ];
+  const ids = (order: "picnic" | "price" | "unit") => sortProducts(products, order).map((x) => x.id);
+  assert.deepEqual(ids("picnic"), products.map((x) => x.id));
+  assert.deepEqual(ids("price"), ["unreadable", "pieces", "milk", "small-dear", "big-cheap", "sold-out"]);
+  assert.deepEqual(ids("unit"), ["milk", "big-cheap", "small-dear", "pieces", "unreadable", "sold-out"]);
+});

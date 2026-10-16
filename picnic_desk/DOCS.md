@@ -65,7 +65,14 @@ basket as a till receipt on the right.
   left; a category's subcategories and products on the right.
 - **Products**: click one for its page: pictures, description, allergens,
   ingredients, nutrition, "more for less" offers and similar products. The
-  star saves a product under **Saved**.
+  star saves a product under **Saved**. Under each product: its size and the
+  price per kilo, litre or piece, worked out from the size. A size that is not
+  plain ("300 g, uitlekgewicht 180 g") gets no price per kilo rather than a
+  wrong one; the product page shows Picnic's own.
+- **Order**: above results, **Picnic's order**, **Price** (cheapest first) or
+  **Price per kg or litre** (cheapest per kilo or litre first; products sold
+  per piece, and those whose size cannot be read, come after). The choice is
+  kept in the browser.
 - **Paste a list**: one product per line. Start a line with a number
   (`2 havermelk`, `3x tomatenblokjes`) and the first click adds that many.
   The product you choose for a line is remembered: next time it comes first,
@@ -93,8 +100,11 @@ basket as a till receipt on the right.
   route and expected arrival. Cancel an order, e-mail the invoice again, rate
   a delivery, or put an old order in the basket again. The parcel service is
   linked from there.
-- **The receipt** follows the real Picnic basket, so changes made in the phone
-  app show when you come back to this tab. Clicks show at once and go to
+- **The receipt** follows the real Picnic basket. Open tabs of the app in the
+  same browser keep each other up to date at once: the basket, lists, picks,
+  saved products, and signing in or out. Changes made in the phone app or on
+  another computer show within a minute while the tab is shown, and at once
+  when you come back to it. Clicks show at once and go to
   Picnic in the background; if Picnic refuses one, the receipt is fetched
   again. Under the total: how far you are from the minimum order, the
   delivery time (**Change** opens the week), and **Check out**.

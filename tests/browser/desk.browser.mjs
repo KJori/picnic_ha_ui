@@ -797,6 +797,72 @@ describe("Picnic Desk in a browser", () => {
     await page.context().close();
   });
 
+  test("price per kilo on the shelf, and ordering by price or price per kilo", async () => {
+    const page = await openPage();
+    await signIn(page);
+    await page.goto(`${base}#/search?q=tofu`);
+    // Tofu naturel: 375 g for € 1,79 is € 4,77 per kilo.
+    await cell(page, "s1004").locator(".meta").filter({ hasText: "375 g, € 4,77/kg" }).waitFor();
+    const sort = page.getByRole("group", { name: "Order" });
+    await sort.getByRole("button", { name: "Price per kg or litre" }).click();
+    await sort.getByRole("button", { name: "Price per kg or litre", pressed: true }).waitFor();
+    const perKilo = await page.locator(".view .products .product").evaluateAll((cells) =>
+      cells.map((c) => {
+        const m = /€\s*([\d.,]+)\/(kg|l)/.exec(c.querySelector(".meta")?.textContent ?? "");
+        return m ? Number(m[1].replace(".", "").replace(",", ".")) : Infinity;
+      })
+    );
+    const readable = perKilo.filter(Number.isFinite);
+    assert.ok(readable.length >= 2, "several prices per kilo to order");
+    assert.deepEqual(readable, [...readable].sort((a, b) => a - b), "cheapest per kilo first");
+    await sort.getByRole("button", { name: "Price", exact: true }).click();
+    const prices = await page.locator(".view .products .product .price").evaluateAll((els) =>
+      els.map((e) => Number((e.textContent ?? "").replace(/[^\d,]/g, "").replace(",", ".")))
+    );
+    assert.deepEqual(prices, [...prices].sort((a, b) => a - b), "cheapest first");
+    await sort.getByRole("button", { name: "Picnic's order" }).click();
+    clean(page);
+    await page.context().close();
+  });
+
+  test("two tabs keep each other up to date at once", async () => {
+    const first = await openPage();
+    await signIn(first);
+    await forgetListsAndPicks(first);
+    await emptyBasket(first);
+    const second = await first.context().newPage();
+    second.problems = [];
+    second.on("pageerror", (e) => second.problems.push(`page error: ${e.message}`));
+    await second.goto(`${base}#/search?q=tofu`);
+    await second.locator(".till .receipt .empty-basket").waitFor();
+
+    // The basket: a click in one tab shows in the other, which is not touched.
+    await first.goto(`${base}#/search?q=tofu`);
+    await cell(first, "s1004").locator(".more").click();
+    await line(second, "s1004").locator("output").filter({ hasText: "1" }).waitFor({ timeout: 3000 });
+    await cell(second, "s1004").locator("output").filter({ hasText: "1" }).waitFor({ timeout: 3000 });
+
+    // A star, a list and a pick.
+    // (An earlier test may have starred it already: the other tab follows whichever way it goes.)
+    const starred = (await cell(first, "s1005").locator(".star").getAttribute("aria-pressed")) === "true";
+    await cell(first, "s1005").locator(".star").click();
+    await cell(first, "s1005").locator(`.star[aria-pressed="${!starred}"]`).waitFor();
+    await cell(second, "s1005").locator(`.star[aria-pressed="${!starred}"]`).waitFor({ timeout: 3000 });
+    await second.goto(`${base}#/lists`);
+    await second.getByText("No lists yet.").waitFor();
+    await first.locator(".till").getByRole("button", { name: "Save as list" }).click();
+    await first.getByRole("dialog").getByLabel("Name of the list").fill("From the other tab");
+    await first.getByRole("dialog").getByRole("button", { name: "Save" }).click();
+    await second.locator(".list-card h3", { hasText: "From the other tab" }).waitFor({ timeout: 3000 });
+
+    // Signing out in one tab signs out the other.
+    await first.locator(".till").getByRole("button", { name: "Sign out" }).click();
+    await second.locator(".signin").waitFor({ timeout: 3000 });
+    assert.deepEqual(second.problems, []);
+    clean(first);
+    await first.context().close();
+  });
+
   // Answers in a shape the page does not expect (the app updated while the page stayed open):
   // each part of the desk shows its own message, nothing escapes, nothing goes blank.
   test("odd answers break one part at a time, never the whole page", async () => {

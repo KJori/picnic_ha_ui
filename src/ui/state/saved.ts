@@ -9,6 +9,7 @@ import type { SavedRecipesApiResponse } from "@/lib/core/types";
 
 import type { SavedProduct } from "../../server/desk-routes";
 import { api } from "../lib/api";
+import { hear, tell } from "./sync";
 
 class Store<T> {
   value: T;
@@ -52,8 +53,10 @@ export async function toggleStar(product: SavedProduct, onError: (message: strin
   const isStarred = before.some((p) => p.id === product.id);
   starred.set(isStarred ? before.filter((p) => p.id !== product.id) : [product, ...before]);
   const result = await api<{ products: SavedProduct[] }>("desk/saved", { method: "POST", body: { product } });
-  if (result.ok && Array.isArray(result.data?.products)) starred.set(result.data.products);
-  else if (result.ok) void loadStarred(true);
+  if (result.ok && Array.isArray(result.data?.products)) {
+    starred.set(result.data.products);
+    tell({ type: "starred", products: result.data.products });
+  } else if (result.ok) void loadStarred(true);
   else {
     starred.set(before);
     onError(result.error);
@@ -107,3 +110,6 @@ export function forgetSaved(): void {
   savedRecipes.set(new Set());
   savedRecipesLoaded = false;
 }
+
+// A product starred in another tab shows starred here at once.
+hear("starred", (message) => starred.set(message.products));

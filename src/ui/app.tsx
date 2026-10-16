@@ -18,6 +18,7 @@ import { RecipeView } from "./pages/recipe";
 import { RecipesView } from "./pages/recipes";
 import { CategoriesView, SearchBox, SearchView } from "./pages/shop";
 import { cartModel } from "./state/cart";
+import { hear, tell } from "./state/sync";
 import { SessionProvider, useSession, useT } from "./state/session";
 
 export function App() {
@@ -62,6 +63,8 @@ function Gate() {
 }
 
 const REFRESH_AFTER_MS = 10_000;
+/** How often a shown tab looks at Picnic's basket for changes made elsewhere. */
+const BASKET_POLL_MS = 60_000;
 
 /** Old and picnic-web paths that Picnic's deep links and older bookmarks use. */
 function canonical(route: Route): string | null {
@@ -85,6 +88,13 @@ function Desk() {
 
   useEffect(() => {
     cartModel.onError = () => toast(t.cartMutationError, "error");
+    // Every basket this tab gets from Picnic goes to the other tabs, and theirs come here.
+    cartModel.onShown = (cart) => tell({ type: "cart", cart });
+    const stopHearing = hear("cart", (message) => cartModel.fromOtherTab(message.cart));
+    // Changes from the phone app or another computer: a look at Picnic now and then while this tab is shown.
+    const poll = setInterval(() => {
+      if (document.visibilityState === "visible" && !cartModel.busy) void cartModel.refresh();
+    }, BASKET_POLL_MS);
     void cartModel.refresh();
     // Changes made in the phone app show up when coming back to this tab.
     let last = Date.now();
@@ -99,6 +109,9 @@ function Desk() {
     return () => {
       document.removeEventListener("visibilitychange", onVisible);
       window.removeEventListener("focus", onVisible);
+      clearInterval(poll);
+      stopHearing();
+      cartModel.onShown = () => {};
     };
   }, [toast, t.cartMutationError]);
 

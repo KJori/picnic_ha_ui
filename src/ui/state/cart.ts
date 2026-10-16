@@ -47,9 +47,13 @@ export class CartModel {
   #refreshing: Promise<void> | null = null;
   /** Goes up when the basket is emptied or forgotten; older answers no longer count. */
   #epoch = 0;
+  /** Another tab changed the basket while this one had changes on their way. */
+  #otherTabChanged = false;
   /** Product id → who waits for all its changes to be answered, and whether the last one worked. */
   readonly #waiting = new Map<string, ((ok: boolean) => void)[]>();
   onError: (message: string) => void = () => {};
+  /** Called with each basket from Picnic this tab shows (to tell the other tabs). */
+  onShown: (cart: CartData) => void = () => {};
 
   constructor(
     private readonly send: Send = defaultSend,
@@ -169,7 +173,11 @@ export class CartModel {
     if (this.#queued.has(productId)) void this.#flush(productId);
     else {
       this.#settle(productId, result.ok);
-      if (!this.busy && order < this.#shown) void this.refresh(); // an answer was skipped: settle on Picnic's state
+      if (!this.busy && (order < this.#shown || this.#otherTabChanged)) {
+        // An answer was skipped, or another tab changed the basket meanwhile: settle on Picnic's state.
+        this.#otherTabChanged = false;
+        void this.refresh();
+      }
     }
   }
 
@@ -226,10 +234,26 @@ export class CartModel {
     await Promise.all(Array.from({ length: Math.min(BULK_AT_ONCE, changed.length) }, worker));
   }
 
-  #accept(cart: CartData): void {
+  #accept(cart: CartData, fromOtherTab = false): void {
     this.cart = cart;
     this.status = "ready";
     this.error = null;
+    if (!fromOtherTab) this.onShown(cart);
+  }
+
+  /**
+   * A basket another tab got from Picnic. Shown at once, unless this tab has
+   * changes of its own on their way: then it asks Picnic itself once those
+   * are answered, so neither tab's clicks get lost.
+   */
+  fromOtherTab(cart: CartData): void {
+    if (this.busy || this.#inFlight.size > 0) {
+      this.#otherTabChanged = true;
+      return;
+    }
+    this.#shown = this.#sent;
+    this.#accept(cart, true);
+    this.#emit();
   }
 
   /** Take a basket Picnic sent with another answer (slot choice, recipe add). */

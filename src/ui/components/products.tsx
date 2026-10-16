@@ -9,9 +9,11 @@ import type { CartItem, Product, SearchSection, SliderProduct } from "@/lib/core
 
 import type { SavedProduct } from "../../server/desk-routes";
 import { picnicInk } from "../lib/colour";
+import { type SortOrder, sortProducts, unitPrice } from "../lib/unit-price";
 import { navigate, useRoute, withQuery } from "../lib/router";
 import { useCart } from "../state/cart";
 import { toggleStar, useStarred } from "../state/saved";
+import { setSortOrder, useSortOrder } from "../state/sort";
 import { useT } from "../state/session";
 import { Badge, Img, Price, Stepper, useMoney, useToast } from "./common";
 
@@ -167,7 +169,9 @@ export function ProductCell({
   };
 
   const tiers = (product.priceRanges ?? []).map((tier) => d.eachFrom.replace("{price}", money(tier.pricePerUnit)).replace("{n}", String(tier.quantity)));
-  const meta = [product.brand, product.unitQuantity, ...tiers, note].filter(Boolean).join(", ");
+  const perUnit = unitPrice(product.displayPrice, product.unitQuantity);
+  const per = perUnit && { kg: d.perKg, l: d.perL, piece: d.perPiece }[perUnit.per].replace("{price}", money(perUnit.cents));
+  const meta = [product.brand, product.unitQuantity, per, ...tiers, note].filter(Boolean).join(", ");
 
   return (
     <li
@@ -212,9 +216,22 @@ export function ProductCell({
   );
 }
 
-export function ProductGrid({ products, want, notes }: { products: Product[]; want?: (p: Product) => number; notes?: (p: Product) => string | undefined }) {
+export function ProductGrid({
+  products,
+  want,
+  notes,
+  sortable = false,
+}: {
+  products: Product[];
+  want?: (p: Product) => number;
+  notes?: (p: Product) => string | undefined;
+  /** Follow the order chosen above the results (Picnic's, price, price per kg or litre). */
+  sortable?: boolean;
+}) {
+  const order = useSortOrder();
   const seen = new Set<string>();
   const unique = products.filter((p) => !seen.has(p.id) && seen.add(p.id));
+  if (sortable) unique.splice(0, unique.length, ...sortProducts(unique, order));
   return (
     <ul className="products">
       {unique.map((product) => (
@@ -224,12 +241,26 @@ export function ProductGrid({ products, want, notes }: { products: Product[]; wa
   );
 }
 
-/** Results in Picnic's sections ("Cherrytomaten", "Biologisch"), with a row of jumps when there are several. */
+/**
+ * Results in Picnic's sections ("Cherrytomaten", "Biologisch"), with a row of
+ * jumps when there are several. Sorted by price, the sections make way for
+ * one row of everything, cheapest first.
+ */
 export function ProductSections({ products, sections }: { products: Product[]; sections: SearchSection[] }) {
-  if (sections.length <= 1) return <ProductGrid products={sections[0]?.products ?? products} />;
+  const order = useSortOrder();
+  if (order !== "picnic" || sections.length <= 1) {
+    const all = order !== "picnic" && sections.length > 1 ? sections.flatMap((s) => s.products) : (sections[0]?.products ?? products);
+    return (
+      <>
+        <SortChoice />
+        <ProductGrid products={all} sortable />
+      </>
+    );
+  }
   const id = (index: number) => `section-${index}`;
   return (
     <>
+      <SortChoice />
       <div className="chips jumps">
         {sections.map((section, index) => (
           <button
@@ -249,5 +280,26 @@ export function ProductSections({ products, sections }: { products: Product[]; s
         </section>
       ))}
     </>
+  );
+}
+
+/** How results are ordered: Picnic's own order, by price, or by price per kilo or litre. */
+export function SortChoice() {
+  const { d } = useT();
+  const order = useSortOrder();
+  const options: [SortOrder, string][] = [
+    ["picnic", d.sortPicnic],
+    ["price", d.sortPrice],
+    ["unit", d.sortUnit],
+  ];
+  return (
+    <div className="chips sort" role="group" aria-label={d.sortBy}>
+      <span className="hint-inline">{d.sortBy}:</span>
+      {options.map(([value, label]) => (
+        <button key={value} type="button" className="chip" aria-pressed={order === value} onClick={() => setSortOrder(value)}>
+          {label}
+        </button>
+      ))}
+    </div>
   );
 }
