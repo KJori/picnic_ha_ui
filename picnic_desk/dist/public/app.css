@@ -501,6 +501,9 @@ button { cursor: pointer; }
 .next-delivery .hint-inline { color: var(--soft); }
 .next-delivery a { margin-left: auto; color: inherit; font-weight: 600; }
 .next-delivery.live { border-left-color: var(--tag); }
+/* A payment the app is still watching, or one it could not find out about. */
+.payment-open.unknown { border-left-color: var(--beet); }
+.payment-open .quiet { margin-left: .2rem; }
 
 /* The app was updated while the page stayed open. */
 .updated {

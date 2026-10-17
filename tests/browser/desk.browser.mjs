@@ -357,6 +357,43 @@ describe("Picnic Desk in a browser", () => {
     await page.context().close();
   });
 
+  test("a payment whose tab was closed: another device sees it and the order is confirmed", async () => {
+    const first = await openPage();
+    await signIn(first);
+    await first.locator("#q").fill("koffie");
+    await first.locator("#q").press("Enter");
+    const coffee = cell(first, "s1024");
+    for (let i = 0; i < 4; i++) await coffee.locator(".more").click(); // over the minimum order
+    await line(first, "s1024").locator("output").filter({ hasText: "4" }).waitFor();
+    await first.locator(".receipt").getByRole("button", { name: "Check out" }).click();
+    await first.getByRole("button", { name: "Continue to payment" }).click();
+    const pay = first.getByRole("button", { name: "Pay at the bank" });
+    const age = first.getByRole("dialog");
+    await pay.or(age).first().waitFor();
+    if (await age.count()) await age.getByRole("button", { name: "Confirm" }).click(); // unless asked already
+    const [bank] = await Promise.all([first.context().waitForEvent("page"), pay.click()]);
+    await first.getByText(/^Status:/).waitFor();
+    // Laptop closed: both tabs gone before the payment finished.
+    await bank.close();
+    await first.context().close();
+
+    // Another computer (its own browser storage): the open payment shows at the top of every page.
+    const other = await openPage();
+    const confirms = [];
+    other.on("request", (r) => r.url().includes("/api/cart/checkout/confirm") && confirms.push(r.url()));
+    await signIn(other);
+    const note = other.locator(".payment-open");
+    await note.getByText("A payment is in progress").waitFor();
+    await shot(other, "08b-payment-open");
+    await note.getByRole("link", { name: "View the payment" }).click();
+    await other.getByText("Order placed").waitFor({ timeout: 15000 });
+    await other.waitForURL(/#\/orders/);
+    await note.waitFor({ state: "detached" });
+    assert.ok(confirms.length <= 1, "the order is confirmed once");
+    clean(other);
+    await other.context().close();
+  });
+
   test("orders: a table, tracking, rating, cancelling, parcels", async () => {
     const page = await openPage();
     await signIn(page);

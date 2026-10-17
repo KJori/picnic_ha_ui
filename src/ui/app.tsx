@@ -7,6 +7,7 @@ import { useEffect } from "react";
 import { Receipt } from "./components/basket";
 import { Boundary, PageBoundary } from "./components/boundary";
 import { NextDelivery } from "./components/next-delivery";
+import { OpenPayment } from "./components/open-payment";
 import { ToastProvider, useToast } from "./components/common";
 import { ProductDialog } from "./components/product-dialog";
 import { href, navigate, type Route, useRoute, withQuery } from "./lib/router";
@@ -138,6 +139,7 @@ function Desk() {
     <div className="desk">
       <main className="shelf" id="main">
         <Boundary>
+          <OpenPayment onCheckout={route.path.startsWith("/checkout")} />
           <NextDelivery />
         </Boundary>
         <header className="top">

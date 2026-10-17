@@ -4,6 +4,20 @@ All notable changes to Picnic Desk. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the version
 numbers [Semantic Versioning](https://semver.org/).
 
+## [1.0.2]
+
+### Fixed
+
+- A paid order is confirmed even when the Picnic Desk tab is closed, the
+  computer goes to sleep or the app restarts while you pay: the app itself
+  watches the payment and confirms the order. A payment in progress shows at
+  the top of every page, on every device.
+- When Picnic takes an order but answers too late, the app no longer says
+  confirming failed: it sees the new order and says it was placed. If Picnic
+  gives no answer either way for two hours, the top of the page asks you to
+  check your orders before ordering again.
+- The order is never confirmed twice, however many tabs are open.
+
 ## [1.0.1]
 
 ### Changed

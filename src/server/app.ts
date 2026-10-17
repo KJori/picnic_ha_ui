@@ -11,6 +11,7 @@ import { NextRequest, NextResponse } from "next/server";
 
 import { DeskRoutes, type Language } from "./desk-routes";
 import { type RouteEntry, Router } from "./router";
+import { Payments } from "./payments";
 import { type HaUser, Session, type SetCookie } from "./session";
 import { Store } from "./store";
 import type { CountryCode } from "@/lib/core/types";
@@ -84,6 +85,8 @@ export type DeskOptions = {
   /** The size limit of the picture folder; DEFAULT_CACHE_MB when left out. */
   pictureCacheMb?: number;
   now?: () => number;
+  /** False: the server does not ask Picnic about an open payment by itself (tests call payments.tick()). */
+  watchPayments?: boolean;
 };
 
 export type InternalResult = { status: number; body: unknown };
@@ -93,6 +96,7 @@ export class Desk {
   readonly store: Store;
   readonly router: Router;
   readonly desk: DeskRoutes;
+  readonly payments: Payments;
   /** Set when Picnic refused the saved token; cleared by the next answer that worked. */
   expired = false;
 
@@ -101,6 +105,12 @@ export class Desk {
     this.session = new Session(this.store, options.country, options.now);
     this.router = new Router(options.routes);
     this.desk = new DeskRoutes(this);
+    this.payments = new Payments({
+      store: this.store,
+      internal: (path, init) => this.internal(path, init),
+      now: options.now ?? Date.now,
+      watch: options.watchPayments ?? true,
+    });
   }
 
   /** Node's request handler. Never throws. */
@@ -275,7 +285,8 @@ export class Desk {
     let response: Response | null = null;
     try {
       if (this.options.demo) {
-        response = await this.options.demo(request, segments);
+        const demo = this.options.demo;
+        response = await this.#checkout(request, segments, async (r) => (await demo(r, segments)) ?? notFound());
       } else {
         const match = this.router.match(request.method, segments);
         if (match.kind === "method") {
@@ -285,7 +296,8 @@ export class Desk {
           });
         }
         if (match.kind === "found") {
-          response = await match.handler(request, { params: Promise.resolve(match.params) });
+          const route = async (r: NextRequest): Promise<Response> => match.handler(r, { params: Promise.resolve(match.params) });
+          response = await this.#checkout(request, segments, route);
         }
       }
     } catch (error) {
@@ -297,6 +309,32 @@ export class Desk {
 
     if (isAuthRoute) response = await finishAuthResponse(this, response, segments[1], user);
     else this.#noteTokenState(response);
+    return response;
+  }
+
+  /**
+   * The checkout steps the server keeps track of (see payments.ts): a payment
+   * that started is remembered, confirming goes one at a time, and a
+   * cancelled payment is forgotten.
+   */
+  async #checkout(request: NextRequest, segments: string[], route: (request: NextRequest) => Promise<Response>): Promise<Response> {
+    const step = request.method === "POST" && segments.length === 3 && segments[0] === "cart" && segments[1] === "checkout" ? segments[2] : null;
+    if (step === "confirm") return this.payments.confirm(request, route);
+    const response = await route(request);
+    if (!response.ok || (step !== "initiate" && step !== "cancel")) return response;
+    const body = (await response.clone().json().catch(() => null)) as { transactionId?: unknown } | null;
+    if (step === "cancel") {
+      const sent = (await request.json().catch(() => null)) as { transactionId?: unknown } | null;
+      if (typeof sent?.transactionId === "string") this.payments.ended(sent.transactionId);
+      return response;
+    }
+    const sent = (await request.json().catch(() => null)) as { orderId?: unknown } | null;
+    if (typeof sent?.orderId === "string" && sent.orderId && typeof body?.transactionId === "string" && body.transactionId) {
+      // Noting Picnic's current deliveries asks Picnic once more; the page need not wait for it.
+      void this.payments.started(sent.orderId, body.transactionId).catch((error) =>
+        console.error("[desk] cannot keep the payment:", error instanceof Error ? error.message : error)
+      );
+    }
     return response;
   }
 
@@ -387,6 +425,8 @@ async function finishAuthResponse(
   }
   return stripCookies(response);
 }
+
+const notFound = () => NextResponse.json({ error: "Not found." }, { status: 404 });
 
 function readSetCookies(response: Response): SetCookie[] {
   return response.headers.getSetCookie().map((line) => {

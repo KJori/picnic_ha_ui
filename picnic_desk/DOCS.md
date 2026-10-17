@@ -113,8 +113,11 @@ basket as a till receipt on the right.
   again. Under the total: how far you are from the minimum order, the
   delivery time (**Change** opens the week), and **Check out**.
 - **Check out**: Picnic checks the basket (and may ask an age check), then
-  **Pay at the bank** opens the bank in a new tab. Keep the Picnic tab open: it
-  watches the payment and confirms the order as soon as Picnic says it is paid.
+  **Pay at the bank** opens the bank in a new tab. The app watches the payment
+  and confirms the order as soon as Picnic says it is paid, also when you close
+  the tab or the computer: every page, on every device, shows a payment in
+  progress at the top. If Picnic gives no answer either way within two hours,
+  the top of the page asks you to check your orders before ordering again.
 
 Keyboard: `/` jumps to the search box and `Enter` moves into the results. On a
 product, `Enter` opens its page, `+` and `-` change the amount, `s` saves it
@@ -134,6 +137,10 @@ In the app's own data folder:
 - `history.json`, `recipe_prices.json`: "Bought before" and the recipe card
   prices. **Sign out** deletes both. Left out of backups; they are built
   again when needed.
+- `payment.json`: the payment in progress (the order and Picnic's payment
+  number, and how many orders your current deliveries held when you started
+  paying), only until the order is confirmed or the payment ends. Left out of
+  backups.
 - `saved.json`, `shortcuts.json`, `lists.json`, `picks.json`: saved products,
   shortcuts, lists and the products picked for pasted lines. These are in
   backups.
@@ -143,7 +150,7 @@ In the app's own data folder:
   `picture_cache_mb`, the pictures shown longest ago make room. Left out of
   backups; deleting it is harmless.
 
-In the browser: a pasted list, a meal plan, and a payment being watched.
+In the browser: a pasted list and a meal plan.
 **Sign out** clears them from that browser.
 
 What goes where:
@@ -179,8 +186,8 @@ What goes where:
 - Unofficial: Picnic can change its service at any time, which can break any
   part. Updates of Picnic Desk take in picnic-web's fixes.
 - After paying, the bank sends the browser back to Picnic Desk. Behind Home
-  Assistant that page may ask you to log in or show an error; the order is
-  confirmed by the Picnic tab you kept open, so close the bank's tab.
+  Assistant that page may ask you to log in or show an error; the app confirms
+  the order by itself, so close the bank's tab.
 - Not here: wallet, Family account, friend discount, shopping reminder.
 
 ## License
