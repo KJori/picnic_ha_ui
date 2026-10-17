@@ -4,6 +4,16 @@ All notable changes to Picnic Desk. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the version
 numbers [Semantic Versioning](https://semver.org/).
 
+## [1.0.1]
+
+### Changed
+
+- Delivery times, your orders list and the bottom of the basket (loyalty
+  points and the "forgotten anything?" row) are now read from Picnic's answers
+  by picnic-api, the library picnic-web shares with other Picnic tools. You see
+  the same as before; when Picnic changes these answers, a fix there reaches
+  the app too.
+
 ## [1.0.0]
 
 Rebuilt on [picnic-web](https://github.com/MRVDH/picnic-web)'s Picnic code, so
