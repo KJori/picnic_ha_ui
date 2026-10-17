@@ -318,6 +318,101 @@ describe("picnic-web's parsers on Picnic's real answers", () => {
     assert.equal(one.body.id, "d0000000000");
   });
 
+  test("orders list: window, order count and total added up per delivery", async () => {
+    picnic.on("POST", "/deliveries/summary", json(fixture("current_deliveries_de.json")));
+    const [delivery] = (await desk.get("/api/deliveries")).body.deliveries;
+    assert.deepEqual(
+      [delivery.status, delivery.windowStart, delivery.windowEnd, delivery.orderCount, delivery.totalPrice],
+      ["CURRENT", "2026-07-15T14:15:00.000+02:00", "2026-07-15T16:15:00.000+02:00", 1, 4996]
+    );
+    assert.equal(typeof delivery.deliveryWindowText, "string");
+    assert.notEqual(delivery.deliveryWindowText, "");
+  });
+
+  test("delivery slots: grouped by day, the longer of two slots at the same time is the green choice", async () => {
+    const slot = (id: string, start: string, end: string, extra: Record<string, unknown> = {}) => ({
+      slot_id: id,
+      window_start: `2026-07-16T${start}:00.000+02:00`,
+      window_end: `2026-07-16T${end}:00.000+02:00`,
+      cut_off_time: "2026-07-15T23:00:00.000+02:00",
+      is_available: true,
+      selected: false,
+      minimum_order_value: 3500,
+      ...extra,
+    });
+    const nextDay = { ...slot("tomorrow", "11:00", "13:00"), window_start: "2026-07-17T11:00:00.000+02:00", window_end: "2026-07-17T13:00:00.000+02:00" };
+    picnic.on(
+      "GET",
+      "/cart/delivery_slots",
+      json({
+        delivery_slots: [slot("short", "12:00", "13:00"), slot("long", "12:00", "14:00", { selected: true }), slot("evening", "18:00", "20:00", { minimum_order_value: undefined }), nextDay],
+        selected_slot: { slot_id: "long", state: "EXPLICIT" },
+      })
+    );
+    const picker = await desk.get("/api/cart/delivery-slots");
+    assert.equal(picker.status, 200, JSON.stringify(picker.body));
+    assert.equal(picker.body.dayGroups.length, 2);
+    const [today, tomorrow] = picker.body.dayGroups;
+    assert.deepEqual(today.greenSlots.map((s: { slotId: string }) => s.slotId), ["long"]);
+    assert.deepEqual(today.regularSlots.map((s: { slotId: string }) => s.slotId), ["short", "evening"]);
+    assert.deepEqual(tomorrow.regularSlots.map((s: { slotId: string }) => s.slotId), ["tomorrow"]);
+    assert.equal(today.regularSlots[0].minimumOrderValue, 3500);
+    assert.equal(today.regularSlots[1].minimumOrderValue, null);
+    assert.ok(today.dayLabel && today.dateLabel);
+    assert.deepEqual(picker.body.selectedSlot, {
+      slotId: "long",
+      state: "EXPLICIT",
+      windowStart: "2026-07-16T12:00:00.000+02:00",
+      windowEnd: "2026-07-16T14:00:00.000+02:00",
+      isExplicitSelection: true,
+    });
+    // A slot Picnic picked by itself is not shown as the customer's choice.
+    picnic.on("GET", "/cart/delivery_slots", json({ delivery_slots: [slot("short", "12:00", "13:00")], selected_slot: { slot_id: "short", state: "IMPLICIT" } }));
+    assert.equal((await desk.get("/api/cart/delivery-slots")).body.selectedSlot.isExplicitSelection, false);
+  });
+
+  test("basket footer: the points line and the 'Niets vergeten?' tiles", async () => {
+    const text = (markdown: string, color?: string) => ({ type: "RICH_TEXT", markdown, ...(color && { textAttributes: { color } }) });
+    const tile = (productId: string, promo: boolean) => ({
+      id: `item-${productId}`,
+      type: "TOUCHABLE",
+      child: {
+        type: "STACK",
+        backgroundColor: "#F6F2EE",
+        children: [{ type: "IMAGE", source: { id: `img-${productId}` } }, ...(promo ? [{ type: "ICON", iconKey: "percentage" }] : [])],
+      },
+    });
+    picnic.on(
+      "GET",
+      "/pages/basket-footer-section-root",
+      json({
+        id: "basket-footer-section-root",
+        body: {
+          child: {
+            type: "STACK",
+            children: [
+              { id: "loyalty-point-nudge-content", type: "STACK", children: [text("Spaarpunten"), text("#(#B40117)**+12**", "#B40117")] },
+              { id: "horizontal-selling-unit-tiles-sub-header", type: "STACK", children: [text("Niets vergeten?"), text(">")] },
+              { id: "horizontal-selling-unit-tiles", type: "STACK", children: [tile("s1001", true), tile("s1002", false), { id: "not-a-tile" }] },
+            ],
+          },
+        },
+      })
+    );
+    const footer = await desk.get("/api/cart/footer");
+    assert.equal(footer.status, 200, JSON.stringify(footer.body));
+    assert.deepEqual(footer.body.loyaltyPoints, { label: { text: "Spaarpunten", color: null }, value: { text: "+12", color: "#B40117" } });
+    assert.equal(footer.body.recommendations.title, "Niets vergeten?");
+    assert.equal(footer.body.recommendations.pageId, "basket-recommendations-root");
+    assert.deepEqual(footer.body.recommendations.tiles, [
+      { productId: "s1001", imageId: "img-s1001", backgroundColor: "#F6F2EE", hasPromo: true },
+      { productId: "s1002", imageId: "img-s1002", backgroundColor: "#F6F2EE", hasPromo: false },
+    ]);
+    // A page without these parts gives an empty footer, not an error.
+    picnic.on("GET", "/pages/basket-footer-section-root", json({ id: "basket-footer-section-root", body: {} }));
+    assert.deepEqual((await desk.get("/api/cart/footer")).body, { loyaltyPoints: null, recommendations: null });
+  });
+
   // This sample is older than picnic-web's search parser (Picnic has changed the
   // page since); it shows the route copes with a page it cannot read.
   test("search answers in picnic-web's shape", async () => {

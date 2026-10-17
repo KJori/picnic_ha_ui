@@ -2456,15 +2456,213 @@ var require_service4 = __commonJS({
   }
 });
 
+// node_modules/picnic-api/lib/domains/cart/helpers.js
+var require_helpers2 = __commonJS({
+  "node_modules/picnic-api/lib/domains/cart/helpers.js"(exports) {
+    "use strict";
+    Object.defineProperty(exports, "__esModule", { value: true });
+    exports.extractDeliverySlots = extractDeliverySlots;
+    var windowDuration = (slot2) => new Date(slot2.windowEnd).getTime() - new Date(slot2.windowStart).getTime();
+    function toSlotSummary(slot2) {
+      return {
+        slotId: slot2.slot_id,
+        windowStart: slot2.window_start,
+        windowEnd: slot2.window_end,
+        cutOffTime: slot2.cut_off_time,
+        isAvailable: slot2.is_available,
+        isSelected: slot2.selected,
+        isGreenChoice: false,
+        minimumOrderValue: slot2.minimum_order_value ?? null
+      };
+    }
+    function findGreenChoiceSlotIds(slots2) {
+      const byWindowStart = /* @__PURE__ */ new Map();
+      for (const slot2 of slots2) {
+        byWindowStart.set(slot2.windowStart, [...byWindowStart.get(slot2.windowStart) ?? [], slot2]);
+      }
+      const greenSlotIds = /* @__PURE__ */ new Set();
+      for (const group of byWindowStart.values()) {
+        if (group.length !== 2)
+          continue;
+        const [a, b] = group;
+        if (windowDuration(a) > windowDuration(b))
+          greenSlotIds.add(a.slotId);
+        else if (windowDuration(b) > windowDuration(a))
+          greenSlotIds.add(b.slotId);
+      }
+      return greenSlotIds;
+    }
+    function toSelectedSlotSummary(selected, slots2) {
+      if (!selected)
+        return null;
+      const slot2 = slots2.find((s) => s.slotId === selected.slot_id);
+      return {
+        slotId: selected.slot_id,
+        state: selected.state,
+        windowStart: slot2?.windowStart ?? null,
+        windowEnd: slot2?.windowEnd ?? null,
+        isExplicitSelection: selected.state !== "IMPLICIT"
+      };
+    }
+    function extractDeliverySlots(result) {
+      const slots2 = result.delivery_slots.map(toSlotSummary);
+      const greenSlotIds = findGreenChoiceSlotIds(slots2);
+      for (const slot2 of slots2)
+        slot2.isGreenChoice = greenSlotIds.has(slot2.slotId);
+      return { slots: slots2, selectedSlot: toSelectedSlotSummary(result.selected_slot, slots2) };
+    }
+  }
+});
+
+// node_modules/picnic-api/lib/domains/cart/footer-helpers.js
+var require_footer_helpers = __commonJS({
+  "node_modules/picnic-api/lib/domains/cart/footer-helpers.js"(exports) {
+    "use strict";
+    Object.defineProperty(exports, "__esModule", { value: true });
+    exports.extractCartFooter = extractCartFooter;
+    var LOYALTY_ID = "loyalty-point-nudge-content";
+    var RECOMMENDATIONS_HEADER_ID = "horizontal-selling-unit-tiles-sub-header";
+    var RECOMMENDATIONS_TILES_ID = "horizontal-selling-unit-tiles";
+    var TILE_ID_PREFIX = "item-";
+    var RECOMMENDATIONS_PAGE_ID = "basket-recommendations-root";
+    function extractCartFooter(rawPage) {
+      return {
+        loyaltyPoints: extractLoyaltyPoints(rawPage),
+        recommendations: extractRecommendations(rawPage)
+      };
+    }
+    function extractLoyaltyPoints(rawPage) {
+      const [label, value] = collectTexts(findNodeById2(rawPage, LOYALTY_ID));
+      return label && value ? { label, value } : null;
+    }
+    function extractRecommendations(rawPage) {
+      const header = findNodeById2(rawPage, RECOMMENDATIONS_HEADER_ID);
+      const tilesNode = findNodeById2(rawPage, RECOMMENDATIONS_TILES_ID);
+      if (!tilesNode)
+        return null;
+      const tiles = [];
+      for (const child of asArray2(tilesNode.children)) {
+        const tile = extractTile(child);
+        if (tile)
+          tiles.push(tile);
+      }
+      if (tiles.length === 0)
+        return null;
+      const title = collectTexts(header)[0]?.text ?? "";
+      return { title, pageId: RECOMMENDATIONS_PAGE_ID, tiles };
+    }
+    function extractTile(node) {
+      if (!isPmlNode(node) || typeof node.id !== "string" || !node.id.startsWith(TILE_ID_PREFIX)) {
+        return null;
+      }
+      const image = findFirst(node, (candidate) => candidate.type === "IMAGE");
+      const imageId = isPmlNode(image?.source) ? image.source.id : void 0;
+      if (typeof imageId !== "string" || imageId === "")
+        return null;
+      const container = findFirst(node, (candidate) => typeof candidate.backgroundColor === "string");
+      const backgroundColor = container?.backgroundColor;
+      return {
+        productId: node.id.slice(TILE_ID_PREFIX.length),
+        imageId,
+        backgroundColor: typeof backgroundColor === "string" ? backgroundColor : null,
+        hasPromo: findFirst(node, (candidate) => candidate.type === "ICON" && candidate.iconKey === "percentage") !== null
+      };
+    }
+    function findNodeById2(node, id) {
+      if (Array.isArray(node)) {
+        for (const item of node) {
+          const found = findNodeById2(item, id);
+          if (found)
+            return found;
+        }
+        return null;
+      }
+      if (!isPmlNode(node))
+        return null;
+      if (node.id === id)
+        return node;
+      for (const value of Object.values(node)) {
+        const found = findNodeById2(value, id);
+        if (found)
+          return found;
+      }
+      return null;
+    }
+    function findFirst(node, predicate) {
+      if (Array.isArray(node)) {
+        for (const item of node) {
+          const found = findFirst(item, predicate);
+          if (found)
+            return found;
+        }
+        return null;
+      }
+      if (!isPmlNode(node))
+        return null;
+      if (predicate(node))
+        return node;
+      for (const value of Object.values(node)) {
+        const found = findFirst(value, predicate);
+        if (found)
+          return found;
+      }
+      return null;
+    }
+    function collectTexts(node, out = []) {
+      if (Array.isArray(node)) {
+        for (const item of node)
+          collectTexts(item, out);
+        return out;
+      }
+      if (!isPmlNode(node))
+        return out;
+      if (node.type === "RICH_TEXT" && typeof node.markdown === "string") {
+        const text3 = cleanMarkdown2(node.markdown);
+        const color = isPmlNode(node.textAttributes) ? node.textAttributes.color : void 0;
+        if (text3)
+          out.push({ text: text3, color: typeof color === "string" ? color : null });
+        return out;
+      }
+      for (const value of Object.values(node))
+        collectTexts(value, out);
+      return out;
+    }
+    function cleanMarkdown2(markdown) {
+      return markdown.replace(/#\([^)]+\)/g, "").trim().replace(/\*\*/g, "").replace(/__/g, "").trim();
+    }
+    function isPmlNode(value) {
+      return typeof value === "object" && value !== null && !Array.isArray(value);
+    }
+    function asArray2(value) {
+      return Array.isArray(value) ? value : [];
+    }
+  }
+});
+
 // node_modules/picnic-api/lib/domains/cart/service.js
 var require_service5 = __commonJS({
   "node_modules/picnic-api/lib/domains/cart/service.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.CartService = void 0;
+    var helpers_1 = require_helpers2();
+    var footer_helpers_1 = require_footer_helpers();
+    var page_format_error_1 = require_page_format_error();
+    var BASKET_FOOTER_PAGE_ID = "basket-footer-section-root";
     var CartService = class {
       constructor(http) {
         this.http = http;
+      }
+      /**
+       * Returns the basket footer: the loyalty points line and the "Niets vergeten?" recommendation tiles.
+       * The rest of the basket comes from {@link getCart}.
+       * Throws {@link UnexpectedPageFormatError} when Picnic serves the page as an RSC payload.
+       */
+      async getBasketFooter() {
+        const page = await this.http.sendRequest("GET", `/pages/${BASKET_FOOTER_PAGE_ID}`, null, true);
+        if (typeof page === "string")
+          throw new page_format_error_1.UnexpectedPageFormatError(BASKET_FOOTER_PAGE_ID, "rsc");
+        return (0, footer_helpers_1.extractCartFooter)(page);
       }
       /**
        * Returns the cart of the current user.
@@ -2520,6 +2718,13 @@ var require_service5 = __commonJS({
        */
       getDeliverySlots() {
         return this.http.sendRequest("GET", `/cart/delivery_slots`);
+      }
+      /**
+       * Returns all delivery slots with camelCase fields and a green-choice flag, and the selected slot with its window.
+       * This is a convenience wrapper around {@link getDeliverySlots}.
+       */
+      async getDeliverySlotOverview() {
+        return (0, helpers_1.extractDeliverySlots)(await this.getDeliverySlots());
       }
       /**
        * Selects a delivery slot.
@@ -2596,22 +2801,84 @@ var require_service5 = __commonJS({
   }
 });
 
+// node_modules/picnic-api/lib/domains/delivery/helpers.js
+var require_helpers3 = __commonJS({
+  "node_modules/picnic-api/lib/domains/delivery/helpers.js"(exports) {
+    "use strict";
+    Object.defineProperty(exports, "__esModule", { value: true });
+    exports.extractDeliverySummaries = extractDeliverySummaries;
+    var isRawObject = (val) => typeof val === "object" && val !== null && !Array.isArray(val);
+    var asText = (val) => typeof val === "string" ? val : "";
+    var asAmount = (val) => typeof val === "number" && Number.isFinite(val) ? val : 0;
+    var asObject = (val) => isRawObject(val) ? val : null;
+    function extractDeliveryWindow(raw) {
+      const slot2 = asObject(raw["slot"]);
+      const deliveryTime = asObject(raw["delivery_time"]);
+      const eta2 = asObject(raw["eta2"]);
+      const windowStart = asText(slot2?.["window_start"]) || asText(deliveryTime?.["start"]) || asText(eta2?.["start"]) || null;
+      const windowEnd = asText(slot2?.["window_end"]) || asText(deliveryTime?.["end"]) || asText(eta2?.["end"]) || null;
+      return { windowStart, windowEnd };
+    }
+    function extractDeliverySummary(raw) {
+      if (!isRawObject(raw))
+        return null;
+      const id = asText(raw["delivery_id"]) || asText(raw["id"]);
+      if (!id)
+        return null;
+      const { windowStart, windowEnd } = extractDeliveryWindow(raw);
+      const orders = (Array.isArray(raw["orders"]) ? raw["orders"] : []).filter(isRawObject);
+      let totalPrice = 0;
+      let itemCount = asAmount(raw["total_count"]) || asAmount(raw["sellable_item_count"]);
+      for (const order of orders) {
+        totalPrice += asAmount(order["total_price"]) || asAmount(order["checkout_total_price"]);
+        itemCount += asAmount(order["total_count"]) || asAmount(order["sellable_item_count"]);
+      }
+      return {
+        id,
+        status: asText(raw["status"]) || "COMPLETED",
+        creationTime: asText(raw["creation_time"]),
+        windowStart,
+        windowEnd,
+        orderCount: orders.length,
+        totalPrice,
+        itemCount
+      };
+    }
+    function extractDeliverySummaries(raw) {
+      const summaries = (Array.isArray(raw) ? raw : []).map(extractDeliverySummary).filter((summary) => summary !== null);
+      const sortKey = (summary) => summary.windowStart ?? summary.creationTime;
+      return summaries.sort((a, b) => sortKey(b).localeCompare(sortKey(a)));
+    }
+  }
+});
+
 // node_modules/picnic-api/lib/domains/delivery/service.js
 var require_service6 = __commonJS({
   "node_modules/picnic-api/lib/domains/delivery/service.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.DeliveryService = void 0;
+    var helpers_1 = require_helpers3();
     var DeliveryService = class {
       constructor(http) {
         this.http = http;
       }
       /**
-       * Returns all past and current deliveries.
+       * Returns all past and current deliveries, as returned by the API.
+       * @deprecated use getDeliverySummaries, which returns typed, summed entries.
        * @param {DeliveryStatus[]} [filter=[]] An array of delivery statuses to filter on.
        */
       getDeliveries(filter = []) {
         return this.http.sendRequest("POST", `/deliveries/summary`, filter);
+      }
+      /**
+       * Returns all past and current deliveries as summaries, newest first.
+       * Totals are summed over each delivery's orders.
+       * @param {DeliveryStatus[]} [filter=[]] An array of delivery statuses to filter on.
+       */
+      async getDeliverySummaries(filter = []) {
+        const raw = await this.http.sendRequest("POST", `/deliveries/summary`, filter);
+        return (0, helpers_1.extractDeliverySummaries)(raw);
       }
       /**
        * Returns the details of a specific delivery.
@@ -2882,7 +3149,7 @@ var require_service11 = __commonJS({
 });
 
 // node_modules/picnic-api/lib/domains/recipe/helpers.js
-var require_helpers2 = __commonJS({
+var require_helpers4 = __commonJS({
   "node_modules/picnic-api/lib/domains/recipe/helpers.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
@@ -3044,7 +3311,7 @@ var require_service12 = __commonJS({
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.RecipeService = void 0;
     var service_1 = require_service4();
-    var helpers_1 = require_helpers2();
+    var helpers_1 = require_helpers4();
     var RecipeService = class {
       constructor(http) {
         this.http = http;
@@ -3443,7 +3710,6 @@ var require_lib = __commonJS({
     var __importDefault = exports && exports.__importDefault || function(mod) {
       return mod && mod.__esModule ? mod : { "default": mod };
     };
-    var _a;
     var http_client_1 = __importDefault(require_http_client());
     var service_1 = require_service();
     var service_2 = require_service2();
@@ -3459,7 +3725,7 @@ var require_lib = __commonJS({
     var service_12 = require_service12();
     var checkout_error_1 = require_checkout_error();
     var page_format_error_1 = require_page_format_error();
-    module.exports = (_a = class PicnicClient extends http_client_1.default {
+    var PicnicClient2 = class extends http_client_1.default {
       /**
        * Creates a new Picnic API client.
        * @param {ApiConfig} [options] Configuration for the client.
@@ -3483,12 +3749,12 @@ var require_lib = __commonJS({
         this.userOnboarding = new service_11.UserOnboardingService(this);
         this.recipe = new service_12.RecipeService(this);
       }
-    }, /**
-     * Error thrown when the cart cannot proceed to checkout (e.g. alcohol age check).
-     * Exposed so consumers can catch it by type without deep-importing internals.
-     */
-    _a.CheckoutIssueError = checkout_error_1.CheckoutIssueError, _a.isCheckoutIssueError = checkout_error_1.isCheckoutIssueError, /** Error thrown when a page is served in a different format (Fusion or RSC) than the method expects. */
-    _a.UnexpectedPageFormatError = page_format_error_1.UnexpectedPageFormatError, _a.isUnexpectedPageFormatError = page_format_error_1.isUnexpectedPageFormatError, _a);
+    };
+    PicnicClient2.CheckoutIssueError = checkout_error_1.CheckoutIssueError;
+    PicnicClient2.isCheckoutIssueError = checkout_error_1.isCheckoutIssueError;
+    PicnicClient2.UnexpectedPageFormatError = page_format_error_1.UnexpectedPageFormatError;
+    PicnicClient2.isUnexpectedPageFormatError = page_format_error_1.isUnexpectedPageFormatError;
+    module.exports = PicnicClient2;
   }
 });
 
@@ -8805,104 +9071,6 @@ function asArray(val) {
   return isArray(val) ? val : [];
 }
 
-// vendor/picnic-web/src/lib/delivery/parse-delivery-slots.ts
-function parseRawSlot(raw) {
-  const slotId = asString(raw["slot_id"]);
-  if (!slotId) return null;
-  const windowStart = asString(raw["window_start"]);
-  const windowEnd = asString(raw["window_end"]);
-  const cutOffTime = asString(raw["cut_off_time"]);
-  if (!windowStart || !windowEnd) return null;
-  return {
-    slotId,
-    windowStart,
-    windowEnd,
-    cutOffTime,
-    isAvailable: raw["is_available"] === true,
-    isSelected: raw["selected"] === true,
-    isGreenChoice: false,
-    // Set later by identifyGreenSlotIds
-    minimumOrderValue: typeof raw["minimum_order_value"] === "number" ? raw["minimum_order_value"] : null
-  };
-}
-function parseSelectedSlot(rawSelectedSlot, rawDeliverySlots) {
-  if (!isObject2(rawSelectedSlot)) return null;
-  const slotId = asString(rawSelectedSlot["slot_id"]);
-  if (!slotId) return null;
-  const state = asString(rawSelectedSlot["state"]);
-  const isExplicitSelection = state !== "IMPLICIT" && state !== "";
-  let windowStart = null;
-  let windowEnd = null;
-  for (const rawSlot of rawDeliverySlots) {
-    if (!isObject2(rawSlot)) continue;
-    if (asString(rawSlot["slot_id"]) === slotId) {
-      windowStart = asString(rawSlot["window_start"]) || null;
-      windowEnd = asString(rawSlot["window_end"]) || null;
-      break;
-    }
-  }
-  return { slotId, state, windowStart, windowEnd, isExplicitSelection };
-}
-function identifyGreenSlotIds(slots2) {
-  const greenSlotIds = /* @__PURE__ */ new Set();
-  const byWindowStart = /* @__PURE__ */ new Map();
-  for (const slot2 of slots2) {
-    const key = slot2.windowStart;
-    const group = byWindowStart.get(key) ?? [];
-    group.push(slot2);
-    byWindowStart.set(key, group);
-  }
-  for (const group of byWindowStart.values()) {
-    if (group.length !== 2) continue;
-    const [a, b] = group;
-    const durationA = new Date(a.windowEnd).getTime() - new Date(a.windowStart).getTime();
-    const durationB = new Date(b.windowEnd).getTime() - new Date(b.windowStart).getTime();
-    if (durationA > durationB) greenSlotIds.add(a.slotId);
-    else if (durationB > durationA) greenSlotIds.add(b.slotId);
-  }
-  return greenSlotIds;
-}
-function extractDateKey(isoTimestamp) {
-  const date = new Date(isoTimestamp);
-  const y = date.getFullYear();
-  const m = String(date.getMonth() + 1).padStart(2, "0");
-  const d = String(date.getDate()).padStart(2, "0");
-  return `${y}-${m}-${d}`;
-}
-function groupSlotsByDay(slots2, countryCode) {
-  const dayMap = /* @__PURE__ */ new Map();
-  const dayOrder = [];
-  for (const slot2 of slots2) {
-    const dateKey = extractDateKey(slot2.windowStart);
-    if (!dayMap.has(dateKey)) {
-      dayMap.set(dateKey, []);
-      dayOrder.push(dateKey);
-    }
-    dayMap.get(dateKey).push(slot2);
-  }
-  return dayOrder.map((dateKey) => {
-    const daySlots = dayMap.get(dateKey);
-    const { dayLabel, dateLabel } = formatDayTabLabel(dateKey, countryCode);
-    const greenSlots = daySlots.filter((s) => s.isGreenChoice);
-    const regularSlots = daySlots.filter((s) => !s.isGreenChoice);
-    return { date: dateKey, dayLabel, dateLabel, greenSlots, regularSlots };
-  });
-}
-function parseDeliverySlotsPicker(rawData, countryCode) {
-  if (!isObject2(rawData)) {
-    return { dayGroups: [], selectedSlot: null };
-  }
-  const rawSlots = asArray(rawData["delivery_slots"]);
-  const slots2 = rawSlots.filter(isObject2).map(parseRawSlot).filter((s) => s !== null);
-  const greenIds = identifyGreenSlotIds(slots2);
-  for (const slot2 of slots2) {
-    slot2.isGreenChoice = greenIds.has(slot2.slotId);
-  }
-  const dayGroups = groupSlotsByDay(slots2, countryCode);
-  const selectedSlot2 = parseSelectedSlot(rawData["selected_slot"], rawSlots);
-  return { dayGroups, selectedSlot: selectedSlot2 };
-}
-
 // vendor/picnic-web/src/lib/cart/parse-cart.ts
 function getDecorators(item) {
   return asArray(item["decorators"]).filter(isObject2);
@@ -9063,6 +9231,21 @@ function extractMinimumOrderValue(raw) {
   if (typeof mov !== "number") return null;
   return mov;
 }
+function parseSelectedSlot(raw) {
+  const selectedSlot2 = raw["selected_slot"];
+  if (!isObject2(selectedSlot2)) return null;
+  const slotId = asString(selectedSlot2["slot_id"]);
+  if (!slotId) return null;
+  const state = asString(selectedSlot2["state"]);
+  const matchedSlot = asArray(raw["delivery_slots"]).filter(isObject2).find((slot2) => asString(slot2["slot_id"]) === slotId);
+  return {
+    slotId,
+    state,
+    windowStart: matchedSlot && asString(matchedSlot["window_start"]) || null,
+    windowEnd: matchedSlot && asString(matchedSlot["window_end"]) || null,
+    isExplicitSelection: state !== "IMPLICIT" && state !== ""
+  };
+}
 function extractRecipeGroups(raw) {
   const groups = [];
   for (const section of asArray(raw["basket_sections"]).filter(isObject2)) {
@@ -9185,10 +9368,7 @@ function parseCartResponse(rawData, countryCode) {
   const minimumOrderValue = extractMinimumOrderValue(rawData);
   const recipeGroups = extractRecipeGroups(rawData);
   const suggestions = extractSuggestions(rawData);
-  const selectedSlot2 = parseSelectedSlot(
-    rawData["selected_slot"],
-    asArray(rawData["delivery_slots"])
-  );
+  const selectedSlot2 = parseSelectedSlot(rawData);
   const t = getTranslations(countryCode);
   const deliveryBannerText = (selectedSlot2?.isExplicitSelection ? formatBannerText(selectedSlot2.windowStart, selectedSlot2.windowEnd, countryCode) : null) ?? t.pickerTitle;
   return {
@@ -9682,6 +9862,42 @@ __export(route_exports12, {
   GET: () => GET4,
   POST: () => POST10
 });
+
+// vendor/picnic-web/src/lib/delivery/group-delivery-slots.ts
+function extractDateKey(isoTimestamp) {
+  const date = new Date(isoTimestamp);
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, "0");
+  const d = String(date.getDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
+}
+function groupSlotsByDay(slots2, countryCode) {
+  const dayMap = /* @__PURE__ */ new Map();
+  const dayOrder = [];
+  for (const slot2 of slots2) {
+    const dateKey = extractDateKey(slot2.windowStart);
+    if (!dayMap.has(dateKey)) {
+      dayMap.set(dateKey, []);
+      dayOrder.push(dateKey);
+    }
+    dayMap.get(dateKey).push(slot2);
+  }
+  return dayOrder.map((dateKey) => {
+    const daySlots = dayMap.get(dateKey);
+    const { dayLabel, dateLabel } = formatDayTabLabel(dateKey, countryCode);
+    const greenSlots = daySlots.filter((s) => s.isGreenChoice);
+    const regularSlots = daySlots.filter((s) => !s.isGreenChoice);
+    return { date: dateKey, dayLabel, dateLabel, greenSlots, regularSlots };
+  });
+}
+function buildSlotPicker(overview, countryCode) {
+  return {
+    dayGroups: groupSlotsByDay(overview.slots, countryCode),
+    selectedSlot: overview.selectedSlot
+  };
+}
+
+// vendor/picnic-web/src/app/api/cart/delivery-slots/route.ts
 async function GET4(request) {
   const token = readAuthToken(request);
   if (!token) {
@@ -9693,13 +9909,8 @@ async function GET4(request) {
   const countryCode = readCountryCode(request);
   try {
     const client = buildPicnicClient(token, countryCode);
-    const rawResult = await client.sendRequest(
-      "GET",
-      "/cart/delivery_slots",
-      null,
-      false
-    );
-    const pickerData = parseDeliverySlotsPicker(rawResult, countryCode);
+    const overview = await client.cart.getDeliverySlotOverview();
+    const pickerData = buildSlotPicker(overview, countryCode);
     return NextResponse.json(pickerData);
   } catch (error2) {
     if (isApiAuthError(error2)) {
@@ -9764,94 +9975,6 @@ var route_exports13 = {};
 __export(route_exports13, {
   GET: () => GET5
 });
-
-// vendor/picnic-web/src/lib/cart/parse-cart-footer.ts
-var LOYALTY_ID = "loyalty-point-nudge-content";
-var RECOMMENDATIONS_HEADER_ID = "horizontal-selling-unit-tiles-sub-header";
-var RECOMMENDATIONS_TILES_ID = "horizontal-selling-unit-tiles";
-var TILE_ID_PREFIX = "item-";
-var RECOMMENDATIONS_PAGE_ID = "basket-recommendations-root";
-function parseCartFooter(rawPage) {
-  return {
-    loyaltyPoints: extractLoyaltyPoints(rawPage),
-    recommendations: extractRecommendations(rawPage)
-  };
-}
-function extractLoyaltyPoints(rawPage) {
-  const [label, value] = collectTexts(findNodeById(rawPage, LOYALTY_ID));
-  return label && value ? { label, value } : null;
-}
-function extractRecommendations(rawPage) {
-  const header = findNodeById(rawPage, RECOMMENDATIONS_HEADER_ID);
-  const tilesNode = findNodeById(rawPage, RECOMMENDATIONS_TILES_ID);
-  if (!tilesNode) return null;
-  const tiles = [];
-  for (const child of asArray2(tilesNode.children)) {
-    const tile = extractTile(child);
-    if (tile) tiles.push(tile);
-  }
-  if (tiles.length === 0) return null;
-  const title = collectTexts(header)[0]?.text ?? "";
-  return { title, pageId: RECOMMENDATIONS_PAGE_ID, tiles };
-}
-function extractTile(node) {
-  if (!isRecord(node) || typeof node.id !== "string" || !node.id.startsWith(TILE_ID_PREFIX)) {
-    return null;
-  }
-  const image = findFirst(node, (candidate) => candidate.type === "IMAGE");
-  const imageId = image?.source?.id;
-  if (typeof imageId !== "string" || imageId === "") return null;
-  const container = findFirst(node, (candidate) => typeof candidate.backgroundColor === "string");
-  return {
-    productId: node.id.slice(TILE_ID_PREFIX.length),
-    imageId,
-    backgroundColor: container?.backgroundColor ?? null,
-    hasPromo: findFirst(
-      node,
-      (candidate) => candidate.type === "ICON" && candidate.iconKey === "percentage"
-    ) !== null
-  };
-}
-function collectTexts(node, out = []) {
-  if (Array.isArray(node)) {
-    for (const item of node) collectTexts(item, out);
-    return out;
-  }
-  if (!isRecord(node)) return out;
-  if (node.type === "RICH_TEXT" && typeof node.markdown === "string") {
-    const text3 = cleanMarkdown(node.markdown);
-    const color = node.textAttributes?.color;
-    if (text3) out.push({ text: text3, color: typeof color === "string" ? color : null });
-    return out;
-  }
-  for (const value of Object.values(node)) collectTexts(value, out);
-  return out;
-}
-function findFirst(node, predicate) {
-  if (Array.isArray(node)) {
-    for (const item of node) {
-      const found = findFirst(item, predicate);
-      if (found) return found;
-    }
-    return null;
-  }
-  if (!isRecord(node)) return null;
-  if (predicate(node)) return node;
-  for (const value of Object.values(node)) {
-    const found = findFirst(value, predicate);
-    if (found) return found;
-  }
-  return null;
-}
-function isRecord(value) {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-function asArray2(value) {
-  return Array.isArray(value) ? value : [];
-}
-
-// vendor/picnic-web/src/app/api/cart/footer/route.ts
-var CART_FOOTER_PAGE_ID = "basket-footer-section-root";
 async function GET5(request) {
   const token = readAuthToken(request);
   if (!token) {
@@ -9862,8 +9985,7 @@ async function GET5(request) {
   }
   try {
     const client = buildPicnicClient(token, readCountryCode(request));
-    const rawPage = await client.app.getPage(CART_FOOTER_PAGE_ID);
-    return NextResponse.json(parseCartFooter(rawPage));
+    return NextResponse.json(await client.cart.getBasketFooter());
   } catch (error2) {
     if (isApiAuthError(error2)) {
       return NextResponse.json(
@@ -10863,46 +10985,16 @@ __export(route_exports21, {
   GET: () => GET13
 });
 
-// vendor/picnic-web/src/lib/delivery/parse-deliveries-summary.ts
-function parseDeliveryWindow(raw) {
-  const slot2 = isObject2(raw["slot"]) ? raw["slot"] : null;
-  const deliveryTime = isObject2(raw["delivery_time"]) ? raw["delivery_time"] : null;
-  const eta2 = isObject2(raw["eta2"]) ? raw["eta2"] : null;
-  const windowStart = asString(slot2?.["window_start"]) || asString(deliveryTime?.["start"]) || asString(eta2?.["start"]) || null;
-  const windowEnd = asString(slot2?.["window_end"]) || asString(deliveryTime?.["end"]) || asString(eta2?.["end"]) || null;
-  return { windowStart, windowEnd };
-}
-function mapDeliverySummary(raw, countryCode) {
-  if (!isObject2(raw)) return null;
-  const id = asString(raw["delivery_id"]) || asString(raw["id"]);
-  if (!id) return null;
-  const status = asString(raw["status"]) || "COMPLETED";
-  const { windowStart, windowEnd } = parseDeliveryWindow(raw);
-  const orders = asArray(raw["orders"]).filter(isObject2);
-  let totalPrice = 0;
-  let itemCount = asNumber(raw["total_count"]) || asNumber(raw["sellable_item_count"]);
-  for (const order of orders) {
-    totalPrice += asNumber(order["total_price"]) || asNumber(order["checkout_total_price"]);
-    itemCount += asNumber(order["total_count"]) || asNumber(order["sellable_item_count"]);
-  }
-  return {
-    id,
-    status,
-    creationTime: asString(raw["creation_time"]),
-    windowStart,
-    windowEnd,
-    deliveryWindowText: formatDeliveryWindowText(windowStart, windowEnd, countryCode),
-    orderCount: orders.length,
-    totalPrice,
-    itemCount
-  };
-}
-function parseDeliveriesSummary(rawData, countryCode) {
-  const rawList = Array.isArray(rawData) ? rawData : asArray(rawData);
-  const deliveries = rawList.map((entry) => mapDeliverySummary(entry, countryCode)).filter((item) => item !== null);
-  const sortKey = (d) => d.windowStart ?? d.creationTime;
-  deliveries.sort((a, b) => sortKey(b).localeCompare(sortKey(a)));
-  return deliveries;
+// vendor/picnic-web/src/lib/delivery/to-delivery-list-items.ts
+function toDeliveryListItems(summaries, countryCode) {
+  return summaries.map((summary) => ({
+    ...summary,
+    deliveryWindowText: formatDeliveryWindowText(
+      summary.windowStart,
+      summary.windowEnd,
+      countryCode
+    )
+  }));
 }
 
 // vendor/picnic-web/src/app/api/deliveries/route.ts
@@ -10920,8 +11012,8 @@ async function GET13(request) {
   const filter = statusParam && VALID_STATUSES.has(statusParam) ? [statusParam] : [];
   try {
     const client = buildPicnicClient(token, countryCode);
-    const rawDeliveries = await client.delivery.getDeliveries(filter);
-    const deliveries = parseDeliveriesSummary(rawDeliveries, countryCode);
+    const summaries = await client.delivery.getDeliverySummaries(filter);
+    const deliveries = toDeliveryListItems(summaries, countryCode);
     return NextResponse.json({ deliveries });
   } catch (error2) {
     if (isApiAuthError(error2)) {
@@ -12856,7 +12948,7 @@ function startDesk(env = process.env) {
     pictureCacheMb,
     allowedUsers,
     ingressOnly: env.INGRESS_ONLY === "1",
-    version: true ? "1.0.0" : "dev",
+    version: true ? "1.0.1" : "dev",
     routes: VENDORED_ROUTES,
     demo: demo ? demoShop() : void 0
   });
