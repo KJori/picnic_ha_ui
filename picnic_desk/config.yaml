@@ -1,5 +1,5 @@
 name: Picnic Desk
-version: "1.0.1"
+version: "1.0.2"
 slug: picnic_desk
 description: A desktop Picnic shop in the Home Assistant sidebar
 url: https://github.com/KJori/picnic_ha_ui
@@ -17,10 +17,12 @@ panel_title: Picnic
 panel_admin: true
 # Backups may end up on a NAS or in the cloud: they get no Picnic session
 # (signing in again after a restore is enough), no order history, and no
-# pictures (all of these come back by themselves).
+# pictures (all of these come back by themselves). Nor the payment being
+# watched: a restore must not pick up an old payment again.
 backup_exclude:
   - "*/picture-cache/**"
   - "*/auth.json"
+  - "*/payment.json"
   - "*/history.json"
   - "*/recipe_prices.json"
 options:

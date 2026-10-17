@@ -13,6 +13,7 @@
  *   GET  recipe-price     ?id=<recipe id>  price of a recipe's main ingredients, kept a day
  *   GET  lists            the saved lists;  PUT lists {lists} replaces them all
  *   GET  picks            the product chosen per pasted line;  PUT picks {term, product|null}
+ *   DELETE payment        forget a payment the app stopped watching (the open payment is in state)
  */
 import { NextRequest, NextResponse } from "next/server";
 
@@ -42,6 +43,7 @@ import type { HaUser } from "./session";
 import { L1_CATEGORIES, productById } from "./demo/data";
 import { join } from "node:path";
 
+import type { OpenPayment } from "./payments";
 import { DEFAULT_CACHE_MB, Pictures } from "./pictures";
 import { isObject } from "./store";
 
@@ -55,6 +57,8 @@ export type DeskState = {
   language: Language;
   demo: boolean;
   version: string;
+  /** A payment started here and not finished yet: the app confirms it when Picnic says it is paid. */
+  payment: OpenPayment | null;
 };
 
 export const LANGUAGES = ["en", "nl", "de", "fr"] as const;
@@ -263,8 +267,12 @@ export class DeskRoutes {
         return NextResponse.json({ picks: this.picks() });
       case "PUT picks":
         return this.#setPick(request);
+      case "DELETE payment":
+        // Only one the app gave up on: an open payment is still being watched.
+        if (this.desk.payments.open?.gaveUp) this.desk.payments.forget();
+        return NextResponse.json({ payment: this.desk.payments.open });
     }
-    const known = ["state", "code", "image", "saved", "shortcuts", "history", "selfcheck", "raw", "recipe-price", "lists", "picks"];
+    const known = ["state", "code", "image", "saved", "shortcuts", "history", "selfcheck", "raw", "recipe-price", "lists", "picks", "payment"];
     return known.includes(segments.join("/")) ? error("Method not allowed.", 405) : error("Not found.", 404);
   }
 
@@ -281,6 +289,7 @@ export class DeskRoutes {
         language: this.desk.options.language,
         demo: Boolean(this.desk.options.demo),
         version: this.desk.options.version,
+        payment: null,
       };
     }
     return {
@@ -292,6 +301,7 @@ export class DeskRoutes {
       language: this.desk.options.language,
       demo: Boolean(this.desk.options.demo),
       version: this.desk.options.version,
+      payment: session.signedIn ? this.desk.payments.open : null,
     };
   }
 
@@ -584,6 +594,7 @@ export class DeskRoutes {
     this.desk.store.remove("recipe_prices.json");
     this.desk.store.remove("history.json");
     this.pictures.forget();
+    this.desk.payments.forget();
   }
 
   // ─── Self-check ───────────────────────────────────────────────────────────

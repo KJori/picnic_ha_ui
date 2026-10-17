@@ -88,6 +88,7 @@ export async function runDesk(options: Partial<DeskOptions> = {}): Promise<Runni
     ingressOnly: false,
     version: "test",
     routes: VENDORED_ROUTES,
+    watchPayments: false,
     ...options,
   });
   const server: Server = createServer(desk.handle);

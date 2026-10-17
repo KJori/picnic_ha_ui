@@ -7,6 +7,9 @@
  * watching the payment, because the bank's way back into Home Assistant may
  * not get past Home Assistant's login. Whichever tab sees the payment finish
  * first confirms the order; a small lock in localStorage keeps it to one.
+ * The server also keeps the payment (src/server/payments.ts): it confirms the
+ * order itself when no tab is left to do it, answers a second confirmation
+ * with the first one, and any page on any device can pick the payment up.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 
@@ -26,12 +29,12 @@ import { api } from "../lib/api";
 import { paymentAddress } from "../lib/payment";
 import { href, navigate } from "../lib/router";
 import { cartModel, useCart } from "../state/cart";
-import { useT } from "../state/session";
+import { useSession, useT } from "../state/session";
 
 const PENDING_KEY = "picnic_desk_payment";
 const POLL_MS = 3000;
-/** A payment not finished in this time is not watched any more. */
-const PENDING_FOR_MS = 60 * 60 * 1000;
+/** A payment not finished in this time is not watched any more; as long as the server watches it (payments.ts). */
+const PENDING_FOR_MS = 2 * 60 * 60 * 1000;
 const TAB = Math.random().toString(36).slice(2);
 
 type Pending = { orderId: string; transactionId: string; startedAt: number; confirming?: string };
@@ -94,7 +97,17 @@ export function CheckoutPage({ returning = false }: { returning?: boolean }) {
   const [started, setStarted] = useState<CheckoutStartData | null>(null);
   const [issue, setIssue] = useState<CheckoutIssueData | null>(null);
   const [busy, setBusy] = useState(false);
-  const [pending, setPending] = useState<Pending | null>(readPending);
+  const { state, refresh } = useSession();
+  // This browser's own note of the payment, or else the server's: it keeps the payment for every page and device.
+  const [pending, setPending] = useState<Pending | null>(() => {
+    const own = readPending();
+    if (own) return own;
+    const open = state?.payment;
+    if (!open || open.gaveUp) return null;
+    const fromServer = { orderId: open.orderId, transactionId: open.transactionId, startedAt: open.startedAt };
+    writePending(fromServer); // so this browser's tabs share it as they do their own
+    return fromServer;
+  });
   const [payUrl, setPayUrl] = useState<string | null>(null);
 
   const start = async (resolveKey?: string) => {
@@ -142,7 +155,8 @@ export function CheckoutPage({ returning = false }: { returning?: boolean }) {
   const paymentDone = useCallback(() => {
     writePending(null);
     setPending(null);
-  }, []);
+    void refresh();
+  }, [refresh]);
 
   if (pending) {
     return (
@@ -298,9 +312,11 @@ function PaymentWatch({ pending, payUrl, onDone }: { pending: Pending; payUrl: s
         navigate("/orders");
         return;
       }
-      // Past the time a payment can take: stop asking, the page says so.
+      // Past the time a payment can take: stop asking. Not "failed": nobody knows; the server's
+      // note at the top of the page says to look at the orders.
       if (Date.now() - pending.startedAt > PENDING_FOR_MS) {
-        setStatus("EXPIRED");
+        onDone();
+        navigate("/orders");
         return;
       }
       const result = await api<CheckoutStatusData>(

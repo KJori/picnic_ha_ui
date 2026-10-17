@@ -47,7 +47,12 @@ Checkout builds the bank's return address from `nextUrl.origin`; the page
 sends its own address (`X-Desk-Base`) so that address points back into Home
 Assistant. Because Home Assistant may not let the bank's redirect in, the bank
 opens in a new tab and the original tab watches the payment and confirms the
-order.
+order. The server keeps the payment too (`src/server/payments.ts`,
+`payment.json`): it asks Picnic about it every 15 seconds and confirms the
+order itself when no tab is left to do it, lets one confirmation through at a
+time, and, when a confirmation fails on Picnic's side, counts the order as
+placed if a current delivery gained an order since the payment started.
+`/api/desk/state` tells every page about the open payment.
 
 ## The page
 

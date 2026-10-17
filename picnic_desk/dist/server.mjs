@@ -6115,8 +6115,11 @@ var DeskRoutes = class {
         return NextResponse.json({ picks: this.picks() });
       case "PUT picks":
         return this.#setPick(request);
+      case "DELETE payment":
+        if (this.desk.payments.open?.gaveUp) this.desk.payments.forget();
+        return NextResponse.json({ payment: this.desk.payments.open });
     }
-    const known = ["state", "code", "image", "saved", "shortcuts", "history", "selfcheck", "raw", "recipe-price", "lists", "picks"];
+    const known = ["state", "code", "image", "saved", "shortcuts", "history", "selfcheck", "raw", "recipe-price", "lists", "picks", "payment"];
     return known.includes(segments.join("/")) ? error("Method not allowed.", 405) : error("Not found.", 404);
   }
   state(user = null) {
@@ -6130,7 +6133,8 @@ var DeskRoutes = class {
         country: session.country,
         language: this.desk.options.language,
         demo: Boolean(this.desk.options.demo),
-        version: this.desk.options.version
+        version: this.desk.options.version,
+        payment: null
       };
     }
     return {
@@ -6141,7 +6145,8 @@ var DeskRoutes = class {
       country: session.country,
       language: this.desk.options.language,
       demo: Boolean(this.desk.options.demo),
-      version: this.desk.options.version
+      version: this.desk.options.version,
+      payment: session.signedIn ? this.desk.payments.open : null
     };
   }
   // ─── Sign-in ──────────────────────────────────────────────────────────────
@@ -6405,6 +6410,7 @@ var DeskRoutes = class {
     this.desk.store.remove("recipe_prices.json");
     this.desk.store.remove("history.json");
     this.pictures.forget();
+    this.desk.payments.forget();
   }
   // ─── Self-check ───────────────────────────────────────────────────────────
   async #selfcheck() {
@@ -6600,6 +6606,175 @@ var Router = class {
   }
 };
 
+// src/server/payments.ts
+var FILE = "payment.json";
+var PAYMENT_POLL_MS = 15e3;
+var PAYMENT_WATCH_MS = 2 * 60 * 60 * 1e3;
+var FAILED_PAYMENT = /CANCEL|FAIL|EXPIR|ERROR|REJECT/i;
+var isDeliveries = (value) => isObject(value) && Object.values(value).every((n) => typeof n === "number");
+var isSaved = (value) => isObject(value) && typeof value.orderId === "string" && value.orderId !== "" && typeof value.transactionId === "string" && value.transactionId !== "" && typeof value.startedAt === "number" && (value.before === null || isDeliveries(value.before));
+var Payments = class {
+  constructor(host) {
+    this.host = host;
+    this.#open = host.store.read(FILE, null, (value) => value === null || isSaved(value));
+    if (this.#open && !this.#open.gaveUp) this.#schedule();
+  }
+  host;
+  #open;
+  #timer = null;
+  #confirming = null;
+  /** The last order confirmed, so a late second ask is answered without asking Picnic again. */
+  #confirmed = null;
+  #ticking = null;
+  get open() {
+    if (!this.#open) return null;
+    const { orderId, transactionId, startedAt, gaveUp } = this.#open;
+    return { orderId, transactionId, startedAt, gaveUp: Boolean(gaveUp) };
+  }
+  /** The payment for `orderId` started; Picnic gave it `transactionId`. */
+  async started(orderId, transactionId) {
+    this.#confirmed = null;
+    this.#open = { orderId, transactionId, startedAt: this.host.now(), before: null };
+    this.#save();
+    this.#schedule();
+    const before = await this.#currentDeliveries();
+    if (this.#open?.transactionId === transactionId) {
+      this.#open = { ...this.#open, before };
+      this.#save();
+    }
+  }
+  /** The payment will not finish (cancelled, failed): nothing to confirm. */
+  ended(transactionId) {
+    if (this.#open?.transactionId === transactionId) this.forget();
+  }
+  /** Signed out, or the page dismissed a payment the server gave up on. */
+  forget() {
+    this.#open = null;
+    this.#confirmed = null;
+    this.#stop();
+    this.host.store.remove(FILE);
+  }
+  /**
+   * Confirm an order, one at a time. `send` is picnic-web's confirm route.
+   * Answers a second ask for the same order with the first answer.
+   */
+  async confirm(request, send2) {
+    let orderId = "";
+    try {
+      const body = JSON.parse(await request.text());
+      if (isObject(body) && typeof body.orderId === "string") orderId = body.orderId;
+    } catch {
+    }
+    if (!orderId) return send2(request);
+    if (this.#confirmed?.orderId === orderId) return answer(this.#confirmed);
+    if (this.#confirming?.orderId === orderId) return answer(await this.#confirming.answer);
+    const run = this.#confirmOnce(orderId, request, send2);
+    this.#confirming = { orderId, answer: run };
+    try {
+      return answer(await run);
+    } finally {
+      if (this.#confirming?.answer === run) this.#confirming = null;
+    }
+  }
+  async #confirmOnce(orderId, request, send2) {
+    let status = 502;
+    let body = JSON.stringify({ error: "Failed to confirm order. Please try again later." });
+    try {
+      const response = await send2(request);
+      status = response.status;
+      body = await response.text();
+    } catch (error2) {
+      console.error("[desk] confirming the order failed:", error2 instanceof Error ? error2.message : error2);
+    }
+    const placed = status >= 200 && status < 300 || status >= 500 && await this.#placedAnyway(orderId);
+    if (!placed) return { orderId, status, body };
+    const confirmed = status >= 200 && status < 300 ? { orderId, status, body } : { orderId, status: 200, body: JSON.stringify({ success: true, orderId }) };
+    this.#confirmed = confirmed;
+    if (this.#open?.orderId === orderId) {
+      this.#open = null;
+      this.#stop();
+      this.host.store.remove(FILE);
+    }
+    return confirmed;
+  }
+  /** A confirmation failed: did Picnic take the order all the same? */
+  async #placedAnyway(orderId) {
+    const open = this.#open;
+    if (!open || open.orderId !== orderId || !open.before) return false;
+    const now = await this.#currentDeliveries();
+    if (!now) return false;
+    return Object.entries(now).some(([id, orders]) => orders > (open.before[id] ?? 0));
+  }
+  async #currentDeliveries() {
+    try {
+      const result = await this.host.internal("deliveries?status=CURRENT");
+      if (result.status !== 200 || !isObject(result.body) || !Array.isArray(result.body.deliveries)) return null;
+      const deliveries = {};
+      for (const delivery of result.body.deliveries) {
+        if (isObject(delivery) && typeof delivery.id === "string") {
+          deliveries[delivery.id] = typeof delivery.orderCount === "number" ? delivery.orderCount : 0;
+        }
+      }
+      return deliveries;
+    } catch {
+      return null;
+    }
+  }
+  /** Ask Picnic about the open payment once, and confirm it when it is paid. */
+  tick() {
+    this.#ticking ??= this.#tick().finally(() => this.#ticking = null);
+    return this.#ticking;
+  }
+  async #tick() {
+    const open = this.#open;
+    if (!open || open.gaveUp) return;
+    if (this.host.now() - open.startedAt > PAYMENT_WATCH_MS) {
+      this.#open = { ...open, gaveUp: true };
+      this.#save();
+      this.#stop();
+      console.error(`[desk] payment ${open.transactionId}: no answer either way after two hours; check the orders`);
+      return;
+    }
+    const status = await this.host.internal(
+      `cart/checkout/status?${new URLSearchParams({ transactionId: open.transactionId })}`
+    );
+    if (this.#open?.transactionId !== open.transactionId) return;
+    const checkoutStatus2 = isObject(status.body) ? status.body.checkoutStatus : void 0;
+    if (status.status !== 200 || typeof checkoutStatus2 !== "string") return;
+    if (FAILED_PAYMENT.test(checkoutStatus2)) {
+      this.ended(open.transactionId);
+      return;
+    }
+    if (checkoutStatus2 !== "FINISHED") return;
+    const confirmed = await this.host.internal("cart/checkout/confirm", {
+      method: "POST",
+      body: { orderId: open.orderId, transactionId: open.transactionId }
+    });
+    if (confirmed.status === 200) console.log(`[desk] order ${open.orderId} confirmed by the app`);
+  }
+  #schedule() {
+    if (!this.host.watch || this.#timer) return;
+    const next = () => {
+      this.#timer = setTimeout(() => {
+        void this.tick().finally(() => {
+          this.#timer = null;
+          if (this.#open && !this.#open.gaveUp) next();
+        });
+      }, PAYMENT_POLL_MS);
+      this.#timer.unref();
+    };
+    next();
+  }
+  #stop() {
+    if (this.#timer) clearTimeout(this.#timer);
+    this.#timer = null;
+  }
+  #save() {
+    if (this.#open) this.host.store.write(FILE, this.#open);
+  }
+};
+var answer = (confirmed) => new NextResponse(confirmed.body, { status: confirmed.status, headers: { "content-type": "application/json" } });
+
 // vendor/picnic-web/src/lib/core/auth.ts
 var AUTH_COOKIE_NAME = "picnic_auth_token";
 var AUTH_COOKIE_MAX_AGE_SECONDS = 30 * 24 * 60 * 60;
@@ -6619,7 +6794,7 @@ function readCountryCode(request) {
 }
 
 // src/server/session.ts
-var FILE = "auth.json";
+var FILE2 = "auth.json";
 var PARTIAL_TOKEN_LIFETIME_MS = 15 * 60 * 1e3;
 var readOwner = (value) => isObject(value) && typeof value.id === "string" && value.id && typeof value.name === "string" ? { id: value.id, name: value.name, displayName: typeof value.displayName === "string" ? value.displayName : value.name } : void 0;
 var isCountry = (value) => typeof value === "string" && SUPPORTED_COUNTRY_CODES.includes(value);
@@ -6637,7 +6812,7 @@ var Session = class {
     this.store = store;
     this.defaultCountry = defaultCountry;
     this.now = now;
-    this.#saved = readSaved(store.read(FILE, null, (_value) => true), defaultCountry);
+    this.#saved = readSaved(store.read(FILE2, null, (_value) => true), defaultCountry);
   }
   store;
   defaultCountry;
@@ -6675,16 +6850,16 @@ var Session = class {
     } else if (typeof token === "string") {
       this.#saved = { token, country: country ?? this.country, since: new Date(this.now()).toISOString() };
       this.#partial = null;
-      this.store.write(FILE, this.#saved);
+      this.store.write(FILE2, this.#saved);
     } else if (country && this.#saved && this.#saved.country !== country) {
       this.#saved = { ...this.#saved, country };
-      this.store.write(FILE, this.#saved);
+      this.store.write(FILE2, this.#saved);
     }
   }
   signOut() {
     this.#saved = null;
     this.#partial = null;
-    this.store.remove(FILE);
+    this.store.remove(FILE2);
   }
   /** The half-finished sign-in token, kept here while Picnic waits for a verification code. */
   holdPartialToken(token) {
@@ -6705,7 +6880,7 @@ var Session = class {
     if (!this.#saved) return;
     const { owner: _old, ...rest } = this.#saved;
     this.#saved = owner ? { ...rest, owner } : rest;
-    this.store.write(FILE, this.#saved);
+    this.store.write(FILE2, this.#saved);
   }
 };
 
@@ -6748,12 +6923,19 @@ var Desk = class {
     this.session = new Session(this.store, options.country, options.now);
     this.router = new Router(options.routes);
     this.desk = new DeskRoutes(this);
+    this.payments = new Payments({
+      store: this.store,
+      internal: (path, init) => this.internal(path, init),
+      now: options.now ?? Date.now,
+      watch: options.watchPayments ?? true
+    });
   }
   options;
   session;
   store;
   router;
   desk;
+  payments;
   /** Set when Picnic refused the saved token; cleared by the next answer that worked. */
   expired = false;
   /** Node's request handler. Never throws. */
@@ -6898,7 +7080,8 @@ var Desk = class {
     let response = null;
     try {
       if (this.options.demo) {
-        response = await this.options.demo(request, segments);
+        const demo = this.options.demo;
+        response = await this.#checkout(request, segments, async (r) => await demo(r, segments) ?? notFound());
       } else {
         const match = this.router.match(request.method, segments);
         if (match.kind === "method") {
@@ -6908,7 +7091,8 @@ var Desk = class {
           });
         }
         if (match.kind === "found") {
-          response = await match.handler(request, { params: Promise.resolve(match.params) });
+          const route = async (r) => match.handler(r, { params: Promise.resolve(match.params) });
+          response = await this.#checkout(request, segments, route);
         }
       }
     } catch (error2) {
@@ -6918,6 +7102,30 @@ var Desk = class {
     if (!response) return NextResponse.json({ error: "Not found." }, { status: 404 });
     if (isAuthRoute) response = await finishAuthResponse(this, response, segments[1], user);
     else this.#noteTokenState(response);
+    return response;
+  }
+  /**
+   * The checkout steps the server keeps track of (see payments.ts): a payment
+   * that started is remembered, confirming goes one at a time, and a
+   * cancelled payment is forgotten.
+   */
+  async #checkout(request, segments, route) {
+    const step = request.method === "POST" && segments.length === 3 && segments[0] === "cart" && segments[1] === "checkout" ? segments[2] : null;
+    if (step === "confirm") return this.payments.confirm(request, route);
+    const response = await route(request);
+    if (!response.ok || step !== "initiate" && step !== "cancel") return response;
+    const body = await response.clone().json().catch(() => null);
+    if (step === "cancel") {
+      const sent2 = await request.json().catch(() => null);
+      if (typeof sent2?.transactionId === "string") this.payments.ended(sent2.transactionId);
+      return response;
+    }
+    const sent = await request.json().catch(() => null);
+    if (typeof sent?.orderId === "string" && sent.orderId && typeof body?.transactionId === "string" && body.transactionId) {
+      void this.payments.started(sent.orderId, body.transactionId).catch(
+        (error2) => console.error("[desk] cannot keep the payment:", error2 instanceof Error ? error2.message : error2)
+      );
+    }
     return response;
   }
   /** Call an API route from inside the app and read its JSON answer. */
@@ -6987,6 +7195,7 @@ async function finishAuthResponse(desk, response, step, user) {
   }
   return stripCookies(response);
 }
+var notFound = () => NextResponse.json({ error: "Not found." }, { status: 404 });
 function readSetCookies(response) {
   return response.headers.getSetCookie().map((line) => {
     const [pair, ...attributes] = line.split(";");
@@ -12948,7 +13157,7 @@ function startDesk(env = process.env) {
     pictureCacheMb,
     allowedUsers,
     ingressOnly: env.INGRESS_ONLY === "1",
-    version: true ? "1.0.1" : "dev",
+    version: true ? "1.0.2" : "dev",
     routes: VENDORED_ROUTES,
     demo: demo ? demoShop() : void 0
   });
