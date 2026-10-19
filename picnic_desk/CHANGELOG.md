@@ -4,6 +4,13 @@ All notable changes to Picnic Desk. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the version
 numbers [Semantic Versioning](https://semver.org/).
 
+## [1.0.3]
+
+### Changed
+
+- The page now runs on React 19.3, the library it is built with. You should
+  not notice a difference: everything looks and works as before.
+
 ## [1.0.2]
 
 ### Fixed
