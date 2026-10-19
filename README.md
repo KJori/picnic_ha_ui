@@ -71,8 +71,9 @@ files agree with the new code, so nothing slips through unnoticed.
 
 Node 22 or newer.
 
-    npm install
+    npm ci                   the exact versions in package-lock.json
     npm run check            types, route table, built files up to date
+    npm run lint             ESLint on the desk's own code (not vendor/)
     npm test                 server and unit tests (Picnic is faked)
     npm run build
     npm run test:browser     the page in Chromium, against the demo shop

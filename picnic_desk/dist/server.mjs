@@ -3817,6 +3817,8 @@ var NextRequest = class {
     this.#body = init.body ?? null;
   }
   /** Like Request.json(): rejects on an empty or malformed body. */
+  // Promise<any>, as in Request.json() and Next.js: the copied picnic-web routes are written against that.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   async json() {
     if (this.#body === null || this.#body === "") throw new SyntaxError("Unexpected end of JSON input");
     return JSON.parse(this.#body);
@@ -7201,7 +7203,7 @@ function readSetCookies(response) {
     const [pair, ...attributes] = line.split(";");
     const at = pair.indexOf("=");
     const name = pair.slice(0, at).trim();
-    let value = "";
+    let value;
     try {
       value = decodeURIComponent(pair.slice(at + 1).trim());
     } catch {
@@ -13157,7 +13159,7 @@ function startDesk(env = process.env) {
     pictureCacheMb,
     allowedUsers,
     ingressOnly: env.INGRESS_ONLY === "1",
-    version: true ? "1.0.2" : "dev",
+    version: true ? "1.0.3" : "dev",
     routes: VENDORED_ROUTES,
     demo: demo ? demoShop() : void 0
   });

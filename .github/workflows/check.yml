@@ -20,9 +20,10 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ matrix.node }}
-      - run: npm install --no-audit --no-fund
+      - run: npm ci --no-audit --no-fund
       # Types, the route table, and the committed build all match the sources.
       - run: npm run check
+      - run: npm run lint
       - run: npm test
       - run: npx --yes markdownlint-cli2@0.23.2 "README.md" "picnic_desk/*.md" "docs/*.md" "picnic-web/*.md"
       - run: npx playwright install --with-deps chromium
