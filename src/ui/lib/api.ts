@@ -43,7 +43,7 @@ export async function api<T>(
     return { ok: false, status: 0, error: "network" };
   }
 
-  let data: unknown = null;
+  let data: unknown;
   const text = await response.text().catch(() => "");
   try {
     data = text ? JSON.parse(text) : null;

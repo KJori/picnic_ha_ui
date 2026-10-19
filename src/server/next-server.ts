@@ -92,6 +92,8 @@ export class NextRequest {
   }
 
   /** Like Request.json(): rejects on an empty or malformed body. */
+  // Promise<any>, as in Request.json() and Next.js: the copied picnic-web routes are written against that.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   async json(): Promise<any> {
     if (this.#body === null || this.#body === "") throw new SyntaxError("Unexpected end of JSON input");
     return JSON.parse(this.#body);

@@ -11,6 +11,7 @@
   "scripts": {
     "build": "node scripts/build.mjs",
     "check": "tsc -p tsconfig.json && node scripts/routes.mjs --check && node scripts/build.mjs --check",
+    "lint": "eslint .",
     "test": "node --import tsx --import ./tests/setup.ts --test \"tests/**/*.test.ts\"",
     "start": "node picnic_desk/dist/server.mjs",
     "vendor": "node scripts/vendor.mjs",
@@ -22,13 +23,18 @@
     "react-dom": "19.3.1"
   },
   "devDependencies": {
+    "@eslint/js": "10.0.1",
     "@types/node": "^24",
     "@types/react": "^19.2.0",
     "@types/react-dom": "^19.2.0",
     "esbuild": "0.28.2",
+    "eslint": "10.13.0",
+    "eslint-plugin-react-hooks": "7.1.1",
+    "globals": "17.13.0",
+    "playwright": "1.64.1",
     "tsx": "4.23.15",
     "typescript": "6.0.3",
-    "playwright": "1.64.1"
+    "typescript-eslint": "8.72.0"
   },
   "overrides": {
     "jsonpath-plus": "10.4.0",

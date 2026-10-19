@@ -433,7 +433,7 @@ function readSetCookies(response: Response): SetCookie[] {
     const [pair, ...attributes] = line.split(";");
     const at = pair.indexOf("=");
     const name = pair.slice(0, at).trim();
-    let value = "";
+    let value: string;
     try {
       value = decodeURIComponent(pair.slice(at + 1).trim());
     } catch {
