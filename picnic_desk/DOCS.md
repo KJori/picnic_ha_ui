@@ -61,8 +61,10 @@ basket as a till receipt on the right.
   separated by commas are searched one after the other, each with its own row.
   The shortcuts under the box are saved searches: **Edit shortcuts** adds and
   removes them.
-- **Categories**: Picnic's own aisles (and its promotions) in a column on the
-  left; a category's subcategories and products on the right.
+- **Categories**: Picnic's own aisles (and its offers) in a column on the
+  left; a category's subcategories and products on the right. **Acties**
+  opens Picnic's offers page: the products on offer, and a card for each offer
+  on several products that opens its products.
 - **Products**: click one for its page: pictures, description, allergens,
   ingredients, nutrition, "more for less" offers and similar products. The
   star saves a product under **Saved**. Under each product: its size and the

@@ -59,7 +59,7 @@ placed if a current delivery gained an order since the payment started.
 `src/ui` is a React app with the desk's own design (the shelf and the
 receipt, from 0.x), laid out for a wide screen rather than picnic-web's phone
 layout. It imports picnic-web's types, translations and pure helpers
-(deep-link routing, the RSC action resolver, the tracking parser, PML
+(deep-link routing, the RSC action resolver, the product tile mapper, PML
 markdown) so it reads the
 routes' answers the way picnic-web's own pages do. TypeScript checks it
 against those types.
@@ -103,7 +103,10 @@ one already shown, and fetches the basket again after a failure.
   the browser's headers; cookies, Home Assistant's headers and any
   authorization stay out. Its cookies come from the server-side session.
 - Outbound: `installOnlyPicnic` refuses any request that is not https to
-  `storefront-prod.{nl,de,fr}.picnicinternational.com`, before it is sent.
+  `storefront-prod.{nl,de,fr}.picnicinternational.com` (the API and pictures)
+  or `pages-prod.{nl,de,fr}.picnicinternational.com` (the scripts of Picnic's
+  newer pages, which picnic-api reads to search the way the app does), before
+  it is sent.
 - Answers: CSP without inline script or style, `object-src 'none'`,
   `frame-ancestors 'self'`, `X-Frame-Options`, `Cross-Origin-Resource-Policy:
   same-origin`, a Permissions-Policy that turns off device access,

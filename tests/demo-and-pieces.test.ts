@@ -34,7 +34,8 @@ test("the demo shop answers every route the page uses", async () => {
       "/api/categories/21001/subcategories",
       "/api/categories/22001/products",
       "/api/pages/products?pageId=basket-recommendations",
-      "/api/pages/products?pageId=promo-group-deep-dive%3Fpromo_group_id%3Ddemo",
+      "/api/promotions",
+      "/api/promotions/demo-koffie",
       "/api/cart",
       "/api/cart/footer",
       "/api/cart/delivery-slots",
@@ -52,7 +53,8 @@ test("the demo shop answers every route the page uses", async () => {
       "/api/deliveries?status=COMPLETED",
       "/api/deliveries/demo-delivery-current",
       "/api/deliveries/demo-delivery-current/position",
-      "/api/deliveries/demo-delivery-current/scenario",
+      "/api/deliveries/demo-delivery-current/tracking",
+      "/api/deliveries/demo-delivery-current/tracking?routeVersion=1",
       "/api/parcels",
       "/api/parcels/JVGL0000DEMO1",
       "/api/user/profile",
@@ -113,9 +115,7 @@ const ingredient = (over: Partial<RecipeIngredient>): RecipeIngredient => ({
   maxCount: 99,
   quantity: 1,
   isCondiment: false,
-  nutritionRows: [],
   recipeQuantityText: null,
-  recipePackageSize: null,
   originalPrice: null,
   priceRanges: null,
   ...over,
@@ -404,17 +404,26 @@ test("price per kilo, litre or piece: plain pack sizes are read, anything else g
 });
 
 test("price per kilo agrees with the one Picnic itself prints on its product page", async () => {
-  const { parseProductDetailPage } = await import("@/lib/product/parse-fusion-product");
   const { unitPrice } = await import("../src/ui/lib/unit-price");
-  const { fixture } = await import("./helpers");
-  const product = parseProductDetailPage(fixture("product_details_page_nl.json"), "s1018620");
-  const ours = unitPrice(product.displayPrice, product.unitQuantity);
-  const picnic = /€\s*([\d.,]+)\s*\/\s*(kg|l)/i.exec(product.unitPrice ?? "");
-  assert.ok(picnic, `Picnic's unit price: ${product.unitPrice}`);
-  assert.ok(ours, `ours, from "${product.unitQuantity}" at ${product.displayPrice}`);
-  assert.equal(ours.per, picnic[2].toLowerCase());
-  const theirs = Math.round(Number(picnic[1].replace(",", ".")) * 100);
-  assert.ok(Math.abs(ours.cents - theirs) <= 1, `ours ${ours.cents} vs Picnic's ${theirs} (${product.unitQuantity}, ${product.displayPrice})`);
+  const { FakePicnic, fixture, json, runDesk, signIn } = await import("./helpers");
+  const picnic = new FakePicnic().install();
+  const desk = await runDesk();
+  try {
+    await signIn(desk, picnic);
+    picnic.on("GET", /^\/pages\/product-details-page-root\?id=s1018620/, json(fixture("product_details_page_nl.json")));
+    const { status, body: product } = await desk.get("/api/product/s1018620");
+    assert.equal(status, 200, JSON.stringify(product));
+    const ours = unitPrice(product.displayPrice, product.unitQuantity);
+    const picnicPrice = /€\s*([\d.,]+)\s*\/\s*(kg|l)/i.exec(product.unitPrice ?? "");
+    assert.ok(picnicPrice, `Picnic's unit price: ${product.unitPrice}`);
+    assert.ok(ours, `ours, from "${product.unitQuantity}" at ${product.displayPrice}`);
+    assert.equal(ours.per, picnicPrice[2].toLowerCase());
+    const theirs = Math.round(Number(picnicPrice[1].replace(",", ".")) * 100);
+    assert.ok(Math.abs(ours.cents - theirs) <= 1, `ours ${ours.cents} vs Picnic's ${theirs} (${product.unitQuantity}, ${product.displayPrice})`);
+  } finally {
+    picnic.restore();
+    await desk.close();
+  }
 });
 
 test("ordering results: by price, or per kilo or litre with pieces and unreadable sizes after, sold out last", async () => {

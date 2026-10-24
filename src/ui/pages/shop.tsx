@@ -5,7 +5,12 @@
 import { type FormEvent, useEffect, useRef, useState } from "react";
 
 import type { SubcategoriesApiResponse } from "@/lib/category/category-types";
-import type { CategoryProductsApiResponse, SearchApiResponse } from "@/lib/core/types";
+import type {
+  CategoryProductsApiResponse,
+  PromotionGroupApiResponse,
+  PromotionsApiResponse,
+  SearchApiResponse,
+} from "@/lib/core/types";
 import type { RscPageModel } from "@/lib/rsc/rsc-page-types";
 
 import type { Shortcut } from "../../server/desk-routes";
@@ -197,8 +202,8 @@ function Shortcuts() {
 
 /**
  * Picnic's aisles in a column on the left; on the right a category's
- * subcategories as tabs and the products of the chosen one, or a page Picnic
- * links to (promotions).
+ * subcategories as tabs and the products of the chosen one, the offers, or a
+ * page Picnic links to (a theme or shop page).
  */
 export function CategoriesView({ route }: { route: Route }) {
   const { d } = useT();
@@ -214,6 +219,8 @@ export function CategoriesView({ route }: { route: Route }) {
       <div className="aisle-shelf">
         {route.segments[0] === "pages" ? (
           <PickedPage route={route} />
+        ) : route.segments[0] === "promotions" ? (
+          l1 ? <PromotionGroup key={l1} groupId={l1} /> : <Promotions />
         ) : l1 ? (
           <Category categoryId={l1} subcategoryId={l2} route={route} />
         ) : (
@@ -267,6 +274,68 @@ function PickedPage({ route }: { route: Route }) {
     <>
       {title && <h2>{title}</h2>}
       <Products key={pageId} path={`pages/products?${new URLSearchParams({ pageId })}`} route={route} />
+    </>
+  );
+}
+
+/** The offers, as the app's promotions page (promo-page-root): products, and cards for an offer on several products. */
+function Promotions() {
+  const { t } = useT();
+  useTitle(t.promotionsTitle);
+  const [load, reload] = useLoad<PromotionsApiResponse>("promotions", (signal) => api("promotions", { signal }));
+  return (
+    <>
+      <h2>{t.promotionsTitle}</h2>
+      <Loaded load={load} retry={reload}>
+        {(data) => {
+          const sections = Array.isArray(data.sections) ? data.sections : [];
+          if (!sections.length) return <Hint>{t.promotionsEmpty}</Hint>;
+          return sections.map((section, index) => (
+            <section key={index} className="group">
+              {section.title && <h3>{section.title}</h3>}
+              {section.groups?.length > 0 && (
+                <div className="chips offers">
+                  {section.groups.map((group) => (
+                    <a key={group.id} className="chip offer-group" href={href(`/promotions/${encodeURIComponent(group.id)}`)}>
+                      <b>{group.name}</b>
+                      {group.label && <span>{group.label}</span>}
+                      {group.example && <span className="hint-inline">{group.example}</span>}
+                    </a>
+                  ))}
+                </div>
+              )}
+              {section.products?.length > 0 && <ProductGrid products={section.products} sortable />}
+            </section>
+          ));
+        }}
+      </Loaded>
+    </>
+  );
+}
+
+/** One offer on several products (promo-group-deep-dive). */
+function PromotionGroup({ groupId }: { groupId: string }) {
+  const { t } = useT();
+  const [load, reload] = useLoad<PromotionGroupApiResponse>(groupId, (signal) =>
+    api(`promotions/${encodeURIComponent(groupId)}`, { signal })
+  );
+  useTitle(load.status === "ready" ? load.data.name || t.promotionsTitle : t.promotionsTitle);
+  return (
+    <>
+      <a className="quiet back" href={href("/promotions")}>
+        {t.promotionsTitle}
+      </a>
+      <Loaded load={load} retry={reload}>
+        {(data) => {
+          const products = Array.isArray(data.products) ? data.products : [];
+          return (
+            <>
+              <h2>{data.name || t.promotionsTitle}</h2>
+              {products.length ? <ProductSections products={products} sections={[]} /> : <Hint>{t.noProductsInCategory}</Hint>}
+            </>
+          );
+        }}
+      </Loaded>
     </>
   );
 }

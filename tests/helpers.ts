@@ -24,8 +24,9 @@ export const json = (value: unknown, init: ResponseInit = {}) =>
   });
 
 /**
- * Answers requests to Picnic (storefront-prod.<cc>.picnicinternational.com)
- * from registered routes; anything else is a test failure, so nothing leaves
+ * Answers requests to Picnic (storefront-prod.<cc>.picnicinternational.com,
+ * and pages-prod.<cc>.picnicinternational.com for page scripts) from
+ * registered routes; anything else is a test failure, so nothing leaves
  * the machine. Every request is kept in `seen`.
  */
 export class FakePicnic {
@@ -42,7 +43,7 @@ export class FakePicnic {
   install(): this {
     globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
       const url = new URL(input instanceof Request ? input.url : String(input));
-      if (!/^storefront-prod\.(nl|de|fr)\.picnicinternational\.com$/.test(url.hostname)) {
+      if (!/^(storefront|pages)-prod\.(nl|de|fr)\.picnicinternational\.com$/.test(url.hostname)) {
         throw new Error(`test tried to reach ${url.href}`);
       }
       const method = (init?.method ?? "GET").toUpperCase();
@@ -67,6 +68,51 @@ export class FakePicnic {
     return [...this.seen].reverse().find((s) => (s.url.pathname + s.url.search).includes(pathPart));
   }
 }
+
+/**
+ * Picnic's search as the current app sees it (picnic-api's
+ * catalog.getSearchResults): the RSC search page, the app's script on
+ * pages-prod that names the page's server action, and the action, which
+ * answers with these product tiles.
+ */
+export function fakeAppSearch(picnic: FakePicnic, term: string, tiles: Record<string, unknown>[]): void {
+  const rsc = (text: string) => new Response(text, { headers: { "content-type": "text/x-component" } });
+  picnic.on(
+    "GET",
+    new RegExp(`^/pages/search-page-results\\?search_term=${encodeURIComponent(term)}$`),
+    rsc(
+      [
+        '1:I["./pages/search/search-page-params/search-page-params-provider.tsx",["params.1"],"P"]',
+        '2:I["./pages/search/search-page-content/results/index.tsx",["client-components.container.1","results.1"],"Results"]',
+        `0:["$","$L1",null,{"params":{"searchId":"id-1","searchSessionId":"session-1","searchTerm":${JSON.stringify(term)}},"children":["$","$L2",null,{}]}]`,
+      ].join("\n")
+    )
+  );
+  picnic.on("GET", "/bootstrap", json({ in_app_feature_config: { client_component_cdn_base_url: "https://pages-prod.nl.picnicinternational.com/store/" } }));
+  picnic.on(
+    "GET",
+    "/store/results.1.script.bundle",
+    new Response('callServer("act_fetchSearchResults_0f1e2d")', { headers: { "content-type": "application/octet-stream" } })
+  );
+  const results = {
+    searchQuery: term,
+    storeResults: { SUPERMARKET: { sections: [{ id: "results", shouldShowHeader: true, headerName: "Filterkoffie", items: tiles }] } },
+  };
+  picnic.on("POST", "/pages/action/act_fetchSearchResults_0f1e2d", () => rsc(`0:["$","$L3",null,${JSON.stringify(results)}]`));
+}
+
+/** A product tile as Picnic's search action sends it. */
+export const searchTile = (id: string, name: string, cents: number, size: string) => ({
+  type: "sellable",
+  id,
+  title: { title: name },
+  subtitle: { text: "Picnic" },
+  images: { primaryImage: { imageId: `img-${id}` } },
+  price: { priceValue: cents / 100 },
+  suffixes: [{ type: "TEXT", text: size }],
+  labels: {},
+  unavailability: null,
+});
 
 export type Running = {
   base: string;

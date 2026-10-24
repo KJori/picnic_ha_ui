@@ -18,30 +18,32 @@ import * as r14 from "@/app/api/categories/[categoryId]/subcategories/route";
 import * as r15 from "@/app/api/cookbook/route";
 import * as r16 from "@/app/api/cookbook/counts/route";
 import * as r17 from "@/app/api/cookbook/search/route";
-import * as r18 from "@/app/api/debug-category-page/[categoryId]/route";
-import * as r19 from "@/app/api/debug-cookbook/route";
-import * as r20 from "@/app/api/deliveries/route";
-import * as r21 from "@/app/api/deliveries/[deliveryId]/route";
-import * as r22 from "@/app/api/deliveries/[deliveryId]/cancel/route";
-import * as r23 from "@/app/api/deliveries/[deliveryId]/invoice/route";
-import * as r24 from "@/app/api/deliveries/[deliveryId]/position/route";
-import * as r25 from "@/app/api/deliveries/[deliveryId]/rating/route";
-import * as r26 from "@/app/api/deliveries/[deliveryId]/scenario/route";
+import * as r18 from "@/app/api/deliveries/route";
+import * as r19 from "@/app/api/deliveries/[deliveryId]/route";
+import * as r20 from "@/app/api/deliveries/[deliveryId]/cancel/route";
+import * as r21 from "@/app/api/deliveries/[deliveryId]/invoice/route";
+import * as r22 from "@/app/api/deliveries/[deliveryId]/position/route";
+import * as r23 from "@/app/api/deliveries/[deliveryId]/rating/route";
+import * as r24 from "@/app/api/deliveries/[deliveryId]/tracking/route";
+import * as r25 from "@/app/api/favorites/route";
+import * as r26 from "@/app/api/favorites/[aisleId]/route";
 import * as r27 from "@/app/api/meal-plan/search/route";
 import * as r28 from "@/app/api/meal-plan/shopping-list/route";
 import * as r29 from "@/app/api/pages/products/route";
 import * as r30 from "@/app/api/parcels/route";
 import * as r31 from "@/app/api/parcels/[parcelId]/route";
 import * as r32 from "@/app/api/product/[id]/route";
-import * as r33 from "@/app/api/recipe/[id]/route";
-import * as r34 from "@/app/api/recipe/[id]/add-to-cart/route";
-import * as r35 from "@/app/api/recipe/[id]/ingredient/[ingredientId]/route";
-import * as r36 from "@/app/api/recipe/[id]/save/route";
-import * as r37 from "@/app/api/recipe/saved/route";
-import * as r38 from "@/app/api/rsc-pages/route";
-import * as r39 from "@/app/api/search/route";
-import * as r40 from "@/app/api/suggestions/route";
-import * as r41 from "@/app/api/user/profile/route";
+import * as r33 from "@/app/api/promotions/route";
+import * as r34 from "@/app/api/promotions/[groupId]/route";
+import * as r35 from "@/app/api/recipe/[id]/route";
+import * as r36 from "@/app/api/recipe/[id]/add-to-cart/route";
+import * as r37 from "@/app/api/recipe/[id]/ingredient/[ingredientId]/route";
+import * as r38 from "@/app/api/recipe/[id]/save/route";
+import * as r39 from "@/app/api/recipe/saved/route";
+import * as r40 from "@/app/api/rsc-pages/route";
+import * as r41 from "@/app/api/search/route";
+import * as r42 from "@/app/api/suggestions/route";
+import * as r43 from "@/app/api/user/profile/route";
 
 export const VENDORED_ROUTES = [
   { path: "auth/login", methods: ["POST"], module: r0 as RouteModule },
@@ -62,28 +64,30 @@ export const VENDORED_ROUTES = [
   { path: "cookbook", methods: ["GET"], module: r15 as RouteModule },
   { path: "cookbook/counts", methods: ["GET"], module: r16 as RouteModule },
   { path: "cookbook/search", methods: ["GET"], module: r17 as RouteModule },
-  { path: "debug-category-page/[categoryId]", methods: ["GET"], module: r18 as RouteModule },
-  { path: "debug-cookbook", methods: ["GET"], module: r19 as RouteModule },
-  { path: "deliveries", methods: ["GET"], module: r20 as RouteModule },
-  { path: "deliveries/[deliveryId]", methods: ["GET"], module: r21 as RouteModule },
-  { path: "deliveries/[deliveryId]/cancel", methods: ["POST"], module: r22 as RouteModule },
-  { path: "deliveries/[deliveryId]/invoice", methods: ["POST"], module: r23 as RouteModule },
-  { path: "deliveries/[deliveryId]/position", methods: ["GET"], module: r24 as RouteModule },
-  { path: "deliveries/[deliveryId]/rating", methods: ["POST"], module: r25 as RouteModule },
-  { path: "deliveries/[deliveryId]/scenario", methods: ["GET"], module: r26 as RouteModule },
+  { path: "deliveries", methods: ["GET"], module: r18 as RouteModule },
+  { path: "deliveries/[deliveryId]", methods: ["GET"], module: r19 as RouteModule },
+  { path: "deliveries/[deliveryId]/cancel", methods: ["POST"], module: r20 as RouteModule },
+  { path: "deliveries/[deliveryId]/invoice", methods: ["POST"], module: r21 as RouteModule },
+  { path: "deliveries/[deliveryId]/position", methods: ["GET"], module: r22 as RouteModule },
+  { path: "deliveries/[deliveryId]/rating", methods: ["POST"], module: r23 as RouteModule },
+  { path: "deliveries/[deliveryId]/tracking", methods: ["GET"], module: r24 as RouteModule },
+  { path: "favorites", methods: ["GET"], module: r25 as RouteModule },
+  { path: "favorites/[aisleId]", methods: ["GET"], module: r26 as RouteModule },
   { path: "meal-plan/search", methods: ["POST"], module: r27 as RouteModule },
   { path: "meal-plan/shopping-list", methods: ["POST"], module: r28 as RouteModule },
   { path: "pages/products", methods: ["GET"], module: r29 as RouteModule },
   { path: "parcels", methods: ["GET"], module: r30 as RouteModule },
   { path: "parcels/[parcelId]", methods: ["GET"], module: r31 as RouteModule },
   { path: "product/[id]", methods: ["GET"], module: r32 as RouteModule },
-  { path: "recipe/[id]", methods: ["GET"], module: r33 as RouteModule },
-  { path: "recipe/[id]/add-to-cart", methods: ["POST"], module: r34 as RouteModule },
-  { path: "recipe/[id]/ingredient/[ingredientId]", methods: ["GET","POST"], module: r35 as RouteModule },
-  { path: "recipe/[id]/save", methods: ["POST"], module: r36 as RouteModule },
-  { path: "recipe/saved", methods: ["GET"], module: r37 as RouteModule },
-  { path: "rsc-pages", methods: ["GET"], module: r38 as RouteModule },
-  { path: "search", methods: ["GET"], module: r39 as RouteModule },
-  { path: "suggestions", methods: ["GET"], module: r40 as RouteModule },
-  { path: "user/profile", methods: ["GET"], module: r41 as RouteModule },
+  { path: "promotions", methods: ["GET"], module: r33 as RouteModule },
+  { path: "promotions/[groupId]", methods: ["GET"], module: r34 as RouteModule },
+  { path: "recipe/[id]", methods: ["GET"], module: r35 as RouteModule },
+  { path: "recipe/[id]/add-to-cart", methods: ["POST"], module: r36 as RouteModule },
+  { path: "recipe/[id]/ingredient/[ingredientId]", methods: ["GET","POST"], module: r37 as RouteModule },
+  { path: "recipe/[id]/save", methods: ["POST"], module: r38 as RouteModule },
+  { path: "recipe/saved", methods: ["GET"], module: r39 as RouteModule },
+  { path: "rsc-pages", methods: ["GET"], module: r40 as RouteModule },
+  { path: "search", methods: ["GET"], module: r41 as RouteModule },
+  { path: "suggestions", methods: ["GET"], module: r42 as RouteModule },
+  { path: "user/profile", methods: ["GET"], module: r43 as RouteModule },
 ];

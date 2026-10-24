@@ -1,5 +1,5 @@
 name: Picnic Desk
-version: "1.0.3"
+version: "1.0.4"
 slug: picnic_desk
 description: A desktop Picnic shop in the Home Assistant sidebar
 url: https://github.com/KJori/picnic_ha_ui

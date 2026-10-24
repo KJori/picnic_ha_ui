@@ -198,11 +198,18 @@ describe("the internet", () => {
         "https://storefront-prod.nl.picnicinternational.com.evil.example/x",
         "https://evil.example/?https://storefront-prod.nl.picnicinternational.com",
         "http://172.30.32.1:8123/api/states",
+        "https://pages-prod.nl.picnicinternational.com.evil.example/store/x.script.bundle",
+        "https://cdn-prod.nl.picnicinternational.com/x",
       ]) {
         await assert.rejects(globalThis.fetch(bad), /only talks to Picnic/, bad);
       }
       await globalThis.fetch("https://storefront-prod.de.picnicinternational.com/api/15/cart");
-      assert.deepEqual(reached, ["https://storefront-prod.de.picnicinternational.com/api/15/cart"]);
+      // The scripts of Picnic's newer pages, which search reads.
+      await globalThis.fetch("https://pages-prod.nl.picnicinternational.com/store/search.script.bundle");
+      assert.deepEqual(reached, [
+        "https://storefront-prod.de.picnicinternational.com/api/15/cart",
+        "https://pages-prod.nl.picnicinternational.com/store/search.script.bundle",
+      ]);
     } finally {
       globalThis.fetch = original;
     }
