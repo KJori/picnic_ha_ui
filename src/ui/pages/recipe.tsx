@@ -266,7 +266,7 @@ function IngredientRow({
   const cart = useCart();
   const open = useOpenProduct();
   const money = useMoney();
-  const pack = ingredient.recipePackageSize ?? ingredient.unitQuantity;
+  const pack = ingredient.unitQuantity;
   const needed = ingredient.recipeQuantityText ? scaleNeeded(ingredient.recipeQuantityText, portions, base) : null;
   const { total, was } = packsPrice(ingredient, count);
   const have = cart.quantity(ingredient.id);

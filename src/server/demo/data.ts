@@ -126,9 +126,10 @@ export function productDetail(id: string): ProductDetail | null {
     id: product.id,
     name: product.name,
     brand: product.brand ?? "",
+    quantityBadges: product.unitQuantity === "1 kg" ? [{ text: "XL", textColor: "#ffffff", backgroundColor: "#295813" }] : [],
     unitQuantity: product.unitQuantity,
     unitPrice: `€${((product.displayPrice / 100) * 1.5).toFixed(2).replace(".", ",")}/kg`,
-    categoryTag: { text: product.category[0].toUpperCase() + product.category.slice(1), color: "#295813" },
+    tags: [{ text: product.category[0].toUpperCase() + product.category.slice(1), color: "#295813" }],
     displayPrice: product.displayPrice,
     originalPrice: product.originalPrice,
     displayPriceColor: null,
@@ -173,37 +174,37 @@ export const L1_CATEGORIES: { id: string; name: string; children: CategoryItem[]
     id: "21001",
     name: "Brood & ontbijt",
     children: [
-      { id: "22001", name: "Brood", imageId: img("cat-brood"), deepLinkTarget: "app.picnic://store/page;id=L2-category-page-root,category_id=22001" },
-      { id: "22002", name: "Croissants & koffiebroodjes", imageId: img("cat-croissant"), deepLinkTarget: "app.picnic://store/page;id=L2-category-page-root,category_id=22002" },
+      { id: "22001", name: "Brood", imageId: img("cat-brood") },
+      { id: "22002", name: "Croissants & koffiebroodjes", imageId: img("cat-croissant") },
     ],
   },
   {
     id: "21002",
     name: "Vegetarisch & vegan",
     children: [
-      { id: "22003", name: "Tofu & tempeh", imageId: img("cat-tofu"), deepLinkTarget: "app.picnic://store/page;id=L2-category-page-root,category_id=22003" },
-      { id: "22004", name: "Plantaardige zuivel", imageId: img("cat-plantmelk"), deepLinkTarget: "app.picnic://store/page;id=L2-category-page-root,category_id=22004" },
+      { id: "22003", name: "Tofu & tempeh", imageId: img("cat-tofu") },
+      { id: "22004", name: "Plantaardige zuivel", imageId: img("cat-plantmelk") },
     ],
   },
   {
     id: "21003",
     name: "Groente & fruit",
     children: [
-      { id: "22005", name: "Groente", imageId: img("cat-groente"), deepLinkTarget: "app.picnic://store/page;id=L2-category-page-root,category_id=22005" },
-      { id: "22006", name: "Fruit", imageId: img("cat-fruit"), deepLinkTarget: "app.picnic://store/page;id=L2-category-page-root,category_id=22006" },
+      { id: "22005", name: "Groente", imageId: img("cat-groente") },
+      { id: "22006", name: "Fruit", imageId: img("cat-fruit") },
     ],
   },
   {
     id: "21004",
     name: "Zuivel & kaas",
-    children: [{ id: "22007", name: "Melk & yoghurt", imageId: img("cat-zuivel"), deepLinkTarget: "app.picnic://store/page;id=L2-category-page-root,category_id=22007" }],
+    children: [{ id: "22007", name: "Melk & yoghurt", imageId: img("cat-zuivel") }],
   },
   {
     id: "21005",
     name: "Voorraadkast",
     children: [
-      { id: "22008", name: "Pasta, rijst & wereldkeuken", imageId: img("cat-pasta"), deepLinkTarget: "app.picnic://store/page;id=L2-category-page-root,category_id=22008" },
-      { id: "22009", name: "Koffie", imageId: img("cat-koffie"), deepLinkTarget: "app.picnic://store/page;id=L2-category-page-root,category_id=22009" },
+      { id: "22008", name: "Pasta, rijst & wereldkeuken", imageId: img("cat-pasta") },
+      { id: "22009", name: "Koffie", imageId: img("cat-koffie") },
     ],
   },
 ];

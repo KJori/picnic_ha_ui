@@ -231,6 +231,7 @@ button { cursor: pointer; }
 .chip[aria-pressed="true"], .chip[aria-checked="true"] { background: var(--ink); color: var(--board); }
 .chip small { font-weight: 400; opacity: .7; }
 .chip.removable { border-style: dashed; }
+.chip.offer-group { display: inline-flex; flex-direction: column; align-items: flex-start; gap: .1rem; }
 .chip.removable span { margin-left: .5rem; color: var(--beet); font-weight: 700; }
 .chip.removable:hover { background: var(--board); color: var(--beet); border-color: var(--beet); }
 .chips .quiet { margin-left: .5rem; color: var(--soft); }
@@ -605,7 +606,6 @@ select { padding: .55rem .7rem; background: var(--shelf); border: 1px solid var(
 /* receipt additions */
 .line .count { min-width: 2.2rem; padding-top: .1rem; font-variant-numeric: tabular-nums; }
 .line .what .gone { display: block; opacity: 1; }
-.line .what .instead { display: block; }
 .line .what .quiet { padding: 0; font: inherit; }
 .line-offer { display: inline-block; margin: .15rem .35rem 0 0; padding: 0 .3rem; background: var(--tag); color: var(--tag-ink); font-family: var(--ui); font-size: .75rem; font-weight: 700; border-radius: 2px; opacity: 1 !important; }
 .line.unavailable .what .name { text-decoration: line-through; }

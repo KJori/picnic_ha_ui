@@ -262,20 +262,23 @@ export function ProductSections({ products, sections }: { products: Product[]; s
     <>
       <SortChoice />
       <div className="chips jumps">
-        {sections.map((section, index) => (
-          <button
-            key={index}
-            type="button"
-            className="chip"
-            onClick={() => document.getElementById(id(index))?.scrollIntoView({ behavior: "smooth", block: "start" })}
-          >
-            {section.title}
-          </button>
-        ))}
+        {sections.map((section, index) =>
+          // A section Picnic shows without a header gets no jump either.
+          section.title ? (
+            <button
+              key={index}
+              type="button"
+              className="chip"
+              onClick={() => document.getElementById(id(index))?.scrollIntoView({ behavior: "smooth", block: "start" })}
+            >
+              {section.title}
+            </button>
+          ) : null
+        )}
       </div>
       {sections.map((section, index) => (
         <section key={index} id={id(index)} className="group">
-          <h3>{section.title}</h3>
+          {section.title && <h3>{section.title}</h3>}
           <ProductGrid products={section.products} />
         </section>
       ))}

@@ -9,8 +9,7 @@
  */
 import { useEffect, useRef, useState } from "react";
 
-import type { DeliveryListItem, DeliveryTrackingData } from "@/lib/core/delivery-types";
-import { parseDeliveryTracking } from "@/lib/delivery/parse-delivery-tracking";
+import type { DeliveryListItem } from "@/lib/core/delivery-types";
 
 import { api } from "../lib/api";
 import { byTime, dayOffset } from "../lib/format";
@@ -23,11 +22,24 @@ const VAN_EVERY_MS = 60 * 1000;
 
 // ─── The van ─────────────────────────────────────────────────────────────────
 
+/** What the bar needs of the van: picnic-api's delivery position, as /api/deliveries/<id>/position sends it. */
+type Van = { inProgress: boolean; eta: number | null; queryInterval: number };
+
+function asVan(value: unknown): Van | null {
+  if (typeof value !== "object" || value === null) return null;
+  const { inProgress, eta, queryInterval } = value as Record<string, unknown>;
+  if (typeof inProgress !== "boolean") return null;
+  return {
+    inProgress,
+    eta: typeof eta === "number" && Number.isFinite(eta) ? eta : null,
+    queryInterval: typeof queryInterval === "number" && queryInterval > 0 ? queryInterval : 0,
+  };
+}
+
 /** Where the van is, asked only on the day of delivery; null before that or when Picnic does not say. */
-function useVan(order: DeliveryListItem, deliveryDay: boolean): DeliveryTrackingData | null {
-  const { country } = useT();
-  const [tracking, setTracking] = useState<DeliveryTrackingData | null>(null);
-  const last = useRef<DeliveryTrackingData | null>(null);
+function useVan(order: DeliveryListItem, deliveryDay: boolean): Van | null {
+  const [tracking, setTracking] = useState<Van | null>(null);
+  const last = useRef<Van | null>(null);
   useEffect(() => {
     if (!deliveryDay) return;
     let stopped = false;
@@ -36,10 +48,10 @@ function useVan(order: DeliveryListItem, deliveryDay: boolean): DeliveryTracking
       if (document.visibilityState === "visible") {
         const result = await api<unknown>(`deliveries/${encodeURIComponent(order.id)}/position`);
         if (stopped) return;
-        if (result.ok) {
-          const parsed = parseDeliveryTracking(result.data, null, country);
+        const parsed = result.ok ? asVan(result.data) : null;
+        if (parsed) {
           // The van stopped driving: delivered, so the order is no longer current.
-          if (!parsed.scenarioInProgress && last.current?.scenarioInProgress) void refreshCurrentOrders();
+          if (!parsed.inProgress && last.current?.inProgress) void refreshCurrentOrders();
           last.current = parsed;
           setTracking(parsed);
         }
@@ -52,7 +64,7 @@ function useVan(order: DeliveryListItem, deliveryDay: boolean): DeliveryTracking
       stopped = true;
       clearTimeout(timer);
     };
-  }, [order.id, deliveryDay, country]);
+  }, [order.id, deliveryDay]);
   return tracking;
 }
 
@@ -75,7 +87,7 @@ function OrderLine({ order }: { order: DeliveryListItem }) {
   const dates = useDates();
   const offset = dayOffset(order.windowStart, Date.now(), dates.zone);
   const van = useVan(order, offset !== null && offset <= 0);
-  const onItsWay = van?.scenarioInProgress === true;
+  const onItsWay = van?.inProgress === true;
 
   const day = offset === 0 ? d.today : offset === 1 ? d.tomorrow : dates.day(order.windowStart);
   const window = order.windowStart

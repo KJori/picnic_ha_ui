@@ -22,7 +22,6 @@ const item = (productId: string, quantity: number): CartItem => ({
   badges: [],
   isUnavailable: false,
   unavailableExplanation: null,
-  replacements: [],
   basketGroupId: null,
 });
 
@@ -37,7 +36,6 @@ const cartOf = (lines: Record<string, number>): CartData => ({
   promoSavings: 0,
   fees: [],
   minimumOrderValue: null,
-  suggestions: [],
   selectedSlot: null,
   deliveryBannerText: "",
   recipeGroups: [],

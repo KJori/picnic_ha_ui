@@ -11,7 +11,6 @@ import type {
   ParcelDetailData,
   ParcelsPageData,
 } from "@/lib/core/delivery-types";
-import { parseDeliveryTracking } from "@/lib/delivery/parse-delivery-tracking";
 
 import { Lines, Sums } from "../components/basket";
 import { refreshCurrentOrders } from "../state/current-orders";
@@ -40,10 +39,10 @@ export function OrdersView({ route }: { route: Route }) {
     const current = load.data.deliveries.filter((x) => x.status === "CURRENT");
     void Promise.all(
       current.map(async (delivery) => {
-        const result = await api<{ scenario_in_progress?: boolean }>(`deliveries/${encodeURIComponent(delivery.id)}/position`, {
+        const result = await api<{ inProgress?: boolean }>(`deliveries/${encodeURIComponent(delivery.id)}/position`, {
           signal: controller.signal,
         }).catch(() => null);
-        return result?.ok && result.data?.scenario_in_progress === true ? delivery.id : null;
+        return result?.ok && result.data?.inProgress === true ? delivery.id : null;
       })
     ).then((ids) => {
       if (!controller.signal.aborted) setLive(new Set(ids.filter((id): id is string => id !== null)));
@@ -274,50 +273,54 @@ function Rating({ busy, onRate }: { busy: boolean; onRate: (rating: number) => P
 }
 
 /**
- * Live tracking, as picnic-web does it: poll the position, fetch the route
- * ("scenario") again when its version changes, and parse both with
- * picnic-web's parser. Stops when the delivery is no longer on its way.
+ * Live tracking, as picnic-web does it: poll the tracking route, which sends
+ * the route (and the van's picture) only when its version changes; keep them
+ * in between. Stops when the delivery is no longer on its way.
  */
 const TRACKING_RETRY_MS = 15_000;
 
 function useTracking(deliveryId: string, enabled: boolean): DeliveryTrackingData | null {
-  const { country } = useT();
   const [tracking, setTracking] = useState<DeliveryTrackingData | null>(null);
-  const scenario = useRef<unknown>(null);
-  const version = useRef(-1);
+  const known = useRef<DeliveryTrackingData | null>(null);
   useEffect(() => {
     if (!enabled) return;
     let stopped = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
+    known.current = null;
     const poll = async () => {
-      const position = await api<Record<string, unknown>>(`deliveries/${encodeURIComponent(deliveryId)}/position`);
+      const last = known.current;
+      const query = last ? `?${new URLSearchParams({ routeVersion: String(last.routeVersion) })}` : "";
+      const result = await api<DeliveryTrackingData>(`deliveries/${encodeURIComponent(deliveryId)}/tracking${query}`);
       if (stopped) return;
-      if (!position.ok) {
+      if (!result.ok || !isTracking(result.data)) {
         // A failed look (busy, a network hiccup) is tried again; tracking stops only when the delivery is over.
         timer = setTimeout(() => void poll(), TRACKING_RETRY_MS);
         return;
       }
-      const positionVersion = typeof position.data.version === "number" ? position.data.version : -1;
-      if (scenario.current === null || positionVersion !== version.current) {
-        const route = await api<unknown>(`deliveries/${encodeURIComponent(deliveryId)}/scenario`);
-        if (stopped) return;
-        if (route.ok) {
-          scenario.current = route.data;
-          version.current = positionVersion;
-        }
-      }
-      const parsed = parseDeliveryTracking(position.data, scenario.current, country);
-      setTracking(parsed);
-      if (parsed.scenarioInProgress) timer = setTimeout(() => void poll(), Math.max(5000, parsed.queryInterval));
+      const data =
+        last && result.data.routeVersion === last.routeVersion
+          ? { ...result.data, route: last.route, vehicleImageDataUrl: last.vehicleImageDataUrl }
+          : result.data;
+      known.current = data;
+      setTracking(data);
+      if (data.scenarioInProgress) timer = setTimeout(() => void poll(), Math.max(5000, data.queryInterval || 0));
     };
     void poll();
     return () => {
       stopped = true;
       clearTimeout(timer);
     };
-  }, [deliveryId, enabled, country]);
+  }, [deliveryId, enabled]);
   return tracking;
 }
+
+/** Enough of an answer to show: anything else counts as a failed look. */
+const isTracking = (value: unknown): value is DeliveryTrackingData =>
+  typeof value === "object" &&
+  value !== null &&
+  typeof (value as DeliveryTrackingData).routeVersion === "number" &&
+  typeof (value as DeliveryTrackingData).scenarioInProgress === "boolean" &&
+  Array.isArray((value as DeliveryTrackingData).route);
 
 function TrackingPanel({ tracking }: { tracking: DeliveryTrackingData }) {
   const { t, d } = useT();

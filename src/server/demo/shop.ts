@@ -19,6 +19,7 @@ import type { DeliverySlotData, DeliverySlotPickerData, SlotDayGroup } from "@/l
 import type {
   DeliveryDetailData,
   DeliveryListItem,
+  DeliveryTrackingData,
   ParcelDetailData,
   ParcelsPageData,
 } from "@/lib/core/delivery-types";
@@ -33,6 +34,8 @@ import type {
   IngredientEditData,
   MealPlanSearchResponse,
   MealPlanShoppingListResponse,
+  PromotionGroupApiResponse,
+  PromotionsApiResponse,
   RecipeDetail,
   RecipeItem,
   SearchApiResponse,
@@ -40,7 +43,12 @@ import type {
 } from "@/lib/core/types";
 import { COUNTRY_COOKIE_NAME } from "@/lib/core/types";
 import type { ProfileData } from "@/lib/core/user-types";
-import { formatBannerText, formatDayTabLabel, formatDeliveryWindowText } from "@/lib/delivery/format-delivery-window";
+import {
+  formatBannerText,
+  formatDayTabLabel,
+  formatDeliveryWindowText,
+  formatEtaText,
+} from "@/lib/delivery/format-delivery-window";
 import type { RscPageModel } from "@/lib/rsc/rsc-page-types";
 
 import {
@@ -137,14 +145,6 @@ export function demoShop(state = new DemoState()) {
       }
       case "GET pages": {
         const pageId = q.get("pageId") ?? "";
-        if (pageId.startsWith("promo-group-deep-dive")) {
-          return ok<CategoryProductsApiResponse>({
-            title: "Acties",
-            products: [],
-            sections: [],
-            rscPage: promoPage(pageId),
-          });
-        }
         const products = PRODUCTS.filter((p) => p.promoBadge || p.priceRanges).map(plainProduct);
         return ok<CategoryProductsApiResponse>({
           title: pageId === "basket-recommendations" ? "Niets vergeten?" : "",
@@ -181,7 +181,7 @@ export function demoShop(state = new DemoState()) {
       case "POST meal-plan":
         return mealPlan(segments[1], await body());
       case "GET deliveries":
-        return deliveriesGet(state, segments, q.get("status"));
+        return deliveriesGet(state, segments, q);
       case "POST deliveries":
         return deliveriesPost(state, segments, await body());
       case "GET parcels":
@@ -200,9 +200,8 @@ export function demoShop(state = new DemoState()) {
           });
         }
         break;
-      case "GET debug-cookbook":
-      case "GET debug-category-page":
-        return ok({ demo: true, route });
+      case "GET promotions":
+        return segments[1] ? promotionGroup(segments[1]) : ok<PromotionsApiResponse>(promotions());
     }
     return fail("Not found.", 404);
   };
@@ -288,13 +287,14 @@ function categoryTree(): RscPageModel {
       {
         id: "list",
         component: "vertical-list",
+        modulePath: "./logical-components/sections/vertical-list/vertical-list.tsx",
         children: [],
         props: {
           items: [
-            row("Acties", img("cat-acties"), "app.picnic://store/page;id=promo-group-deep-dive,promo_group_id=demo", "12 producten"),
+            row("Acties", img("cat-acties"), "app.picnic://store/page;id=promo-page-root", "12 producten"),
             { type: "section-title", title: "Alle categorieën" },
             ...L1_CATEGORIES.map((c) =>
-              row(c.name, img(`l1-${c.id}`), `app.picnic://store/page;id=L1-category-page-root,category_id=${c.id}`)
+              row(c.name, img(`l1-${c.id}`), `app.picnic://store/page;id=subcategory-page,category_id=${c.id}`)
             ),
           ],
         },
@@ -303,32 +303,28 @@ function categoryTree(): RscPageModel {
   };
 }
 
-function promoPage(pageId: string): RscPageModel {
+/** The promotions page: the offers, and a card for an offer on several products. */
+function promotions(): PromotionsApiResponse {
+  const offers = PRODUCTS.filter((p) => p.promoBadge).map(plainProduct);
+  const tiers = PRODUCTS.filter((p) => p.priceRanges).map(plainProduct);
   return {
-    pageId,
-    tokens: {},
-    nodes: [
+    sections: [
       {
-        id: "promo",
-        component: "promo-deep-dive-content",
-        children: [],
-        props: {
-          // The shape lib/rsc/map-sellable-tile.ts reads.
-          sellableTiles: PRODUCTS.filter((p) => p.promoBadge).map((p) => ({
-            type: "sellable",
-            id: p.id,
-            title: { title: p.name },
-            subtitle: p.brand ? { text: p.brand } : undefined,
-            images: { primaryImage: { imageId: p.imageId } },
-            price: { priceValue: p.displayPrice / 100, referencePriceValue: p.originalPrice ? p.originalPrice / 100 : undefined },
-            suffixes: [{ type: "TEXT", text: p.unitQuantity }],
-            labels: { bottomLeft: [{ type: "PROMO", labelText: p.promoBadge!.text }] },
-            unavailability: null,
-          })),
-        },
+        title: "Acties",
+        products: offers,
+        groups: [{ id: "demo-koffie", name: "Koffie van Lavazza", example: "Koffiebonen espresso", label: "18% korting" }],
       },
+      { title: "Meer voor minder", products: tiers, groups: [] },
     ],
   };
+}
+
+function promotionGroup(id: string): Json {
+  if (id !== "demo-koffie") return fail("Failed to load the promotion. Please try again later.", 502);
+  return ok<PromotionGroupApiResponse>({
+    name: "Koffie van Lavazza",
+    products: PRODUCTS.filter((p) => p.category === "koffie").map(plainProduct),
+  });
 }
 
 // ─── Basket ───────────────────────────────────────────────────────────────────
@@ -416,11 +412,6 @@ function lineItem(line: Line, index: number): CartItem {
     badges: tier ? [{ text: `${tier.quantity} voor ${((tier.pricePerUnit * tier.quantity) / 100).toFixed(2).replace(".", ",")}`, variant: "bundle" }] : [],
     isUnavailable: product.isUnavailable,
     unavailableExplanation: product.unavailableReason,
-    replacements: product.isUnavailable
-      ? PRODUCTS.filter((p) => p.category === product.category && !p.isUnavailable)
-          .slice(0, 3)
-          .map((p) => ({ id: p.id, name: p.name, imageId: p.imageId, displayPrice: p.displayPrice, unitQuantity: p.unitQuantity, maxCount: p.maxCount }))
-      : [],
     basketGroupId: line.group,
   };
 }
@@ -446,9 +437,6 @@ export function cart(state: DemoState): CartData {
     promoSavings,
     fees: [],
     minimumOrderValue: 3500,
-    suggestions: PRODUCTS.filter((p) => p.promoBadge)
-      .slice(0, 4)
-      .map((p) => ({ id: p.id, name: p.name, imageId: p.imageId, displayPrice: p.displayPrice, unitQuantity: p.unitQuantity, maxCount: p.maxCount })),
     selectedSlot: slot,
     deliveryBannerText: state.explicitSlot
       ? (formatBannerText(slot.windowStart, slot.windowEnd, "NL") ?? "Kies je bezorgmoment")
@@ -839,7 +827,8 @@ function deliveryDetail(state: DemoState, id: string): DeliveryDetailData | null
   };
 }
 
-function deliveriesGet(state: DemoState, segments: string[], status: string | null): Json {
+function deliveriesGet(state: DemoState, segments: string[], q: URLSearchParams): Json {
+  const status = q.get("status");
   if (segments.length === 1) {
     const all = deliveryList(state);
     return ok({ deliveries: status ? all.filter((d) => d.status === status) : all });
@@ -847,25 +836,36 @@ function deliveriesGet(state: DemoState, segments: string[], status: string | nu
   const id = segments[1];
   const detail = deliveryDetail(state, id);
   if (!detail) return fail("Failed to load delivery. Please try again later.", 502);
-  if (segments[2] === "position") {
-    const base = state.now();
-    return ok({
-      version: 1,
-      scenario_ts: base - 60_000,
-      scenario_in_progress: detail.status === "CURRENT",
-      query_interval: 15000,
-      eta: base + 20 * 60_000,
-      eta_window: { start: new Date(base + 15 * 60_000).toISOString(), end: new Date(base + 25 * 60_000).toISOString() },
-    });
-  }
-  if (segments[2] === "scenario") {
-    const base = state.now();
+  const base = state.now();
+  // picnic-api's delivery position, as the position route sends it.
+  const position = {
+    routeVersion: 1,
+    inProgress: detail.status === "CURRENT",
+    queryInterval: 15000,
+    eta: base + 20 * 60_000,
+    etaWindowStart: new Date(base + 15 * 60_000).toISOString(),
+    etaWindowEnd: new Date(base + 25 * 60_000).toISOString(),
+    routeTime: base - 60_000,
+  };
+  if (segments[2] === "position") return ok(position);
+  if (segments[2] === "tracking") {
     const route = Array.from({ length: 12 }, (_, i) => ({ lat: 52.37 + i * 0.002, lng: 4.88 + i * 0.003, ts: base - (11 - i) * 60_000 }));
-    return ok({
-      version: 1,
-      scenario: route,
-      driver: { name: "Sam" },
-      vehicle: { name: "Elektrisch busje" },
+    const known = q.get("routeVersion") === String(position.routeVersion);
+    return ok<DeliveryTrackingData>({
+      routeVersion: position.routeVersion,
+      scenarioInProgress: position.inProgress,
+      queryInterval: position.queryInterval,
+      eta: position.eta,
+      etaWindowStart: position.etaWindowStart,
+      etaWindowEnd: position.etaWindowEnd,
+      etaText: formatEtaText(position.eta, "NL"),
+      currentPosition: route[10],
+      // Left out when the caller has this version already, as picnic-web does.
+      route: known ? [] : route,
+      driverName: "Sam",
+      driverPhotoUrl: null,
+      vehicleName: "Elektrisch busje",
+      vehicleImageDataUrl: null,
       destination: { lat: 52.395, lng: 4.92, street: "Demostraat 1", city: "Amsterdam", postcode: "1000 AA" },
     });
   }

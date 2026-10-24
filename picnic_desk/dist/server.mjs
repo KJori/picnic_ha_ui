@@ -19,6 +19,42 @@ var __export = (target, all) => {
     __defProp(target, name, { get: all[name], enumerable: true });
 };
 
+// node_modules/picnic-api/lib/errors/api-error.js
+var require_api_error = __commonJS({
+  "node_modules/picnic-api/lib/errors/api-error.js"(exports) {
+    "use strict";
+    Object.defineProperty(exports, "__esModule", { value: true });
+    exports.PicnicApiError = void 0;
+    exports.parseErrorBody = parseErrorBody;
+    exports.isPicnicApiError = isPicnicApiError2;
+    var PicnicApiError = class extends Error {
+      constructor(status, statusText, body) {
+        const json2 = parseErrorBody(body);
+        const code = json2?.error?.code ?? json2?.code ?? null;
+        const message = json2?.error?.message ?? json2?.message;
+        const statusLine = `${status} ${statusText}`.trim();
+        super(json2 ? message || statusLine : `${statusLine}${body ? ` - ${body}` : ""}`);
+        this.name = "PicnicApiError";
+        this.status = status;
+        this.code = code;
+        this.body = body;
+      }
+    };
+    exports.PicnicApiError = PicnicApiError;
+    function parseErrorBody(body) {
+      try {
+        const value = JSON.parse(body);
+        return value !== null && typeof value === "object" ? value : null;
+      } catch {
+        return null;
+      }
+    }
+    function isPicnicApiError2(error2) {
+      return error2 instanceof PicnicApiError;
+    }
+  }
+});
+
 // node_modules/picnic-api/lib/errors/checkout-error.js
 var require_checkout_error = __commonJS({
   "node_modules/picnic-api/lib/errors/checkout-error.js"(exports) {
@@ -82,6 +118,7 @@ var require_http_client = __commonJS({
   "node_modules/picnic-api/lib/http-client.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
+    var api_error_1 = require_api_error();
     var checkout_error_1 = require_checkout_error();
     var HttpClient = class {
       constructor(options) {
@@ -90,7 +127,7 @@ var require_http_client = __commonJS({
         this.authKey = options?.authKey || null;
         this.url = options?.url || `https://storefront-prod.${this.countryCode.toLowerCase()}.picnicinternational.com/api/${this.apiVersion}`;
         this.deviceId = options?.deviceId || "3C417201548B2E3B";
-        this.agent = options?.agent || "30100;1.246.1-15599;";
+        this.agent = options?.agent || "30100;1.251.0-15611;";
       }
       get baseHeaders() {
         return {
@@ -107,29 +144,51 @@ var require_http_client = __commonJS({
         };
       }
       /**
-       * Can be used to send custom requests that are not covered by the domain services.
+       * Sends a request to the Picnic API; the domain services use it, and it can be used for
+       * requests they don't cover.
        *
        * Objects passed as `data` are sent as JSON. A `Blob`, `ArrayBuffer` or typed array
-       * (e.g. `Uint8Array`) is sent as-is, with `Content-Type` set to `contentType`.
+       * (e.g. `Uint8Array`) is sent as-is, with `Content-Type` set to `options.contentType`.
+       * Responses served as a React Server Components payload (`text/x-component`) are returned as
+       * the raw text instead of being parsed as JSON. An error status throws a `PicnicApiError` with
+       * the status and Picnic's error code, or a `CheckoutIssueError` when the cart can't be checked out.
        * @param {string} method The HTTP method to use: GET, POST, PUT or DELETE.
-       * @param {string} path The path, optionally including query params. Example: `/cart/set_delivery_slot` or `/my_store?depth=0`.
+       * @param {string} path The path, optionally including query params, e.g. `/cart/set_delivery_slot`, or an absolute URL.
        * @param {TRequestData|null} [data=null] The request body, typically for POST or PUT requests.
-       * @param {boolean} [includePicnicHeaders=false] Whether to include x-picnic-agent and x-picnic-did headers.
-       * @param {boolean} [isImageRequest=false] When true, returns an ArrayBuffer instead of JSON.
-       *
-       * Responses served as a React Server Components payload (`text/x-component`) are
-       * returned as the raw text instead of being parsed as JSON.
-       * @param {string} [contentType="application/octet-stream"] The MIME type of a raw (non-JSON) `data` body, e.g. `image/jpeg`.
+       * @param {RequestOptions} [options] Picnic headers, extra headers, authentication, the body's content type and the response type.
        */
-      async sendRequest(method, path, data = null, includePicnicHeaders = false, isImageRequest = false, contentType) {
+      async sendRequest(method, path, data = null, options = {}) {
+        return (await this.sendRequestWithHeaders(method, path, data, options)).data;
+      }
+      /**
+       * Like {@link sendRequest}, but also returns the response headers. Used for routes where the
+       * app reads headers, such as `x-picnic-auth` after a login and `X-Page-Version` for RSC pages.
+       * @param {string} method The HTTP method to use: GET, POST, PUT or DELETE.
+       * @param {string} path The path, optionally including query params, or an absolute URL.
+       * @param {TRequestData|null} [data=null] The request body.
+       * @param {RequestOptions} [options] Picnic headers, extra headers, authentication, the body's content type and the response type.
+       */
+      async sendRequestWithHeaders(method, path, data = null, options = {}) {
+        if (typeof options === "boolean") {
+          throw new TypeError("The fourth argument of sendRequest is an options object, e.g. { includePicnicHeaders: true }.");
+        }
+        const response = await this.fetchResponse(method, path, data, options);
+        return { data: await this.readResponseBody(response, options.binary ?? false), headers: response.headers };
+      }
+      /** Sends the request and throws for non-2xx responses; the body is left unread. */
+      async fetchResponse(method, path, data, options) {
         const isRawBody = data instanceof Blob || data instanceof ArrayBuffer || ArrayBuffer.isView(data);
+        const requestUrl = /^https?:\/\//.test(path) ? path : `${this.url}${path}`;
+        const sendAuthKey = options.authenticated ?? new URL(requestUrl).origin === new URL(this.url).origin;
+        const { "x-picnic-auth": authKey, ...baseHeaders } = this.baseHeaders;
         const headers = new Headers({
-          ...this.baseHeaders,
-          ...includePicnicHeaders && this.picnicHeaders,
-          ...isRawBody && { "Content-Type": contentType ?? "application/octet-stream" }
+          ...baseHeaders,
+          ...sendAuthKey && authKey && { "x-picnic-auth": authKey },
+          ...options.includePicnicHeaders && this.picnicHeaders,
+          ...isRawBody && { "Content-Type": options.contentType ?? "application/octet-stream" },
+          ...options.headers
         });
         const body = data === null ? null : isRawBody ? data : JSON.stringify(data);
-        const requestUrl = /^https?:\/\//.test(path) ? path : `${this.url}${path}`;
         const response = await fetch(requestUrl, {
           method,
           headers,
@@ -137,20 +196,16 @@ var require_http_client = __commonJS({
         });
         if (!response.ok) {
           const responseBody = await response.text();
-          try {
-            const errorData = JSON.parse(responseBody);
-            const checkoutIssue = (0, checkout_error_1.parseCheckoutIssueError)(errorData);
-            if (checkoutIssue)
-              throw checkoutIssue;
-            const parsed = errorData;
-            throw new Error(`${parsed.error?.message || response.statusText}`);
-          } catch (e) {
-            if (e instanceof Error && !(e instanceof SyntaxError))
-              throw e;
-            throw new Error(`${response.status} ${response.statusText}${responseBody ? ` - ${responseBody}` : ""}`);
-          }
+          const checkoutIssue = (0, checkout_error_1.parseCheckoutIssueError)((0, api_error_1.parseErrorBody)(responseBody));
+          if (checkoutIssue)
+            throw checkoutIssue;
+          throw new api_error_1.PicnicApiError(response.status, response.statusText, responseBody);
         }
-        if (isImageRequest) {
+        return response;
+      }
+      /** Reads the body as an ArrayBuffer (image and other binary requests), RSC text or JSON. */
+      async readResponseBody(response, binary) {
+        if (binary) {
           return response.arrayBuffer();
         }
         if (response.headers?.get("content-type")?.includes("text/x-component")) {
@@ -166,36 +221,316 @@ var require_http_client = __commonJS({
   }
 });
 
+// node_modules/picnic-api/lib/domains/app/service.js
+var require_service = __commonJS({
+  "node_modules/picnic-api/lib/domains/app/service.js"(exports) {
+    "use strict";
+    Object.defineProperty(exports, "__esModule", { value: true });
+    exports.AppService = void 0;
+    var AppService = class {
+      constructor(http, pages) {
+        this.http = http;
+        this.pages = pages;
+      }
+      /**
+       * Returns the bootstrap data; tab bar configuration, third-party SDK configs, and feature flags.
+       */
+      getBootstrapData() {
+        return this.http.sendRequest("GET", `/bootstrap`);
+      }
+      /**
+       * Returns a page by its page id, in the format Picnic serves it: a Fusion page, or for pages on
+       * Picnic's newer page platform an RSC page parsed into its components (see `RscPageContent`).
+       * The format depends on the page and the `x-picnic-agent` version, and Picnic is moving more
+       * pages to RSC, so check `format`. One request either way.
+       *
+       * Pages known to be RSC: `category-tree-root`, `subcategory-page?category_id=<id>`,
+       * `category-product-overview?category_id=<id>`, `promotion-category-page?category_id=<id>`,
+       * `profile-root`, `promo-group-deep-dive?promo_group_id=<id>`,
+       * `search-page-results?search_term=<term>`, `search-page-index`, `meals-category-page`,
+       * `meals-category-group-page` and `unavailability-replacements-page-root`.
+       *
+       * Pages known to be Fusion: `home_page_root`, `purchases-page-root`, `meals-page-root`,
+       * `slot-selector-root`, `parcels-overview-page-root`, `promo-page-root`,
+       * `product-details-page-root?id=<selling_unit_id>`,
+       * `selling-group-details-page?selling_group_id=<id>` and
+       * `parcel-tracking-page-root?parcel_id=<id>`.
+       * @param {string} pageId The page id, optionally with query params, e.g. `home_page_root`.
+       */
+      getPage(pageId) {
+        return this.pages.getPage(pageId);
+      }
+      /**
+       * Resolves a Picnic deeplink URL to its target resource.
+       * The app uses this to handle universal links and custom scheme URIs
+       * (e.g. URLs like `https://picnic.app/nl/deeplink/...`).
+       * @param {string} url The deeplink URL to resolve.
+       */
+      resolveDeeplink(url) {
+        return this.http.sendRequest("POST", `/deeplink/resolve`, { url }, { includePicnicHeaders: true });
+      }
+      /**
+       * Returns popup messages in the app (e.g. post-delivery satisfaction prompts,
+       * message bar notifications, order-confirmation cards).
+       * @param {MessageDisplayPosition[]} [displayPositions] Optional filter by display position(s).
+       */
+      getMessages(displayPositions) {
+        const query = displayPositions?.length ? `?${displayPositions.map((p) => `display_position=${encodeURIComponent(p)}`).join("&")}` : "";
+        return this.http.sendRequest("GET", `/messages${query}`, null, { includePicnicHeaders: true });
+      }
+    };
+    exports.AppService = AppService;
+  }
+});
+
 // node_modules/picnic-api/lib/errors/page-format-error.js
 var require_page_format_error = __commonJS({
   "node_modules/picnic-api/lib/errors/page-format-error.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.UnexpectedPageFormatError = void 0;
-    exports.isUnexpectedPageFormatError = isUnexpectedPageFormatError2;
+    exports.isUnexpectedPageFormatError = isUnexpectedPageFormatError;
     var UnexpectedPageFormatError = class extends Error {
       constructor(pageId, receivedFormat) {
-        const method = receivedFormat === "rsc" ? "app.getRscPage" : "app.getPage";
-        super(`Page "${pageId}" was served as ${receivedFormat === "rsc" ? "an RSC payload" : "a Fusion page"}; use ${method} to fetch it.`);
+        super(`Page "${pageId}" was served as ${receivedFormat === "rsc" ? "an RSC payload instead of a Fusion page" : "a Fusion page instead of an RSC payload"}.`);
         this.name = "UnexpectedPageFormatError";
         this.pageId = pageId;
         this.receivedFormat = receivedFormat;
       }
     };
     exports.UnexpectedPageFormatError = UnexpectedPageFormatError;
-    function isUnexpectedPageFormatError2(error2) {
+    function isUnexpectedPageFormatError(error2) {
       return error2 instanceof UnexpectedPageFormatError;
     }
   }
 });
 
-// node_modules/picnic-api/lib/domains/app/rsc.js
-var require_rsc = __commonJS({
-  "node_modules/picnic-api/lib/domains/app/rsc.js"(exports) {
+// node_modules/picnic-api/lib/domains/catalog/search.js
+var require_search = __commonJS({
+  "node_modules/picnic-api/lib/domains/catalog/search.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
+    exports.extractSearchResults = extractSearchResults;
+    exports.extractProductTile = extractProductTile;
+    exports.readSellableTile = readSellableTile;
+    exports.extractFilters = extractFilters;
+    var LABEL_POSITIONS = ["topLeft", "topRight", "middleLeft", "bottomLeft"];
+    var asRecord2 = (value) => typeof value === "object" && value !== null && !Array.isArray(value) ? value : {};
+    var asArray = (value) => Array.isArray(value) ? value : [];
+    var asString = (value) => typeof value === "string" && value !== "" ? value : null;
+    var asNumber = (value) => typeof value === "number" ? value : null;
+    var toCents2 = (value) => typeof value === "number" ? Math.round(value * 100) : null;
+    function extractSearchResults(props) {
+      const stores = asRecord2(props.storeResults);
+      const supermarket = stores.SUPERMARKET ? asRecord2(stores.SUPERMARKET) : null;
+      const meals = asRecord2(stores.MEALS);
+      return {
+        query: asString(props.searchQuery) ?? "",
+        correctedQuery: asString(supermarket?.correctedSearchTerm) ?? asString(meals.correctedSearchTerm),
+        products: supermarket ? extractProductResults(supermarket) : null,
+        recipes: asArray(meals.sections).flatMap((section) => asArray(asRecord2(section).items)).flatMap((item) => {
+          const recipe = extractSearchRecipe(asRecord2(item));
+          return recipe ? [recipe] : [];
+        })
+      };
+    }
+    function extractProductResults(store) {
+      const productIdsByFacetId = {};
+      for (const [facetId, ids] of Object.entries(asRecord2(store.entityIdsByFacetId))) {
+        productIdsByFacetId[facetId] = asArray(ids).filter((id) => typeof id === "string");
+      }
+      return {
+        sections: asArray(store.sections).map((value) => {
+          const section = asRecord2(value);
+          return {
+            id: asString(section.id) ?? "",
+            type: asString(section.type) ?? "",
+            title: section.shouldShowHeader ? asString(section.headerName) : null,
+            products: asArray(section.items).flatMap((item) => {
+              const product = extractProductTile(asRecord2(item));
+              return product ? [product] : [];
+            })
+          };
+        }),
+        visualFilters: extractFilters(store.visualFilters),
+        powerFilters: extractFilters(store.powerFilters),
+        textualFilters: extractFilters(store.textualFilters),
+        productIdsByFacetId,
+        sortingOptions: asArray(store.sortingOptions).flatMap((value) => {
+          const option = asRecord2(value);
+          const name = asString(option.name);
+          return name ? [{ name, title: asString(option.localizedTitle) ?? name }] : [];
+        }),
+        selectedSorting: asString(store.selectedSorting) ?? "RELEVANCE"
+      };
+    }
+    function extractProductTile(tile) {
+      return tile.type === "sellable" ? readSellableTile(tile) : null;
+    }
+    function readSellableTile(tile) {
+      const id = asString(tile.id);
+      const title = asRecord2(tile.title);
+      const name = asString(title.title);
+      if (!id || !name)
+        return null;
+      const images = asRecord2(tile.images);
+      const price = asRecord2(tile.price);
+      const priceRanges = asArray(price.priceRanges).flatMap((value) => {
+        const range = asRecord2(value);
+        const rangePrice = asNumber(range.price);
+        const fromQuantity = asNumber(range.fromQuantity);
+        return rangePrice !== null && fromQuantity !== null ? [{ price: rangePrice, from_quantity: fromQuantity }] : [];
+      });
+      const labels = asRecord2(tile.labels);
+      return {
+        id,
+        name,
+        namePrefix: asString(title.prefix)?.trim() || null,
+        brand: asString(asRecord2(tile.subtitle).text),
+        qualityCue: asString(asRecord2(tile.qualityCue).text),
+        imageId: asString(asRecord2(images.primaryImage).imageId) ?? asString(asRecord2(images.sellingUnitImage).imageId),
+        // The tile's own price; the lowest-quantity price tier when it has none.
+        displayPrice: toCents2(price.priceValue) ?? [...priceRanges].sort((x, y) => x.from_quantity - y.from_quantity)[0]?.price ?? 0,
+        originalPrice: toCents2(price.referencePriceValue),
+        unitPrice: asString(price.unitPrice),
+        priceRanges: priceRanges.length > 0 ? priceRanges : null,
+        unitQuantity: asArray(tile.suffixes).map(asRecord2).filter((suffix) => suffix.type === "TEXT").flatMap((suffix) => asString(suffix.text) ?? []).join(", "),
+        labels: LABEL_POSITIONS.flatMap((position) => asArray(labels[position]).map((value) => {
+          const label = asRecord2(value);
+          return { position, type: asString(label.type), text: asString(label.labelText) };
+        })),
+        isUnavailable: tile.unavailability !== null && tile.unavailability !== void 0,
+        numberOfOrders: asNumber(tile.numberOfOrders)
+      };
+    }
+    function extractSearchRecipe(tile) {
+      const id = asString(tile.id);
+      const text3 = asRecord2(tile.text);
+      const name = asString(asRecord2(text3.title).text);
+      if (!id || !name)
+        return null;
+      return {
+        id,
+        name,
+        subtitle: asString(asRecord2(text3.subtitle).text),
+        imageId: asString(asRecord2(tile.image).imageId),
+        tags: asArray(text3.tags).flatMap((tag) => asString(asRecord2(tag).text) ?? [])
+      };
+    }
+    function extractFilters(value) {
+      return asArray(value).flatMap((item) => {
+        const filter = asRecord2(item);
+        const facetId = asString(filter.facetId);
+        const name = asString(filter.name) ?? asString(filter.header);
+        return facetId && name ? [{ facetId, name, imageId: asString(filter.image) }] : [];
+      });
+    }
+  }
+});
+
+// node_modules/picnic-api/lib/pages/rsc.js
+var require_rsc = __commonJS({
+  "node_modules/picnic-api/lib/pages/rsc.js"(exports) {
+    "use strict";
+    Object.defineProperty(exports, "__esModule", { value: true });
+    exports.decodeRscValue = decodeRscValue;
+    exports.findRscElementProps = findRscElementProps;
+    exports.findRscModuleChunks = findRscModuleChunks;
     exports.parseRscPayload = parseRscPayload;
+    exports.parseRscPageContent = parseRscPageContent;
+    var search_1 = require_search();
     var ROW_PATTERN = /^([0-9a-f]+):(I?)(.*)$/;
+    var ROW_REFERENCE_PATTERN = /^\$L?([0-9a-f]+)$/;
+    var PATH_REFERENCE_PATTERN = /^\$([0-9a-f]+):(.+)$/;
+    var isElement = (value) => Array.isArray(value) && value[0] === "$" && typeof value[1] === "string";
+    function decodeRscValue(page, value) {
+      const resolved = /* @__PURE__ */ new Map();
+      const resolving = /* @__PURE__ */ new Set();
+      const resolveReference = (key, raw) => {
+        if (resolved.has(key))
+          return resolved.get(key);
+        if (resolving.has(key))
+          throw new Error(`RSC reference cycle at ${key}`);
+        resolving.add(key);
+        const decoded = decode(raw());
+        resolving.delete(key);
+        resolved.set(key, decoded);
+        return decoded;
+      };
+      const decode = (item) => {
+        if (typeof item === "string") {
+          if (item === "$undefined")
+            return void 0;
+          if (item.startsWith("$$"))
+            return item.slice(1);
+          const rowId = ROW_REFERENCE_PATTERN.exec(item)?.[1];
+          if (rowId !== void 0 && rowId in page.rows)
+            return resolveReference(`$${rowId}`, () => page.rows[rowId]);
+          const pathReference = PATH_REFERENCE_PATTERN.exec(item);
+          if (pathReference && pathReference[1] in page.rows) {
+            return resolveReference(item, () => resolvePath(page, pathReference[1], pathReference[2]));
+          }
+          return item;
+        }
+        if (Array.isArray(item)) {
+          if (isElement(item))
+            return ["$", item[1], item[2], decode(item[3] ?? {})];
+          return item.map(decode).filter((entry) => entry !== void 0);
+        }
+        if (typeof item === "object" && item !== null) {
+          const result = {};
+          for (const [key, entry] of Object.entries(item)) {
+            const decoded = decode(entry);
+            if (decoded !== void 0)
+              result[key] = decoded;
+          }
+          return result;
+        }
+        return item;
+      };
+      return decode(value);
+    }
+    function resolvePath(page, rowId, path) {
+      let current = page.rows[rowId];
+      for (const segment of path.split(":")) {
+        const rowReference = typeof current === "string" ? /^\$L?([0-9a-f]+)$/.exec(current)?.[1] : void 0;
+        if (rowReference !== void 0 && rowReference in page.rows)
+          current = page.rows[rowReference];
+        if (isElement(current) && segment === "props")
+          current = current[3];
+        else if (Array.isArray(current))
+          current = current[Number(segment)];
+        else if (typeof current === "object" && current !== null)
+          current = current[segment];
+        else
+          return void 0;
+      }
+      return current;
+    }
+    function findRscElementProps(page, modulePath) {
+      const moduleIds = new Set(Object.entries(page.modules).filter(([, reference]) => Array.isArray(reference) && typeof reference[0] === "string" && reference[0].endsWith(modulePath)).map(([id]) => `$L${id}`));
+      const found = [];
+      const visit = (value) => {
+        if (Array.isArray(value)) {
+          if (isElement(value) && moduleIds.has(value[1]))
+            found.push(decodeRscValue(page, value[3] ?? {}) ?? {});
+          value.forEach(visit);
+        } else if (typeof value === "object" && value !== null) {
+          Object.values(value).forEach(visit);
+        }
+      };
+      Object.values(page.rows).forEach(visit);
+      return found;
+    }
+    function findRscModuleChunks(page, modulePath) {
+      for (const reference of Object.values(page.modules)) {
+        if (!Array.isArray(reference) || typeof reference[0] !== "string" || !reference[0].endsWith(modulePath))
+          continue;
+        const chunks = Array.isArray(reference[1]) ? reference[1].filter((chunk) => typeof chunk === "string") : [];
+        return [...new Set(chunks)];
+      }
+      return [];
+    }
     function parseRscPayload(payload) {
       const page = { rows: {}, modules: {} };
       for (const line of payload.split("\n")) {
@@ -215,83 +550,185 @@ var require_rsc = __commonJS({
       }
       return page;
     }
+    var MODULE_REFERENCE_PATTERN = /^\$L?([0-9a-f]+)$/;
+    var MODULE_NAME_PATTERN = /([^/]+)\.[jt]sx?$/;
+    var WRAPPER_COMPONENTS = /* @__PURE__ */ new Set(["pages-provider-hydrator", "page-hydrator", "IconRegistry", "icon-registry"]);
+    function parseRscPageContent(pageId, page) {
+      let tokens = {};
+      let nextId = 0;
+      const modulePathOf = (type) => {
+        const moduleId = MODULE_REFERENCE_PATTERN.exec(type)?.[1];
+        const reference = moduleId !== void 0 ? page.modules[moduleId] : void 0;
+        const path = Array.isArray(reference) ? reference[0] : void 0;
+        return typeof path === "string" ? path : null;
+      };
+      const convert = (value, nodes2) => {
+        if (Array.isArray(value)) {
+          if (isElement(value)) {
+            nodes2.push(...convertElement(value));
+            return void 0;
+          }
+          const items = value.map((item) => convert(item, nodes2)).filter((item) => item !== void 0);
+          return items.length === 0 && value.length > 0 ? void 0 : items;
+        }
+        if (typeof value !== "object" || value === null)
+          return value;
+        const record = value;
+        if (typeof record.tokenRegistry === "object" && record.tokenRegistry !== null) {
+          tokens = { ...readStrings(record.tokenRegistry), ...readStrings(record.legacyColors) };
+        }
+        const result = {};
+        for (const [key, item] of Object.entries(record)) {
+          const converted = convert(item, nodes2);
+          if (converted !== void 0)
+            result[key] = converted;
+        }
+        return result.type === "sellable" ? (0, search_1.extractProductTile)(result) ?? result : result;
+      };
+      const convertElement = (element) => {
+        const modulePath = modulePathOf(element[1]);
+        const component = modulePath ? MODULE_NAME_PATTERN.exec(modulePath)?.[1] ?? null : null;
+        const children = [];
+        const props = convert(element[3] ?? {}, children) ?? {};
+        if (!modulePath || !component || WRAPPER_COMPONENTS.has(component))
+          return children;
+        return [{ id: `${component}-${nextId++}`, component, modulePath, props, children }];
+      };
+      const nodes = [];
+      convert(decodeRscValue(page, page.rows["0"]), nodes);
+      return { pageId, tokens, nodes };
+    }
+    function readStrings(value) {
+      if (typeof value !== "object" || value === null)
+        return {};
+      return Object.fromEntries(Object.entries(value).filter((entry) => typeof entry[1] === "string"));
+    }
   }
 });
 
-// node_modules/picnic-api/lib/domains/app/service.js
-var require_service = __commonJS({
-  "node_modules/picnic-api/lib/domains/app/service.js"(exports) {
+// node_modules/picnic-api/lib/pages/page-client.js
+var require_page_client = __commonJS({
+  "node_modules/picnic-api/lib/pages/page-client.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
-    exports.AppService = void 0;
+    exports.PageClient = void 0;
     var page_format_error_1 = require_page_format_error();
     var rsc_1 = require_rsc();
-    var AppService = class {
+    var PageClient = class {
       constructor(http) {
         this.http = http;
+        this.serverActionIds = /* @__PURE__ */ new Map();
       }
       /**
-       * Returns the bootstrap data; tab bar configuration, third-party SDK configs, and feature flags.
+       * Fetches a page in whichever format Picnic serves it. An RSC page comes with the page's
+       * `X-Page-Version` header as `version`.
+       * @param {string} pageId The page id, optionally with query params, e.g. `category-tree-root`.
        */
-      getBootstrapData() {
-        return this.http.sendRequest("GET", `/bootstrap`);
+      async load(pageId) {
+        const { data, headers } = await this.http.sendRequestWithHeaders("GET", `/pages/${pageId}`, null, { includePicnicHeaders: true });
+        if (typeof data !== "string")
+          return { format: "fusion", pageId, page: data };
+        const version = headers.get("x-page-version");
+        return { format: "rsc", pageId, payload: { ...(0, rsc_1.parseRscPayload)(data), ...version && { version } } };
       }
-      /**
-       * Returns a Fusion page by its page ID. The response shape is shared across all page routes.
-       *
-       * Some pages are served as a React Server Components payload instead, depending on the
-       * page and the `agent` version; for those this throws an `UnexpectedPageFormatError` and
-       * `getRscPage` should be used. Known RSC pages: `category-tree-root`, `profile-root` and
-       * `promo-group-deep-dive?promo_group_id=<id>`.
-       *
-       * Known page IDs (no params required):
-       * - `home_page_root`
-       * - `purchases-page-root`
-       * - `meals-page-root`
-       * - `slot-selector-root`
-       * - `parcels-overview-page-root`
-       * - `empty-search-page-root`
-       *
-       * Pages that require query parameters (append after `?`):
-       * - `search-page-results?search_term=<term>`
-       * - `product-details-page-root?id=<selling_unit_id>`
-       * - `L1-category-page-root?category_id=<id>`
-       * - `L2-category-page-root?category_id=<id>`
-       * - `delivery-receipt-page?delivery_id=<id>`
-       * - `parcel-tracking-page-root?parcel_id=<id>`
-       */
+      /** Fetches a page and parses an RSC page into its component tree. */
       async getPage(pageId) {
-        const page = await this.http.sendRequest("GET", `/pages/${pageId}`, null, true);
-        if (typeof page === "string")
+        const loaded = await this.load(pageId);
+        return loaded.format === "fusion" ? { format: "fusion", pageId, page: loaded.page } : { format: "rsc", pageId, content: (0, rsc_1.parseRscPageContent)(pageId, loaded.payload) };
+      }
+      /**
+       * Fetches a page that is expected to be a Fusion page. Most pages come as a {@link FusionPage};
+       * a few return the bare layout, so the caller names the type.
+       * @throws {UnexpectedPageFormatError} When Picnic serves the page as RSC.
+       */
+      async getFusionPage(pageId) {
+        const loaded = await this.load(pageId);
+        if (loaded.format !== "fusion")
           throw new page_format_error_1.UnexpectedPageFormatError(pageId, "rsc");
-        return page;
+        return loaded.page;
       }
       /**
-       * Returns a page served as a React Server Components (RSC) payload, split into its rows.
-       * The page data is in the props of the React elements (`["$", type, key, props]`) in `rows`.
-       *
-       * Throws an `UnexpectedPageFormatError` when the page is served as a Fusion page instead;
-       * use `getPage` for those. Known RSC pages: `category-tree-root` (search tab shortcuts and
-       * categories), `profile-root` and `promo-group-deep-dive?promo_group_id=<id>`.
-       * @param {string} pageId The page ID, optionally with query params, e.g. `category-tree-root`.
+       * Fetches a page that is expected to be RSC, split into its rows and module references.
+       * @throws {UnexpectedPageFormatError} When Picnic serves the page as a Fusion page.
        */
-      async getRscPage(pageId) {
-        const page = await this.http.sendRequest("GET", `/pages/${pageId}`, null, true);
-        if (typeof page !== "string")
+      async getRscPayload(pageId) {
+        const loaded = await this.load(pageId);
+        if (loaded.format !== "rsc")
           throw new page_format_error_1.UnexpectedPageFormatError(pageId, "fusion");
-        return (0, rsc_1.parseRscPayload)(page);
+        return loaded.payload;
       }
       /**
-       * Resolves a Picnic deeplink URL to its target resource.
-       * The app uses this to handle universal links and custom scheme URIs
-       * (e.g. URLs like `https://picnic.app/nl/deeplink/...`).
-       * @param {string} url The deeplink URL to resolve.
+       * Fetches a page that is expected to be RSC and parses it into its component tree.
+       * @throws {UnexpectedPageFormatError} When Picnic serves the page as a Fusion page.
        */
-      resolveDeeplink(url) {
-        return this.http.sendRequest("POST", `/deeplink/resolve`, { url }, true);
+      async getRscContent(pageId) {
+        return (0, rsc_1.parseRscPageContent)(pageId, await this.getRscPayload(pageId));
+      }
+      /**
+       * Runs a server action of an RSC page and returns the RSC payload it responds with. Client
+       * components call these to load data after the page is shown; product search results, for
+       * example, come from the `fetchSearchResults` action of the search page.
+       *
+       * Find the action id with {@link findServerActionId}; it contains a build hash and changes
+       * when Picnic deploys a new version of the page.
+       * @param {string} actionId The action id, e.g. `act_fetchSearchResults_169995c7443462f7`.
+       * @param {unknown[]} args The arguments the client component passes to the action.
+       * @param {string} [pageVersion] The `version` of the page the action belongs to, sent as `X-Page-Version`.
+       */
+      async runServerAction(actionId, args, pageVersion) {
+        const payload = await this.http.sendRequestWithHeaders("POST", `/pages/action/${encodeURIComponent(actionId)}`, { params: JSON.stringify(args) }, { includePicnicHeaders: true, headers: pageVersion ? { "X-Page-Version": pageVersion } : {} });
+        return (0, rsc_1.parseRscPayload)(payload.data);
+      }
+      /**
+       * Returns the source of a client component chunk of an RSC page. The app downloads these from
+       * the `client_component_cdn_base_url` in the bootstrap data; chunk ids come from the module
+       * references of a page (see `findRscModuleChunks`).
+       * @param {string} chunkId The chunk id, e.g. `shared-pages_search_search-page-content_results_index_tsx.b717044a`.
+       */
+      async getClientChunk(chunkId) {
+        this.clientChunkBaseUrl ?? (this.clientChunkBaseUrl = this.http.sendRequest("GET", `/bootstrap`).then((bootstrap) => {
+          const baseUrl2 = bootstrap.in_app_feature_config?.client_component_cdn_base_url?.trim();
+          if (!baseUrl2)
+            throw new Error("The bootstrap data has no client_component_cdn_base_url");
+          return baseUrl2.replace(/\/+$/, "");
+        }));
+        let baseUrl;
+        try {
+          baseUrl = await this.clientChunkBaseUrl;
+        } catch (error2) {
+          this.clientChunkBaseUrl = void 0;
+          throw error2;
+        }
+        const { data } = await this.http.sendRequestWithHeaders("GET", `${baseUrl}/${chunkId}.script.bundle`, null, {
+          authenticated: false,
+          binary: true
+        });
+        return new TextDecoder().decode(data);
+      }
+      /**
+       * Finds the id of a server action, e.g. `fetchSearchResults`, the way the app does: in the
+       * client chunks of the component that calls it. The chunks are downloaded in parallel; the first
+       * one (in module order) that contains the action wins. Chunks are immutable (their ids contain a
+       * hash), so the result per chunk is cached for the lifetime of the client.
+       * @param {RscPage} page The page that renders the component.
+       * @param {string} modulePath The end of the component's path, e.g. `search-page-content/results/index.tsx`.
+       * @param {string} actionName The action's function name, e.g. `fetchSearchResults`.
+       * @returns The action id, or `null` when the component's chunks don't contain the action.
+       */
+      async findServerActionId(page, modulePath, actionName) {
+        const pattern = new RegExp(`act_${actionName}_[0-9a-f]+`);
+        const chunks = (0, rsc_1.findRscModuleChunks)(page, modulePath).filter((chunk) => !chunk.startsWith("client-components.") && !chunk.startsWith("shared-node_modules_"));
+        const actionIds = await Promise.all(chunks.map(async (chunk) => {
+          const cacheKey = `${chunk}#${actionName}`;
+          if (!this.serverActionIds.has(cacheKey)) {
+            this.serverActionIds.set(cacheKey, pattern.exec(await this.getClientChunk(chunk))?.[0] ?? null);
+          }
+          return this.serverActionIds.get(cacheKey) ?? null;
+        }));
+        return actionIds.find((actionId) => actionId !== null) ?? null;
       }
     };
-    exports.AppService = AppService;
+    exports.PageClient = PageClient;
   }
 });
 
@@ -316,26 +753,17 @@ var require_service2 = __commonJS({
        */
       async login(username, password) {
         const secret = crypto_1.default.createHash("md5").update(password, "utf8").digest("hex");
-        const response = await fetch(`${this.http.url}/user/login`, {
-          method: "POST",
-          headers: this.http.baseHeaders,
-          body: JSON.stringify({ key: username, secret, client_id: 30100 })
-        });
-        if (!response.ok) {
-          const errorData = await response.json();
-          throw new Error(`Login failed: ${errorData.error?.message || response.statusText}`);
-        }
-        const data = await response.json();
-        const authKey = response.headers.get("x-picnic-auth");
+        const { data, headers } = await this.http.sendRequestWithHeaders("POST", `/user/login`, { key: username, secret, client_id: 30100 }, { authenticated: false });
+        const authKey = headers.get("x-picnic-auth");
         if (!authKey) {
           throw new Error("Login failed: No auth key received.");
         }
         this.http.authKey = authKey;
         return {
           authKey,
-          second_factor_authentication_required: data.second_factor_authentication_required,
-          show_second_factor_authentication_intro: data.show_second_factor_authentication_intro,
-          user_id: data.user_id
+          userId: data.user_id,
+          secondFactorAuthenticationRequired: data.second_factor_authentication_required,
+          showSecondFactorAuthenticationIntro: data.show_second_factor_authentication_intro
         };
       }
       /**
@@ -343,7 +771,7 @@ var require_service2 = __commonJS({
        * @param {string} channel The channel to send the code to. 'SMS' is the only known format at the moment.
        */
       generate2FACode(channel) {
-        return this.http.sendRequest("POST", `/user/2fa/generate`, { channel }, true);
+        return this.http.sendRequest("POST", `/user/2fa/generate`, { channel }, { includePicnicHeaders: true });
       }
       /**
        * Verifies the 2FA code and captures the updated auth key from the response.
@@ -352,27 +780,8 @@ var require_service2 = __commonJS({
        * @param {string} code The 2FA code to verify.
        */
       async verify2FACode(code) {
-        const headers = new Headers({
-          ...this.http.baseHeaders,
-          ...this.http.picnicHeaders
-        });
-        const response = await fetch(`${this.http.url}/user/2fa/verify`, {
-          method: "POST",
-          headers,
-          body: JSON.stringify({ otp: code })
-        });
-        if (!response.ok) {
-          const body = await response.text();
-          try {
-            const errorData = JSON.parse(body);
-            throw new Error(`2FA verification failed: ${errorData.error?.message || response.statusText}`);
-          } catch (e) {
-            if (e instanceof Error && !(e instanceof SyntaxError))
-              throw e;
-            throw new Error(`2FA verification failed: ${response.status} ${response.statusText}`);
-          }
-        }
-        const authKey = response.headers.get("x-picnic-auth");
+        const { headers } = await this.http.sendRequestWithHeaders("POST", `/user/2fa/verify`, { otp: code }, { includePicnicHeaders: true });
+        const authKey = headers.get("x-picnic-auth");
         if (!authKey) {
           throw new Error("2FA verification failed: No auth key received.");
         }
@@ -405,20 +814,69 @@ var require_service2 = __commonJS({
   }
 });
 
+// node_modules/picnic-api/lib/domains/user/profile.js
+var require_profile = __commonJS({
+  "node_modules/picnic-api/lib/domains/user/profile.js"(exports) {
+    "use strict";
+    Object.defineProperty(exports, "__esModule", { value: true });
+    exports.extractProfile = extractProfile;
+    var asRecord2 = (value) => typeof value === "object" && value !== null && !Array.isArray(value) ? value : null;
+    var asString = (value) => typeof value === "string" && value !== "" ? value : null;
+    function extractProfile(content) {
+      const user = asRecord2(findNode(content.nodes, "user-info")?.props.user) ?? {};
+      const items = findNode(content.nodes, "menu-list")?.props.items;
+      const address = asRecord2(user.preferredAddress);
+      return {
+        firstName: asString(user.firstName) ?? "",
+        lastName: asString(user.lastName) ?? "",
+        avatarUrl: asString(user.avatarUrl),
+        hasMembership: user.hasMembership === true,
+        address: address ? extractAddress(address) : null,
+        menu: (Array.isArray(items) ? items : []).flatMap((item) => {
+          const entry = asRecord2(item);
+          const id = asString(entry?.id);
+          return id ? [{ id, deeplink: asString(entry?.deeplink) }] : [];
+        })
+      };
+    }
+    function extractAddress(address) {
+      return {
+        street: asString(address.street) ?? "",
+        houseNumber: typeof address.houseNumber === "number" ? address.houseNumber : null,
+        houseNumberExtension: asString(address.houseNumberExtension),
+        postcode: asString(address.postcode) ?? "",
+        city: asString(address.city) ?? ""
+      };
+    }
+    function findNode(nodes, component) {
+      for (const node of nodes) {
+        if (node.component === component)
+          return node;
+        const found = findNode(node.children, component);
+        if (found)
+          return found;
+      }
+      return null;
+    }
+  }
+});
+
 // node_modules/picnic-api/lib/domains/user/service.js
 var require_service3 = __commonJS({
   "node_modules/picnic-api/lib/domains/user/service.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.UserService = void 0;
+    var profile_1 = require_profile();
     var UserService = class {
-      constructor(http) {
+      constructor(http, pages) {
         this.http = http;
+        this.pages = pages;
       }
       /**
        * Gets the details of the current logged in user.
        */
-      getUserDetails() {
+      getUser() {
         return this.http.sendRequest("GET", `/user`);
       }
       /**
@@ -432,24 +890,32 @@ var require_service3 = __commonJS({
        * This also includes MGM (member-get-member) referral details via `user.mgm`.
        */
       getProfileMenu() {
-        return this.http.sendRequest("GET", `/profile-menu?fetch_mgm=true`, null, true);
+        return this.http.sendRequest("GET", `/profile-menu?fetch_mgm=true`, null, { includePicnicHeaders: true });
       }
-      // TODO: Test route and add types
       /**
-       * Submits a suggestion or feedback from the user.
-       * @param {string} suggestion The suggestion text to submit.
+       * Returns the profile tab the way the app shows it: the user, the preferred address and the
+       * account menu, from the `profile-root` RSC page.
+       */
+      async getProfile() {
+        return (0, profile_1.extractProfile)(await this.pages.getRscContent("profile-root"));
+      }
+      /**
+       * Sends a product suggestion to Picnic, like the app's "suggest a product" form.
+       * @param {string} suggestion The suggestion text.
        */
       submitSuggestion(suggestion) {
         return this.http.sendRequest("POST", `/user/suggestion`, { suggestion });
       }
-      // TODO: Test route and add types
       /**
-       * Registers a push notification device token for the current user.
-       * @param {string} pushToken The device push notification token.
-       * @param {string} platform The platform identifier (e.g. 'firebase').
+       * Registers a device's push notification token (a Firebase Cloud Messaging token), the way the
+       * app does after it gets one, so Picnic can send notifications to that device.
+       * @param {string} pushToken The Firebase Cloud Messaging token of the device.
        */
-      registerPushToken(pushToken, platform) {
-        return this.http.sendRequest("POST", `/user/device/register_push`, { push_token: pushToken, platform });
+      registerPushToken(pushToken) {
+        return this.http.sendRequest("POST", `/user/device/register_push`, {
+          push_destination: pushToken,
+          push_version: 1
+        });
       }
       /**
        * Checks whether a newer version of the app is available. The endpoint requires
@@ -467,1919 +933,727 @@ var require_service3 = __commonJS({
           device_os: this.http.agent,
           build_number: buildNumber
         };
-        return this.http.sendRequest("POST", `/update_check`, body, true);
+        return this.http.sendRequest("POST", `/update_check`, body, { includePicnicHeaders: true });
       }
     };
     exports.UserService = UserService;
   }
 });
 
-// node_modules/jsonpath-plus/dist/index-node-cjs.cjs
-var require_index_node_cjs = __commonJS({
-  "node_modules/jsonpath-plus/dist/index-node-cjs.cjs"(exports) {
+// node_modules/picnic-api/lib/pages/pml.js
+var require_pml = __commonJS({
+  "node_modules/picnic-api/lib/pages/pml.js"(exports) {
     "use strict";
-    var vm = __require("vm");
-    var Hooks = class {
-      /**
-       * @callback HookCallback
-       * @this {*|Jsep} this
-       * @param {Jsep} env
-       * @returns: void
-       */
-      /**
-       * Adds the given callback to the list of callbacks for the given hook.
-       *
-       * The callback will be invoked when the hook it is registered for is run.
-       *
-       * One callback function can be registered to multiple hooks and the same hook multiple times.
-       *
-       * @param {string|object} name The name of the hook, or an object of callbacks keyed by name
-       * @param {HookCallback|boolean} callback The callback function which is given environment variables.
-       * @param {?boolean} [first=false] Will add the hook to the top of the list (defaults to the bottom)
-       * @public
-       */
-      add(name, callback, first) {
-        if (typeof arguments[0] != "string") {
-          for (let name2 in arguments[0]) {
-            this.add(name2, arguments[0][name2], arguments[1]);
-          }
-        } else {
-          (Array.isArray(name) ? name : [name]).forEach(function(name2) {
-            this[name2] = this[name2] || [];
-            if (callback) {
-              this[name2][first ? "unshift" : "push"](callback);
-            }
-          }, this);
+    Object.defineProperty(exports, "__esModule", { value: true });
+    exports.findNodeByIdPrefix = exports.findNodeById = exports.isDefaultTextColor = void 0;
+    exports.stripColorTags = stripColorTags2;
+    exports.cleanMarkdown = cleanMarkdown2;
+    exports.extractHighlightColor = extractHighlightColor;
+    exports.walkNodes = walkNodes;
+    exports.findNode = findNode;
+    exports.ancestorsOf = ancestorsOf;
+    exports.collectPropertyValues = collectPropertyValues2;
+    exports.collectMarkdowns = collectMarkdowns2;
+    exports.childrenOf = childrenOf;
+    exports.collectPriceNodes = collectPriceNodes;
+    exports.collectBadges = collectBadges;
+    exports.collectNutritionRows = collectNutritionRows;
+    exports.accordionItems = accordionItems;
+    exports.findPmlComponent = findPmlComponent;
+    exports.analyticsContexts = analyticsContexts;
+    var DEFAULT_TEXT_COLORS = /* @__PURE__ */ new Set(["#333333", "#5b534e", "#787570"]);
+    var isNode = (value) => typeof value === "object" && value !== null && !Array.isArray(value);
+    function stripColorTags2(markdown) {
+      return markdown.replace(/#\([^)]+\)/g, "").trim();
+    }
+    function cleanMarkdown2(markdown) {
+      return stripColorTags2(markdown).replace(/\*\*/g, "").replace(/__/g, "").replace(/ /g, " ").trim();
+    }
+    function extractHighlightColor(markdown) {
+      for (const match of markdown.matchAll(/#\(([^)]+)\)/g)) {
+        if (!DEFAULT_TEXT_COLORS.has(match[1].toLowerCase()))
+          return match[1];
+      }
+      return null;
+    }
+    var isDefaultTextColor = (color) => DEFAULT_TEXT_COLORS.has(color.toLowerCase());
+    exports.isDefaultTextColor = isDefaultTextColor;
+    function walkNodes(node, visit) {
+      if (Array.isArray(node)) {
+        node.forEach((child) => walkNodes(child, visit));
+      } else if (isNode(node)) {
+        visit(node);
+        Object.values(node).forEach((child) => walkNodes(child, visit));
+      }
+    }
+    function findNode(node, predicate) {
+      if (Array.isArray(node)) {
+        for (const child of node) {
+          const found = findNode(child, predicate);
+          if (found)
+            return found;
         }
+        return null;
       }
-      /**
-       * Runs a hook invoking all registered callbacks with the given environment variables.
-       *
-       * Callbacks will be invoked synchronously and in the order in which they were registered.
-       *
-       * @param {string} name The name of the hook.
-       * @param {Object<string, any>} env The environment variables of the hook passed to all callbacks registered.
-       * @public
-       */
-      run(name, env) {
-        this[name] = this[name] || [];
-        this[name].forEach(function(callback) {
-          callback.call(env && env.context ? env.context : env, env);
-        });
+      if (!isNode(node))
+        return null;
+      if (predicate(node))
+        return node;
+      for (const child of Object.values(node)) {
+        const found = findNode(child, predicate);
+        if (found)
+          return found;
       }
-    };
-    var Plugins = class {
-      constructor(jsep2) {
-        this.jsep = jsep2;
-        this.registered = {};
-      }
-      /**
-       * @callback PluginSetup
-       * @this {Jsep} jsep
-       * @returns: void
-       */
-      /**
-       * Adds the given plugin(s) to the registry
-       *
-       * @param {object} plugins
-       * @param {string} plugins.name The name of the plugin
-       * @param {PluginSetup} plugins.init The init function
-       * @public
-       */
-      register(...plugins) {
-        plugins.forEach((plugin2) => {
-          if (typeof plugin2 !== "object" || !plugin2.name || !plugin2.init) {
-            throw new Error("Invalid JSEP plugin format");
-          }
-          if (this.registered[plugin2.name]) {
+      return null;
+    }
+    function ancestorsOf(root, target) {
+      const path = [];
+      const visit = (node) => {
+        if (node === target)
+          return true;
+        if (Array.isArray(node))
+          return node.some(visit);
+        if (!isNode(node))
+          return false;
+        path.push(node);
+        if (Object.values(node).some(visit))
+          return true;
+        path.pop();
+        return false;
+      };
+      return visit(root) ? path.reverse() : [];
+    }
+    var findNodeById2 = (node, id) => findNode(node, (n) => n.id === id);
+    exports.findNodeById = findNodeById2;
+    var findNodeByIdPrefix2 = (node, prefix) => findNode(node, (n) => typeof n.id === "string" && n.id.startsWith(prefix));
+    exports.findNodeByIdPrefix = findNodeByIdPrefix2;
+    function collectPropertyValues2(node, key) {
+      const values = [];
+      walkNodes(node, (n) => {
+        if (key in n)
+          values.push(n[key]);
+      });
+      return values;
+    }
+    function collectMarkdowns2(node) {
+      return collectPropertyValues2(node, "markdown").filter((m) => typeof m === "string");
+    }
+    function childrenOf(node) {
+      const children = node.children ?? node.child;
+      if (Array.isArray(children))
+        return children.filter(isNode);
+      return isNode(children) ? [children] : [];
+    }
+    function collectPriceNodes(node) {
+      const prices = [];
+      walkNodes(node, (n) => {
+        if (n.type === "PRICE" && typeof n.price === "number") {
+          prices.push({ price: n.price, isCrossed: n.isCrossed === true, color: typeof n.color === "string" ? n.color : null });
+        }
+      });
+      return prices;
+    }
+    function collectBadges(node) {
+      const badges = [];
+      const visit = (n) => {
+        if (Array.isArray(n))
+          return n.forEach(visit);
+        if (!isNode(n))
+          return;
+        if (n.type === "CONTAINER" && typeof n.backgroundColor === "string" && typeof n.borderRadius === "number") {
+          const markdown = collectMarkdowns2(n)[0];
+          if (markdown) {
+            const textColor = extractHighlightColor(markdown) ?? collectPropertyValues2(n, "textAttributes").map((attributes) => isNode(attributes) ? attributes.color : void 0).find((color) => typeof color === "string");
+            badges.push({ text: cleanMarkdown2(markdown), textColor: textColor ?? "#333333", backgroundColor: n.backgroundColor });
             return;
           }
-          plugin2.init(this.jsep);
-          this.registered[plugin2.name] = plugin2;
-        });
-      }
-    };
-    var Jsep = class _Jsep {
-      /**
-       * @returns {string}
-       */
-      static get version() {
-        return "1.4.0";
-      }
-      /**
-       * @returns {string}
-       */
-      static toString() {
-        return "JavaScript Expression Parser (JSEP) v" + _Jsep.version;
-      }
-      // ==================== CONFIG ================================
-      /**
-       * @method addUnaryOp
-       * @param {string} op_name The name of the unary op to add
-       * @returns {Jsep}
-       */
-      static addUnaryOp(op_name) {
-        _Jsep.max_unop_len = Math.max(op_name.length, _Jsep.max_unop_len);
-        _Jsep.unary_ops[op_name] = 1;
-        return _Jsep;
-      }
-      /**
-       * @method jsep.addBinaryOp
-       * @param {string} op_name The name of the binary op to add
-       * @param {number} precedence The precedence of the binary op (can be a float). Higher number = higher precedence
-       * @param {boolean} [isRightAssociative=false] whether operator is right-associative
-       * @returns {Jsep}
-       */
-      static addBinaryOp(op_name, precedence, isRightAssociative) {
-        _Jsep.max_binop_len = Math.max(op_name.length, _Jsep.max_binop_len);
-        _Jsep.binary_ops[op_name] = precedence;
-        if (isRightAssociative) {
-          _Jsep.right_associative.add(op_name);
-        } else {
-          _Jsep.right_associative.delete(op_name);
         }
-        return _Jsep;
-      }
-      /**
-       * @method addIdentifierChar
-       * @param {string} char The additional character to treat as a valid part of an identifier
-       * @returns {Jsep}
-       */
-      static addIdentifierChar(char) {
-        _Jsep.additional_identifier_chars.add(char);
-        return _Jsep;
-      }
-      /**
-       * @method addLiteral
-       * @param {string} literal_name The name of the literal to add
-       * @param {*} literal_value The value of the literal
-       * @returns {Jsep}
-       */
-      static addLiteral(literal_name, literal_value) {
-        _Jsep.literals[literal_name] = literal_value;
-        return _Jsep;
-      }
-      /**
-       * @method removeUnaryOp
-       * @param {string} op_name The name of the unary op to remove
-       * @returns {Jsep}
-       */
-      static removeUnaryOp(op_name) {
-        delete _Jsep.unary_ops[op_name];
-        if (op_name.length === _Jsep.max_unop_len) {
-          _Jsep.max_unop_len = _Jsep.getMaxKeyLen(_Jsep.unary_ops);
-        }
-        return _Jsep;
-      }
-      /**
-       * @method removeAllUnaryOps
-       * @returns {Jsep}
-       */
-      static removeAllUnaryOps() {
-        _Jsep.unary_ops = {};
-        _Jsep.max_unop_len = 0;
-        return _Jsep;
-      }
-      /**
-       * @method removeIdentifierChar
-       * @param {string} char The additional character to stop treating as a valid part of an identifier
-       * @returns {Jsep}
-       */
-      static removeIdentifierChar(char) {
-        _Jsep.additional_identifier_chars.delete(char);
-        return _Jsep;
-      }
-      /**
-       * @method removeBinaryOp
-       * @param {string} op_name The name of the binary op to remove
-       * @returns {Jsep}
-       */
-      static removeBinaryOp(op_name) {
-        delete _Jsep.binary_ops[op_name];
-        if (op_name.length === _Jsep.max_binop_len) {
-          _Jsep.max_binop_len = _Jsep.getMaxKeyLen(_Jsep.binary_ops);
-        }
-        _Jsep.right_associative.delete(op_name);
-        return _Jsep;
-      }
-      /**
-       * @method removeAllBinaryOps
-       * @returns {Jsep}
-       */
-      static removeAllBinaryOps() {
-        _Jsep.binary_ops = {};
-        _Jsep.max_binop_len = 0;
-        return _Jsep;
-      }
-      /**
-       * @method removeLiteral
-       * @param {string} literal_name The name of the literal to remove
-       * @returns {Jsep}
-       */
-      static removeLiteral(literal_name) {
-        delete _Jsep.literals[literal_name];
-        return _Jsep;
-      }
-      /**
-       * @method removeAllLiterals
-       * @returns {Jsep}
-       */
-      static removeAllLiterals() {
-        _Jsep.literals = {};
-        return _Jsep;
-      }
-      // ==================== END CONFIG ============================
-      /**
-       * @returns {string}
-       */
-      get char() {
-        return this.expr.charAt(this.index);
-      }
-      /**
-       * @returns {number}
-       */
-      get code() {
-        return this.expr.charCodeAt(this.index);
-      }
-      /**
-       * @param {string} expr a string with the passed in express
-       * @returns Jsep
-       */
-      constructor(expr) {
-        this.expr = expr;
-        this.index = 0;
-      }
-      /**
-       * static top-level parser
-       * @returns {jsep.Expression}
-       */
-      static parse(expr) {
-        return new _Jsep(expr).parse();
-      }
-      /**
-       * Get the longest key length of any object
-       * @param {object} obj
-       * @returns {number}
-       */
-      static getMaxKeyLen(obj) {
-        return Math.max(0, ...Object.keys(obj).map((k) => k.length));
-      }
-      /**
-       * `ch` is a character code in the next three functions
-       * @param {number} ch
-       * @returns {boolean}
-       */
-      static isDecimalDigit(ch) {
-        return ch >= 48 && ch <= 57;
-      }
-      /**
-       * Returns the precedence of a binary operator or `0` if it isn't a binary operator. Can be float.
-       * @param {string} op_val
-       * @returns {number}
-       */
-      static binaryPrecedence(op_val) {
-        return _Jsep.binary_ops[op_val] || 0;
-      }
-      /**
-       * Looks for start of identifier
-       * @param {number} ch
-       * @returns {boolean}
-       */
-      static isIdentifierStart(ch) {
-        return ch >= 65 && ch <= 90 || // A...Z
-        ch >= 97 && ch <= 122 || // a...z
-        ch >= 128 && !_Jsep.binary_ops[String.fromCharCode(ch)] || // any non-ASCII that is not an operator
-        _Jsep.additional_identifier_chars.has(String.fromCharCode(ch));
-      }
-      /**
-       * @param {number} ch
-       * @returns {boolean}
-       */
-      static isIdentifierPart(ch) {
-        return _Jsep.isIdentifierStart(ch) || _Jsep.isDecimalDigit(ch);
-      }
-      /**
-       * throw error at index of the expression
-       * @param {string} message
-       * @throws
-       */
-      throwError(message) {
-        const error2 = new Error(message + " at character " + this.index);
-        error2.index = this.index;
-        error2.description = message;
-        throw error2;
-      }
-      /**
-       * Run a given hook
-       * @param {string} name
-       * @param {jsep.Expression|false} [node]
-       * @returns {?jsep.Expression}
-       */
-      runHook(name, node) {
-        if (_Jsep.hooks[name]) {
-          const env = {
-            context: this,
-            node
-          };
-          _Jsep.hooks.run(name, env);
-          return env.node;
-        }
-        return node;
-      }
-      /**
-       * Runs a given hook until one returns a node
-       * @param {string} name
-       * @returns {?jsep.Expression}
-       */
-      searchHook(name) {
-        if (_Jsep.hooks[name]) {
-          const env = {
-            context: this
-          };
-          _Jsep.hooks[name].find(function(callback) {
-            callback.call(env.context, env);
-            return env.node;
-          });
-          return env.node;
-        }
-      }
-      /**
-       * Push `index` up to the next non-space character
-       */
-      gobbleSpaces() {
-        let ch = this.code;
-        while (ch === _Jsep.SPACE_CODE || ch === _Jsep.TAB_CODE || ch === _Jsep.LF_CODE || ch === _Jsep.CR_CODE) {
-          ch = this.expr.charCodeAt(++this.index);
-        }
-        this.runHook("gobble-spaces");
-      }
-      /**
-       * Top-level method to parse all expressions and returns compound or single node
-       * @returns {jsep.Expression}
-       */
-      parse() {
-        this.runHook("before-all");
-        const nodes = this.gobbleExpressions();
-        const node = nodes.length === 1 ? nodes[0] : {
-          type: _Jsep.COMPOUND,
-          body: nodes
-        };
-        return this.runHook("after-all", node);
-      }
-      /**
-       * top-level parser (but can be reused within as well)
-       * @param {number} [untilICode]
-       * @returns {jsep.Expression[]}
-       */
-      gobbleExpressions(untilICode) {
-        let nodes = [], ch_i, node;
-        while (this.index < this.expr.length) {
-          ch_i = this.code;
-          if (ch_i === _Jsep.SEMCOL_CODE || ch_i === _Jsep.COMMA_CODE) {
-            this.index++;
-          } else {
-            if (node = this.gobbleExpression()) {
-              nodes.push(node);
-            } else if (this.index < this.expr.length) {
-              if (ch_i === untilICode) {
-                break;
-              }
-              this.throwError('Unexpected "' + this.char + '"');
-            }
-          }
-        }
-        return nodes;
-      }
-      /**
-       * The main parsing function.
-       * @returns {?jsep.Expression}
-       */
-      gobbleExpression() {
-        const node = this.searchHook("gobble-expression") || this.gobbleBinaryExpression();
-        this.gobbleSpaces();
-        return this.runHook("after-expression", node);
-      }
-      /**
-       * Search for the operation portion of the string (e.g. `+`, `===`)
-       * Start by taking the longest possible binary operations (3 characters: `===`, `!==`, `>>>`)
-       * and move down from 3 to 2 to 1 character until a matching binary operation is found
-       * then, return that binary operation
-       * @returns {string|boolean}
-       */
-      gobbleBinaryOp() {
-        this.gobbleSpaces();
-        let to_check = this.expr.substr(this.index, _Jsep.max_binop_len);
-        let tc_len = to_check.length;
-        while (tc_len > 0) {
-          if (_Jsep.binary_ops.hasOwnProperty(to_check) && (!_Jsep.isIdentifierStart(this.code) || this.index + to_check.length < this.expr.length && !_Jsep.isIdentifierPart(this.expr.charCodeAt(this.index + to_check.length)))) {
-            this.index += tc_len;
-            return to_check;
-          }
-          to_check = to_check.substr(0, --tc_len);
-        }
-        return false;
-      }
-      /**
-       * This function is responsible for gobbling an individual expression,
-       * e.g. `1`, `1+2`, `a+(b*2)-Math.sqrt(2)`
-       * @returns {?jsep.BinaryExpression}
-       */
-      gobbleBinaryExpression() {
-        let node, biop, prec, stack, biop_info, left, right, i, cur_biop;
-        left = this.gobbleToken();
-        if (!left) {
-          return left;
-        }
-        biop = this.gobbleBinaryOp();
-        if (!biop) {
-          return left;
-        }
-        biop_info = {
-          value: biop,
-          prec: _Jsep.binaryPrecedence(biop),
-          right_a: _Jsep.right_associative.has(biop)
-        };
-        right = this.gobbleToken();
-        if (!right) {
-          this.throwError("Expected expression after " + biop);
-        }
-        stack = [left, biop_info, right];
-        while (biop = this.gobbleBinaryOp()) {
-          prec = _Jsep.binaryPrecedence(biop);
-          if (prec === 0) {
-            this.index -= biop.length;
-            break;
-          }
-          biop_info = {
-            value: biop,
-            prec,
-            right_a: _Jsep.right_associative.has(biop)
-          };
-          cur_biop = biop;
-          const comparePrev = (prev) => biop_info.right_a && prev.right_a ? prec > prev.prec : prec <= prev.prec;
-          while (stack.length > 2 && comparePrev(stack[stack.length - 2])) {
-            right = stack.pop();
-            biop = stack.pop().value;
-            left = stack.pop();
-            node = {
-              type: _Jsep.BINARY_EXP,
-              operator: biop,
-              left,
-              right
-            };
-            stack.push(node);
-          }
-          node = this.gobbleToken();
-          if (!node) {
-            this.throwError("Expected expression after " + cur_biop);
-          }
-          stack.push(biop_info, node);
-        }
-        i = stack.length - 1;
-        node = stack[i];
-        while (i > 1) {
-          node = {
-            type: _Jsep.BINARY_EXP,
-            operator: stack[i - 1].value,
-            left: stack[i - 2],
-            right: node
-          };
-          i -= 2;
-        }
-        return node;
-      }
-      /**
-       * An individual part of a binary expression:
-       * e.g. `foo.bar(baz)`, `1`, `"abc"`, `(a % 2)` (because it's in parenthesis)
-       * @returns {boolean|jsep.Expression}
-       */
-      gobbleToken() {
-        let ch, to_check, tc_len, node;
-        this.gobbleSpaces();
-        node = this.searchHook("gobble-token");
-        if (node) {
-          return this.runHook("after-token", node);
-        }
-        ch = this.code;
-        if (_Jsep.isDecimalDigit(ch) || ch === _Jsep.PERIOD_CODE) {
-          return this.gobbleNumericLiteral();
-        }
-        if (ch === _Jsep.SQUOTE_CODE || ch === _Jsep.DQUOTE_CODE) {
-          node = this.gobbleStringLiteral();
-        } else if (ch === _Jsep.OBRACK_CODE) {
-          node = this.gobbleArray();
-        } else {
-          to_check = this.expr.substr(this.index, _Jsep.max_unop_len);
-          tc_len = to_check.length;
-          while (tc_len > 0) {
-            if (_Jsep.unary_ops.hasOwnProperty(to_check) && (!_Jsep.isIdentifierStart(this.code) || this.index + to_check.length < this.expr.length && !_Jsep.isIdentifierPart(this.expr.charCodeAt(this.index + to_check.length)))) {
-              this.index += tc_len;
-              const argument = this.gobbleToken();
-              if (!argument) {
-                this.throwError("missing unaryOp argument");
-              }
-              return this.runHook("after-token", {
-                type: _Jsep.UNARY_EXP,
-                operator: to_check,
-                argument,
-                prefix: true
-              });
-            }
-            to_check = to_check.substr(0, --tc_len);
-          }
-          if (_Jsep.isIdentifierStart(ch)) {
-            node = this.gobbleIdentifier();
-            if (_Jsep.literals.hasOwnProperty(node.name)) {
-              node = {
-                type: _Jsep.LITERAL,
-                value: _Jsep.literals[node.name],
-                raw: node.name
-              };
-            } else if (node.name === _Jsep.this_str) {
-              node = {
-                type: _Jsep.THIS_EXP
-              };
-            }
-          } else if (ch === _Jsep.OPAREN_CODE) {
-            node = this.gobbleGroup();
-          }
-        }
-        if (!node) {
-          return this.runHook("after-token", false);
-        }
-        node = this.gobbleTokenProperty(node);
-        return this.runHook("after-token", node);
-      }
-      /**
-       * Gobble properties of of identifiers/strings/arrays/groups.
-       * e.g. `foo`, `bar.baz`, `foo['bar'].baz`
-       * It also gobbles function calls:
-       * e.g. `Math.acos(obj.angle)`
-       * @param {jsep.Expression} node
-       * @returns {jsep.Expression}
-       */
-      gobbleTokenProperty(node) {
-        this.gobbleSpaces();
-        let ch = this.code;
-        while (ch === _Jsep.PERIOD_CODE || ch === _Jsep.OBRACK_CODE || ch === _Jsep.OPAREN_CODE || ch === _Jsep.QUMARK_CODE) {
-          let optional;
-          if (ch === _Jsep.QUMARK_CODE) {
-            if (this.expr.charCodeAt(this.index + 1) !== _Jsep.PERIOD_CODE) {
-              break;
-            }
-            optional = true;
-            this.index += 2;
-            this.gobbleSpaces();
-            ch = this.code;
-          }
-          this.index++;
-          if (ch === _Jsep.OBRACK_CODE) {
-            node = {
-              type: _Jsep.MEMBER_EXP,
-              computed: true,
-              object: node,
-              property: this.gobbleExpression()
-            };
-            if (!node.property) {
-              this.throwError('Unexpected "' + this.char + '"');
-            }
-            this.gobbleSpaces();
-            ch = this.code;
-            if (ch !== _Jsep.CBRACK_CODE) {
-              this.throwError("Unclosed [");
-            }
-            this.index++;
-          } else if (ch === _Jsep.OPAREN_CODE) {
-            node = {
-              type: _Jsep.CALL_EXP,
-              "arguments": this.gobbleArguments(_Jsep.CPAREN_CODE),
-              callee: node
-            };
-          } else if (ch === _Jsep.PERIOD_CODE || optional) {
-            if (optional) {
-              this.index--;
-            }
-            this.gobbleSpaces();
-            node = {
-              type: _Jsep.MEMBER_EXP,
-              computed: false,
-              object: node,
-              property: this.gobbleIdentifier()
-            };
-          }
-          if (optional) {
-            node.optional = true;
-          }
-          this.gobbleSpaces();
-          ch = this.code;
-        }
-        return node;
-      }
-      /**
-       * Parse simple numeric literals: `12`, `3.4`, `.5`. Do this by using a string to
-       * keep track of everything in the numeric literal and then calling `parseFloat` on that string
-       * @returns {jsep.Literal}
-       */
-      gobbleNumericLiteral() {
-        let number = "", ch, chCode;
-        while (_Jsep.isDecimalDigit(this.code)) {
-          number += this.expr.charAt(this.index++);
-        }
-        if (this.code === _Jsep.PERIOD_CODE) {
-          number += this.expr.charAt(this.index++);
-          while (_Jsep.isDecimalDigit(this.code)) {
-            number += this.expr.charAt(this.index++);
-          }
-        }
-        ch = this.char;
-        if (ch === "e" || ch === "E") {
-          number += this.expr.charAt(this.index++);
-          ch = this.char;
-          if (ch === "+" || ch === "-") {
-            number += this.expr.charAt(this.index++);
-          }
-          while (_Jsep.isDecimalDigit(this.code)) {
-            number += this.expr.charAt(this.index++);
-          }
-          if (!_Jsep.isDecimalDigit(this.expr.charCodeAt(this.index - 1))) {
-            this.throwError("Expected exponent (" + number + this.char + ")");
-          }
-        }
-        chCode = this.code;
-        if (_Jsep.isIdentifierStart(chCode)) {
-          this.throwError("Variable names cannot start with a number (" + number + this.char + ")");
-        } else if (chCode === _Jsep.PERIOD_CODE || number.length === 1 && number.charCodeAt(0) === _Jsep.PERIOD_CODE) {
-          this.throwError("Unexpected period");
-        }
-        return {
-          type: _Jsep.LITERAL,
-          value: parseFloat(number),
-          raw: number
-        };
-      }
-      /**
-       * Parses a string literal, staring with single or double quotes with basic support for escape codes
-       * e.g. `"hello world"`, `'this is\nJSEP'`
-       * @returns {jsep.Literal}
-       */
-      gobbleStringLiteral() {
-        let str = "";
-        const startIndex = this.index;
-        const quote = this.expr.charAt(this.index++);
-        let closed = false;
-        while (this.index < this.expr.length) {
-          let ch = this.expr.charAt(this.index++);
-          if (ch === quote) {
-            closed = true;
-            break;
-          } else if (ch === "\\") {
-            ch = this.expr.charAt(this.index++);
-            switch (ch) {
-              case "n":
-                str += "\n";
-                break;
-              case "r":
-                str += "\r";
-                break;
-              case "t":
-                str += "	";
-                break;
-              case "b":
-                str += "\b";
-                break;
-              case "f":
-                str += "\f";
-                break;
-              case "v":
-                str += "\v";
-                break;
-              default:
-                str += ch;
-            }
-          } else {
-            str += ch;
-          }
-        }
-        if (!closed) {
-          this.throwError('Unclosed quote after "' + str + '"');
-        }
-        return {
-          type: _Jsep.LITERAL,
-          value: str,
-          raw: this.expr.substring(startIndex, this.index)
-        };
-      }
-      /**
-       * Gobbles only identifiers
-       * e.g.: `foo`, `_value`, `$x1`
-       * Also, this function checks if that identifier is a literal:
-       * (e.g. `true`, `false`, `null`) or `this`
-       * @returns {jsep.Identifier}
-       */
-      gobbleIdentifier() {
-        let ch = this.code, start = this.index;
-        if (_Jsep.isIdentifierStart(ch)) {
-          this.index++;
-        } else {
-          this.throwError("Unexpected " + this.char);
-        }
-        while (this.index < this.expr.length) {
-          ch = this.code;
-          if (_Jsep.isIdentifierPart(ch)) {
-            this.index++;
-          } else {
-            break;
-          }
-        }
-        return {
-          type: _Jsep.IDENTIFIER,
-          name: this.expr.slice(start, this.index)
-        };
-      }
-      /**
-       * Gobbles a list of arguments within the context of a function call
-       * or array literal. This function also assumes that the opening character
-       * `(` or `[` has already been gobbled, and gobbles expressions and commas
-       * until the terminator character `)` or `]` is encountered.
-       * e.g. `foo(bar, baz)`, `my_func()`, or `[bar, baz]`
-       * @param {number} termination
-       * @returns {jsep.Expression[]}
-       */
-      gobbleArguments(termination) {
-        const args = [];
-        let closed = false;
-        let separator_count = 0;
-        while (this.index < this.expr.length) {
-          this.gobbleSpaces();
-          let ch_i = this.code;
-          if (ch_i === termination) {
-            closed = true;
-            this.index++;
-            if (termination === _Jsep.CPAREN_CODE && separator_count && separator_count >= args.length) {
-              this.throwError("Unexpected token " + String.fromCharCode(termination));
-            }
-            break;
-          } else if (ch_i === _Jsep.COMMA_CODE) {
-            this.index++;
-            separator_count++;
-            if (separator_count !== args.length) {
-              if (termination === _Jsep.CPAREN_CODE) {
-                this.throwError("Unexpected token ,");
-              } else if (termination === _Jsep.CBRACK_CODE) {
-                for (let arg = args.length; arg < separator_count; arg++) {
-                  args.push(null);
-                }
-              }
-            }
-          } else if (args.length !== separator_count && separator_count !== 0) {
-            this.throwError("Expected comma");
-          } else {
-            const node = this.gobbleExpression();
-            if (!node || node.type === _Jsep.COMPOUND) {
-              this.throwError("Expected comma");
-            }
-            args.push(node);
-          }
-        }
-        if (!closed) {
-          this.throwError("Expected " + String.fromCharCode(termination));
-        }
-        return args;
-      }
-      /**
-       * Responsible for parsing a group of things within parentheses `()`
-       * that have no identifier in front (so not a function call)
-       * This function assumes that it needs to gobble the opening parenthesis
-       * and then tries to gobble everything within that parenthesis, assuming
-       * that the next thing it should see is the close parenthesis. If not,
-       * then the expression probably doesn't have a `)`
-       * @returns {boolean|jsep.Expression}
-       */
-      gobbleGroup() {
-        this.index++;
-        let nodes = this.gobbleExpressions(_Jsep.CPAREN_CODE);
-        if (this.code === _Jsep.CPAREN_CODE) {
-          this.index++;
-          if (nodes.length === 1) {
-            return nodes[0];
-          } else if (!nodes.length) {
-            return false;
-          } else {
-            return {
-              type: _Jsep.SEQUENCE_EXP,
-              expressions: nodes
-            };
-          }
-        } else {
-          this.throwError("Unclosed (");
-        }
-      }
-      /**
-       * Responsible for parsing Array literals `[1, 2, 3]`
-       * This function assumes that it needs to gobble the opening bracket
-       * and then tries to gobble the expressions as arguments.
-       * @returns {jsep.ArrayExpression}
-       */
-      gobbleArray() {
-        this.index++;
-        return {
-          type: _Jsep.ARRAY_EXP,
-          elements: this.gobbleArguments(_Jsep.CBRACK_CODE)
-        };
-      }
-    };
-    var hooks = new Hooks();
-    Object.assign(Jsep, {
-      hooks,
-      plugins: new Plugins(Jsep),
-      // Node Types
-      // ----------
-      // This is the full set of types that any JSEP node can be.
-      // Store them here to save space when minified
-      COMPOUND: "Compound",
-      SEQUENCE_EXP: "SequenceExpression",
-      IDENTIFIER: "Identifier",
-      MEMBER_EXP: "MemberExpression",
-      LITERAL: "Literal",
-      THIS_EXP: "ThisExpression",
-      CALL_EXP: "CallExpression",
-      UNARY_EXP: "UnaryExpression",
-      BINARY_EXP: "BinaryExpression",
-      ARRAY_EXP: "ArrayExpression",
-      TAB_CODE: 9,
-      LF_CODE: 10,
-      CR_CODE: 13,
-      SPACE_CODE: 32,
-      PERIOD_CODE: 46,
-      // '.'
-      COMMA_CODE: 44,
-      // ','
-      SQUOTE_CODE: 39,
-      // single quote
-      DQUOTE_CODE: 34,
-      // double quotes
-      OPAREN_CODE: 40,
-      // (
-      CPAREN_CODE: 41,
-      // )
-      OBRACK_CODE: 91,
-      // [
-      CBRACK_CODE: 93,
-      // ]
-      QUMARK_CODE: 63,
-      // ?
-      SEMCOL_CODE: 59,
-      // ;
-      COLON_CODE: 58,
-      // :
-      // Operations
-      // ----------
-      // Use a quickly-accessible map to store all of the unary operators
-      // Values are set to `1` (it really doesn't matter)
-      unary_ops: {
-        "-": 1,
-        "!": 1,
-        "~": 1,
-        "+": 1
-      },
-      // Also use a map for the binary operations but set their values to their
-      // binary precedence for quick reference (higher number = higher precedence)
-      // see [Order of operations](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Operators/Operator_Precedence)
-      binary_ops: {
-        "||": 1,
-        "??": 1,
-        "&&": 2,
-        "|": 3,
-        "^": 4,
-        "&": 5,
-        "==": 6,
-        "!=": 6,
-        "===": 6,
-        "!==": 6,
-        "<": 7,
-        ">": 7,
-        "<=": 7,
-        ">=": 7,
-        "<<": 8,
-        ">>": 8,
-        ">>>": 8,
-        "+": 9,
-        "-": 9,
-        "*": 10,
-        "/": 10,
-        "%": 10,
-        "**": 11
-      },
-      // sets specific binary_ops as right-associative
-      right_associative: /* @__PURE__ */ new Set(["**"]),
-      // Additional valid identifier chars, apart from a-z, A-Z and 0-9 (except on the starting char)
-      additional_identifier_chars: /* @__PURE__ */ new Set(["$", "_"]),
-      // Literals
-      // ----------
-      // Store the values to return for the various literals we may encounter
-      literals: {
-        "true": true,
-        "false": false,
-        "null": null
-      },
-      // Except for `this`, which is special. This could be changed to something like `'self'` as well
-      this_str: "this"
-    });
-    Jsep.max_unop_len = Jsep.getMaxKeyLen(Jsep.unary_ops);
-    Jsep.max_binop_len = Jsep.getMaxKeyLen(Jsep.binary_ops);
-    var jsep = (expr) => new Jsep(expr).parse();
-    var stdClassProps = Object.getOwnPropertyNames(class Test {
-    });
-    Object.getOwnPropertyNames(Jsep).filter((prop) => !stdClassProps.includes(prop) && jsep[prop] === void 0).forEach((m) => {
-      jsep[m] = Jsep[m];
-    });
-    jsep.Jsep = Jsep;
-    var CONDITIONAL_EXP = "ConditionalExpression";
-    var ternary = {
-      name: "ternary",
-      init(jsep2) {
-        jsep2.hooks.add("after-expression", function gobbleTernary(env) {
-          if (env.node && this.code === jsep2.QUMARK_CODE) {
-            this.index++;
-            const test = env.node;
-            const consequent = this.gobbleExpression();
-            if (!consequent) {
-              this.throwError("Expected expression");
-            }
-            this.gobbleSpaces();
-            if (this.code === jsep2.COLON_CODE) {
-              this.index++;
-              const alternate = this.gobbleExpression();
-              if (!alternate) {
-                this.throwError("Expected expression");
-              }
-              env.node = {
-                type: CONDITIONAL_EXP,
-                test,
-                consequent,
-                alternate
-              };
-              if (test.operator && jsep2.binary_ops[test.operator] <= 0.9) {
-                let newTest = test;
-                while (newTest.right.operator && jsep2.binary_ops[newTest.right.operator] <= 0.9) {
-                  newTest = newTest.right;
-                }
-                env.node.test = newTest.right;
-                newTest.right = env.node;
-                env.node = test;
-              }
-            } else {
-              this.throwError("Expected :");
-            }
-          }
-        });
-      }
-    };
-    jsep.plugins.register(ternary);
-    var FSLASH_CODE = 47;
-    var BSLASH_CODE = 92;
-    var index = {
-      name: "regex",
-      init(jsep2) {
-        jsep2.hooks.add("gobble-token", function gobbleRegexLiteral(env) {
-          if (this.code === FSLASH_CODE) {
-            const patternIndex = ++this.index;
-            let inCharSet = false;
-            while (this.index < this.expr.length) {
-              if (this.code === FSLASH_CODE && !inCharSet) {
-                const pattern = this.expr.slice(patternIndex, this.index);
-                let flags = "";
-                while (++this.index < this.expr.length) {
-                  const code = this.code;
-                  if (code >= 97 && code <= 122 || code >= 65 && code <= 90 || code >= 48 && code <= 57) {
-                    flags += this.char;
-                  } else {
-                    break;
-                  }
-                }
-                let value;
-                try {
-                  value = new RegExp(pattern, flags);
-                } catch (e) {
-                  this.throwError(e.message);
-                }
-                env.node = {
-                  type: jsep2.LITERAL,
-                  value,
-                  raw: this.expr.slice(patternIndex - 1, this.index)
-                };
-                env.node = this.gobbleTokenProperty(env.node);
-                return env.node;
-              }
-              if (this.code === jsep2.OBRACK_CODE) {
-                inCharSet = true;
-              } else if (inCharSet && this.code === jsep2.CBRACK_CODE) {
-                inCharSet = false;
-              }
-              this.index += this.code === BSLASH_CODE ? 2 : 1;
-            }
-            this.throwError("Unclosed Regex");
-          }
-        });
-      }
-    };
-    var PLUS_CODE = 43;
-    var MINUS_CODE = 45;
-    var plugin = {
-      name: "assignment",
-      assignmentOperators: /* @__PURE__ */ new Set(["=", "*=", "**=", "/=", "%=", "+=", "-=", "<<=", ">>=", ">>>=", "&=", "^=", "|=", "||=", "&&=", "??="]),
-      updateOperators: [PLUS_CODE, MINUS_CODE],
-      assignmentPrecedence: 0.9,
-      init(jsep2) {
-        const updateNodeTypes = [jsep2.IDENTIFIER, jsep2.MEMBER_EXP];
-        plugin.assignmentOperators.forEach((op) => jsep2.addBinaryOp(op, plugin.assignmentPrecedence, true));
-        jsep2.hooks.add("gobble-token", function gobbleUpdatePrefix(env) {
-          const code = this.code;
-          if (plugin.updateOperators.some((c) => c === code && c === this.expr.charCodeAt(this.index + 1))) {
-            this.index += 2;
-            env.node = {
-              type: "UpdateExpression",
-              operator: code === PLUS_CODE ? "++" : "--",
-              argument: this.gobbleTokenProperty(this.gobbleIdentifier()),
-              prefix: true
-            };
-            if (!env.node.argument || !updateNodeTypes.includes(env.node.argument.type)) {
-              this.throwError(`Unexpected ${env.node.operator}`);
-            }
-          }
-        });
-        jsep2.hooks.add("after-token", function gobbleUpdatePostfix(env) {
-          if (env.node) {
-            const code = this.code;
-            if (plugin.updateOperators.some((c) => c === code && c === this.expr.charCodeAt(this.index + 1))) {
-              if (!updateNodeTypes.includes(env.node.type)) {
-                this.throwError(`Unexpected ${env.node.operator}`);
-              }
-              this.index += 2;
-              env.node = {
-                type: "UpdateExpression",
-                operator: code === PLUS_CODE ? "++" : "--",
-                argument: env.node,
-                prefix: false
-              };
-            }
-          }
-        });
-        jsep2.hooks.add("after-expression", function gobbleAssignment(env) {
-          if (env.node) {
-            updateBinariesToAssignments(env.node);
-          }
-        });
-        function updateBinariesToAssignments(node) {
-          if (plugin.assignmentOperators.has(node.operator)) {
-            node.type = "AssignmentExpression";
-            updateBinariesToAssignments(node.left);
-            updateBinariesToAssignments(node.right);
-          } else if (!node.operator) {
-            Object.values(node).forEach((val) => {
-              if (val && typeof val === "object") {
-                updateBinariesToAssignments(val);
-              }
-            });
-          }
-        }
-      }
-    };
-    jsep.plugins.register(index, plugin);
-    jsep.addUnaryOp("typeof");
-    jsep.addUnaryOp("void");
-    jsep.addLiteral("null", null);
-    jsep.addLiteral("undefined", void 0);
-    var BLOCKED_PROTO_PROPERTIES = /* @__PURE__ */ new Set(["constructor", "__proto__", "__defineGetter__", "__defineSetter__", "__lookupGetter__", "__lookupSetter__"]);
-    var SafeEval = {
-      /**
-       * @param {jsep.Expression} ast
-       * @param {Record<string, any>} subs
-       */
-      evalAst(ast, subs) {
-        switch (ast.type) {
-          case "BinaryExpression":
-          case "LogicalExpression":
-            return SafeEval.evalBinaryExpression(ast, subs);
-          case "Compound":
-            return SafeEval.evalCompound(ast, subs);
-          case "ConditionalExpression":
-            return SafeEval.evalConditionalExpression(ast, subs);
-          case "Identifier":
-            return SafeEval.evalIdentifier(ast, subs);
-          case "Literal":
-            return SafeEval.evalLiteral(ast, subs);
-          case "MemberExpression":
-            return SafeEval.evalMemberExpression(ast, subs);
-          case "UnaryExpression":
-            return SafeEval.evalUnaryExpression(ast, subs);
-          case "ArrayExpression":
-            return SafeEval.evalArrayExpression(ast, subs);
-          case "CallExpression":
-            return SafeEval.evalCallExpression(ast, subs);
-          case "AssignmentExpression":
-            return SafeEval.evalAssignmentExpression(ast, subs);
-          default:
-            throw SyntaxError("Unexpected expression", ast);
-        }
-      },
-      evalBinaryExpression(ast, subs) {
-        const result = {
-          "||": (a, b) => a || b(),
-          "&&": (a, b) => a && b(),
-          "|": (a, b) => a | b(),
-          "^": (a, b) => a ^ b(),
-          "&": (a, b) => a & b(),
-          // eslint-disable-next-line eqeqeq -- API
-          "==": (a, b) => a == b(),
-          // eslint-disable-next-line eqeqeq -- API
-          "!=": (a, b) => a != b(),
-          "===": (a, b) => a === b(),
-          "!==": (a, b) => a !== b(),
-          "<": (a, b) => a < b(),
-          ">": (a, b) => a > b(),
-          "<=": (a, b) => a <= b(),
-          ">=": (a, b) => a >= b(),
-          "<<": (a, b) => a << b(),
-          ">>": (a, b) => a >> b(),
-          ">>>": (a, b) => a >>> b(),
-          "+": (a, b) => a + b(),
-          "-": (a, b) => a - b(),
-          "*": (a, b) => a * b(),
-          "/": (a, b) => a / b(),
-          "%": (a, b) => a % b()
-        }[ast.operator](SafeEval.evalAst(ast.left, subs), () => SafeEval.evalAst(ast.right, subs));
-        return result;
-      },
-      evalCompound(ast, subs) {
-        let last;
-        for (let i = 0; i < ast.body.length; i++) {
-          if (ast.body[i].type === "Identifier" && ["var", "let", "const"].includes(ast.body[i].name) && ast.body[i + 1] && ast.body[i + 1].type === "AssignmentExpression") {
-            i += 1;
-          }
-          const expr = ast.body[i];
-          last = SafeEval.evalAst(expr, subs);
-        }
-        return last;
-      },
-      evalConditionalExpression(ast, subs) {
-        if (SafeEval.evalAst(ast.test, subs)) {
-          return SafeEval.evalAst(ast.consequent, subs);
-        }
-        return SafeEval.evalAst(ast.alternate, subs);
-      },
-      evalIdentifier(ast, subs) {
-        if (Object.hasOwn(subs, ast.name)) {
-          return subs[ast.name];
-        }
-        throw ReferenceError(`${ast.name} is not defined`);
-      },
-      evalLiteral(ast) {
-        return ast.value;
-      },
-      evalMemberExpression(ast, subs) {
-        const prop = String(
-          // NOTE: `String(value)` throws error when
-          // value has overwritten the toString method to return non-string
-          // i.e. `value = {toString: () => []}`
-          ast.computed ? SafeEval.evalAst(ast.property) : ast.property.name
-          // `object.property` property is Identifier
-        );
-        const obj = SafeEval.evalAst(ast.object, subs);
-        if (obj === void 0 || obj === null) {
-          throw TypeError(`Cannot read properties of ${obj} (reading '${prop}')`);
-        }
-        if (!Object.hasOwn(obj, prop) && BLOCKED_PROTO_PROPERTIES.has(prop)) {
-          throw TypeError(`Cannot read properties of ${obj} (reading '${prop}')`);
-        }
-        const result = obj[prop];
-        if (typeof result === "function") {
-          return result.bind(obj);
-        }
-        return result;
-      },
-      evalUnaryExpression(ast, subs) {
-        const result = {
-          "-": (a) => -SafeEval.evalAst(a, subs),
-          "!": (a) => !SafeEval.evalAst(a, subs),
-          "~": (a) => ~SafeEval.evalAst(a, subs),
-          // eslint-disable-next-line no-implicit-coercion -- API
-          "+": (a) => +SafeEval.evalAst(a, subs),
-          typeof: (a) => typeof SafeEval.evalAst(a, subs),
-          // eslint-disable-next-line no-void, sonarjs/void-use -- feature
-          void: (a) => void SafeEval.evalAst(a, subs)
-        }[ast.operator](ast.argument);
-        return result;
-      },
-      evalArrayExpression(ast, subs) {
-        return ast.elements.map((el) => SafeEval.evalAst(el, subs));
-      },
-      evalCallExpression(ast, subs) {
-        const args = ast.arguments.map((arg) => SafeEval.evalAst(arg, subs));
-        const func = SafeEval.evalAst(ast.callee, subs);
-        if (func === Function) {
-          throw new Error("Function constructor is disabled");
-        }
-        return func(...args);
-      },
-      evalAssignmentExpression(ast, subs) {
-        if (ast.left.type !== "Identifier") {
-          throw SyntaxError("Invalid left-hand side in assignment");
-        }
-        const id = ast.left.name;
-        const value = SafeEval.evalAst(ast.right, subs);
-        subs[id] = value;
-        return subs[id];
-      }
-    };
-    var SafeScript = class {
-      /**
-       * @param {string} expr Expression to evaluate
-       */
-      constructor(expr) {
-        this.code = expr;
-        this.ast = jsep(this.code);
-      }
-      /**
-       * @param {object} context Object whose items will be added
-       *   to evaluation
-       * @returns {EvaluatedResult} Result of evaluated code
-       */
-      runInNewContext(context) {
-        const keyMap = Object.assign(/* @__PURE__ */ Object.create(null), context);
-        return SafeEval.evalAst(this.ast, keyMap);
-      }
-    };
-    function push(arr, item) {
-      arr = arr.slice();
-      arr.push(item);
-      return arr;
-    }
-    function unshift(item, arr) {
-      arr = arr.slice();
-      arr.unshift(item);
-      return arr;
-    }
-    var NewError = class extends Error {
-      /**
-       * @param {AnyResult} value The evaluated scalar value
-       */
-      constructor(value) {
-        super('JSONPath should not be called with "new" (it prevents return of (unwrapped) scalar values)');
-        this.avoidNew = true;
-        this.value = value;
-        this.name = "NewError";
-      }
-    };
-    function JSONPath(opts, expr, obj, callback, otherTypeCallback) {
-      if (!(this instanceof JSONPath)) {
-        try {
-          return new JSONPath(opts, expr, obj, callback, otherTypeCallback);
-        } catch (e) {
-          if (!e.avoidNew) {
-            throw e;
-          }
-          return e.value;
-        }
-      }
-      if (typeof opts === "string") {
-        otherTypeCallback = callback;
-        callback = obj;
-        obj = expr;
-        expr = opts;
-        opts = null;
-      }
-      const optObj = opts && typeof opts === "object";
-      opts = opts || {};
-      this.json = opts.json || obj;
-      this.path = opts.path || expr;
-      this.resultType = opts.resultType || "value";
-      this.flatten = opts.flatten || false;
-      this.wrap = Object.hasOwn(opts, "wrap") ? opts.wrap : true;
-      this.sandbox = opts.sandbox || {};
-      this.eval = opts.eval === void 0 ? "safe" : opts.eval;
-      this.ignoreEvalErrors = typeof opts.ignoreEvalErrors === "undefined" ? false : opts.ignoreEvalErrors;
-      this.parent = opts.parent || null;
-      this.parentProperty = opts.parentProperty || null;
-      this.callback = opts.callback || callback || null;
-      this.otherTypeCallback = opts.otherTypeCallback || otherTypeCallback || function() {
-        throw new TypeError("You must supply an otherTypeCallback callback option with the @other() operator.");
+        Object.values(n).forEach(visit);
       };
-      if (opts.autostart !== false) {
-        const args = {
-          path: optObj ? opts.path : expr
-        };
-        if (!optObj) {
-          args.json = obj;
-        } else if ("json" in opts) {
-          args.json = opts.json;
-        }
-        const ret = this.evaluate(args);
-        if (!ret || typeof ret !== "object") {
-          throw new NewError(ret);
-        }
-        return ret;
-      }
+      visit(node);
+      return badges;
     }
-    JSONPath.prototype.evaluate = function(expr, json2, callback, otherTypeCallback) {
-      let currParent = this.parent, currParentProperty = this.parentProperty;
-      let {
-        flatten,
-        wrap
-      } = this;
-      this.currResultType = this.resultType;
-      this.currEval = this.eval;
-      this.currSandbox = this.sandbox;
-      callback = callback || this.callback;
-      this.currOtherTypeCallback = otherTypeCallback || this.otherTypeCallback;
-      json2 = json2 || this.json;
-      expr = expr || this.path;
-      if (expr && typeof expr === "object" && !Array.isArray(expr)) {
-        if (!expr.path && expr.path !== "") {
-          throw new TypeError('You must supply a "path" property when providing an object argument to JSONPath.evaluate().');
-        }
-        if (!Object.hasOwn(expr, "json")) {
-          throw new TypeError('You must supply a "json" property when providing an object argument to JSONPath.evaluate().');
-        }
-        ({
-          json: json2
-        } = expr);
-        flatten = Object.hasOwn(expr, "flatten") ? expr.flatten : flatten;
-        this.currResultType = Object.hasOwn(expr, "resultType") ? expr.resultType : this.currResultType;
-        this.currSandbox = Object.hasOwn(expr, "sandbox") ? expr.sandbox : this.currSandbox;
-        wrap = Object.hasOwn(expr, "wrap") ? expr.wrap : wrap;
-        this.currEval = Object.hasOwn(expr, "eval") ? expr.eval : this.currEval;
-        callback = Object.hasOwn(expr, "callback") ? expr.callback : callback;
-        this.currOtherTypeCallback = Object.hasOwn(expr, "otherTypeCallback") ? expr.otherTypeCallback : this.currOtherTypeCallback;
-        currParent = Object.hasOwn(expr, "parent") ? expr.parent : currParent;
-        currParentProperty = Object.hasOwn(expr, "parentProperty") ? expr.parentProperty : currParentProperty;
-        expr = expr.path;
-      }
-      currParent = currParent || null;
-      currParentProperty = currParentProperty || null;
-      if (Array.isArray(expr)) {
-        expr = JSONPath.toPathString(expr);
-      }
-      if (!expr && expr !== "" || !json2) {
-        return void 0;
-      }
-      const exprList = JSONPath.toPathArray(expr);
-      if (exprList[0] === "$" && exprList.length > 1) {
-        exprList.shift();
-      }
-      this._hasParentSelector = null;
-      const result = this._trace(exprList, json2, ["$"], currParent, currParentProperty, callback).filter(function(ea) {
-        return ea && !ea.isParentSelector;
-      });
-      if (!result.length) {
-        return wrap ? [] : void 0;
-      }
-      if (!wrap && result.length === 1 && !result[0].hasArrExpr) {
-        return this._getPreferredOutput(result[0]);
-      }
-      return result.reduce((rslt, ea) => {
-        const valOrPath = this._getPreferredOutput(ea);
-        if (flatten && Array.isArray(valOrPath)) {
-          rslt = rslt.concat(valOrPath);
-        } else {
-          rslt.push(valOrPath);
-        }
-        return rslt;
-      }, []);
-    };
-    JSONPath.prototype._getPreferredOutput = function(ea) {
-      const resultType = this.currResultType;
-      switch (resultType) {
-        case "all": {
-          const path = Array.isArray(ea.path) ? ea.path : JSONPath.toPathArray(ea.path);
-          ea.pointer = JSONPath.toPointer(path);
-          ea.path = typeof ea.path === "string" ? ea.path : JSONPath.toPathString(ea.path);
-          return ea;
-        }
-        case "value":
-        case "parent":
-        case "parentProperty":
-          return ea[resultType];
-        case "path":
-          return JSONPath.toPathString(ea[resultType]);
-        case "pointer":
-          return JSONPath.toPointer(ea.path);
-        default:
-          throw new TypeError("Unknown result type");
-      }
-    };
-    JSONPath.prototype._handleCallback = function(fullRetObj, callback, type) {
-      if (callback) {
-        const preferredOutput = this._getPreferredOutput(fullRetObj);
-        fullRetObj.path = typeof fullRetObj.path === "string" ? fullRetObj.path : JSONPath.toPathString(fullRetObj.path);
-        callback(preferredOutput, type, fullRetObj);
-      }
-    };
-    JSONPath.prototype._trace = function(expr, val, path, parent, parentPropName, callback, hasArrExpr, literalPriority) {
-      let retObj;
-      if (!expr.length) {
-        retObj = {
-          path,
-          value: val,
-          parent,
-          parentProperty: parentPropName,
-          hasArrExpr
-        };
-        this._handleCallback(retObj, callback, "value");
-        return retObj;
-      }
-      const loc = expr[0], x = expr.slice(1);
-      const ret = [];
-      function addRet(elems) {
-        if (Array.isArray(elems)) {
-          elems.forEach((t) => {
-            ret.push(t);
-          });
-        } else {
-          ret.push(elems);
-        }
-      }
-      if ((typeof loc !== "string" || literalPriority) && val && Object.hasOwn(val, loc)) {
-        addRet(this._trace(x, val[loc], push(path, loc), val, loc, callback, hasArrExpr));
-      } else if (loc === "*") {
-        this._walk(val, (m) => {
-          addRet(this._trace(x, val[m], push(path, m), val, m, callback, true, true));
-        });
-      } else if (loc === "..") {
-        addRet(this._trace(x, val, path, parent, parentPropName, callback, hasArrExpr));
-        this._walk(val, (m) => {
-          if (typeof val[m] === "object") {
-            addRet(this._trace(expr.slice(), val[m], push(path, m), val, m, callback, true));
-          }
-        });
-      } else if (loc === "^") {
-        this._hasParentSelector = true;
-        return {
-          path: path.slice(0, -1),
-          expr: x,
-          isParentSelector: true
-        };
-      } else if (loc === "~") {
-        retObj = {
-          path: push(path, loc),
-          value: parentPropName,
-          parent,
-          parentProperty: null
-        };
-        this._handleCallback(retObj, callback, "property");
-        return retObj;
-      } else if (loc === "$") {
-        addRet(this._trace(x, val, path, null, null, callback, hasArrExpr));
-      } else if (/^(-?\d*):(-?\d*):?(\d*)$/u.test(loc)) {
-        addRet(this._slice(loc, x, val, path, parent, parentPropName, callback));
-      } else if (loc.indexOf("?(") === 0) {
-        if (this.currEval === false) {
-          throw new Error("Eval [?(expr)] prevented in JSONPath expression.");
-        }
-        const safeLoc = loc.replace(/^\?\((.*?)\)$/u, "$1");
-        const nested = /@.?([^?]*)[['](\??\(.*?\))(?!.\)\])[\]']/gu.exec(safeLoc);
-        if (nested) {
-          this._walk(val, (m) => {
-            const npath = [nested[2]];
-            const nvalue = nested[1] ? val[m][nested[1]] : val[m];
-            const filterResults = this._trace(npath, nvalue, path, parent, parentPropName, callback, true);
-            if (filterResults.length > 0) {
-              addRet(this._trace(x, val[m], push(path, m), val, m, callback, true));
-            }
-          });
-        } else {
-          this._walk(val, (m) => {
-            if (this._eval(safeLoc, val[m], m, path, parent, parentPropName)) {
-              addRet(this._trace(x, val[m], push(path, m), val, m, callback, true));
-            }
-          });
-        }
-      } else if (loc[0] === "(") {
-        if (this.currEval === false) {
-          throw new Error("Eval [(expr)] prevented in JSONPath expression.");
-        }
-        addRet(this._trace(unshift(this._eval(loc, val, path.at(-1), path.slice(0, -1), parent, parentPropName), x), val, path, parent, parentPropName, callback, hasArrExpr));
-      } else if (loc[0] === "@") {
-        let addType = false;
-        const valueType = loc.slice(1, -2);
-        switch (valueType) {
-          case "scalar":
-            if (!val || !["object", "function"].includes(typeof val)) {
-              addType = true;
-            }
-            break;
-          case "boolean":
-          case "string":
-          case "undefined":
-          case "function":
-            if (typeof val === valueType) {
-              addType = true;
-            }
-            break;
-          case "integer":
-            if (Number.isFinite(val) && !(val % 1)) {
-              addType = true;
-            }
-            break;
-          case "number":
-            if (Number.isFinite(val)) {
-              addType = true;
-            }
-            break;
-          case "nonFinite":
-            if (typeof val === "number" && !Number.isFinite(val)) {
-              addType = true;
-            }
-            break;
-          case "object":
-            if (val && typeof val === valueType) {
-              addType = true;
-            }
-            break;
-          case "array":
-            if (Array.isArray(val)) {
-              addType = true;
-            }
-            break;
-          case "other":
-            addType = this.currOtherTypeCallback(val, path, parent, parentPropName);
-            break;
-          case "null":
-            if (val === null) {
-              addType = true;
-            }
-            break;
-          /* c8 ignore next 2 */
-          default:
-            throw new TypeError("Unknown value type " + valueType);
-        }
-        if (addType) {
-          retObj = {
-            path,
-            value: val,
-            parent,
-            parentProperty: parentPropName
-          };
-          this._handleCallback(retObj, callback, "value");
-          return retObj;
-        }
-      } else if (loc[0] === "`" && val && Object.hasOwn(val, loc.slice(1))) {
-        const locProp = loc.slice(1);
-        addRet(this._trace(x, val[locProp], push(path, locProp), val, locProp, callback, hasArrExpr, true));
-      } else if (loc.includes(",")) {
-        const parts = loc.split(",");
-        for (const part of parts) {
-          addRet(this._trace(unshift(part, x), val, path, parent, parentPropName, callback, true));
-        }
-      } else if (!literalPriority && val && Object.hasOwn(val, loc)) {
-        addRet(this._trace(x, val[loc], push(path, loc), val, loc, callback, hasArrExpr, true));
-      }
-      if (this._hasParentSelector) {
-        for (let t = 0; t < ret.length; t++) {
-          const rett = ret[t];
-          if (rett && rett.isParentSelector) {
-            const tmp = this._trace(rett.expr, val, rett.path, parent, parentPropName, callback, hasArrExpr);
-            if (Array.isArray(tmp)) {
-              ret[t] = tmp[0];
-              const tl = tmp.length;
-              for (let tt = 1; tt < tl; tt++) {
-                t++;
-                ret.splice(t, 0, tmp[tt]);
-              }
-            } else {
-              ret[t] = tmp;
-            }
+    function collectNutritionRows(node) {
+      const rows = [];
+      const visit = (n) => {
+        if (Array.isArray(n))
+          return n.forEach(visit);
+        if (!isNode(n))
+          return;
+        if (n.type === "STACK" && n.axis === "HORIZONTAL" && (n.distribution === "SPACE_BETWEEN" || n.distribution === "END")) {
+          const texts = childrenOf(n).filter((c) => c.type === "RICH_TEXT" && typeof c.markdown === "string");
+          if (texts.length > 0) {
+            rows.push({
+              label: stripColorTags2(texts[0].markdown),
+              value: texts[1] ? stripColorTags2(texts[1].markdown) : null,
+              isCategory: texts[0].textType === "HEADLINE2",
+              backgroundColor: typeof n.backgroundColor === "string" ? n.backgroundColor : null
+            });
+            return;
           }
         }
-      }
-      return ret;
-    };
-    JSONPath.prototype._walk = function(val, f) {
-      if (Array.isArray(val)) {
-        const n = val.length;
-        for (let i = 0; i < n; i++) {
-          f(i);
-        }
-      } else if (val && typeof val === "object") {
-        Object.keys(val).forEach((m) => {
-          f(m);
-        });
-      }
-    };
-    JSONPath.prototype._slice = function(loc, expr, val, path, parent, parentPropName, callback) {
-      if (!Array.isArray(val)) {
-        return void 0;
-      }
-      const len = val.length, parts = loc.split(":"), step = parts[2] && Number.parseInt(parts[2]) || 1;
-      let start = parts[0] && Number.parseInt(parts[0]) || 0, end = parts[1] && Number.parseInt(parts[1]) || len;
-      start = start < 0 ? Math.max(0, start + len) : Math.min(len, start);
-      end = end < 0 ? Math.max(0, end + len) : Math.min(len, end);
-      const ret = [];
-      for (let i = start; i < end; i += step) {
-        const tmp = this._trace(unshift(i, expr), val, path, parent, parentPropName, callback, true);
-        tmp.forEach((t) => {
-          ret.push(t);
-        });
-      }
-      return ret;
-    };
-    JSONPath.prototype._eval = function(code, _v, _vname, path, parent, parentPropName) {
-      this.currSandbox._$_parentProperty = parentPropName;
-      this.currSandbox._$_parent = parent;
-      this.currSandbox._$_property = _vname;
-      this.currSandbox._$_root = this.json;
-      this.currSandbox._$_v = _v;
-      const containsPath = code.includes("@path");
-      if (containsPath) {
-        this.currSandbox._$_path = JSONPath.toPathString(path.concat([_vname]));
-      }
-      const scriptCacheKey = this.currEval + "Script:" + code;
-      if (!JSONPath.cache[scriptCacheKey]) {
-        let script = code.replaceAll("@parentProperty", "_$_parentProperty").replaceAll("@parent", "_$_parent").replaceAll("@property", "_$_property").replaceAll("@root", "_$_root").replaceAll(/@([.\s)[])/gu, "_$_v$1");
-        if (containsPath) {
-          script = script.replaceAll("@path", "_$_path");
-        }
-        if (this.currEval === "safe" || this.currEval === true || this.currEval === void 0) {
-          JSONPath.cache[scriptCacheKey] = new this.safeVm.Script(script);
-        } else if (this.currEval === "native") {
-          JSONPath.cache[scriptCacheKey] = new this.vm.Script(script);
-        } else if (typeof this.currEval === "function" && this.currEval.prototype && Object.hasOwn(this.currEval.prototype, "runInNewContext")) {
-          const CurrEval = this.currEval;
-          JSONPath.cache[scriptCacheKey] = new CurrEval(script);
-        } else if (typeof this.currEval === "function") {
-          JSONPath.cache[scriptCacheKey] = {
-            runInNewContext: (context) => this.currEval(script, context)
-          };
-        } else {
-          throw new TypeError(`Unknown "eval" property "${this.currEval}"`);
-        }
-      }
-      try {
-        return JSONPath.cache[scriptCacheKey].runInNewContext(this.currSandbox);
-      } catch (e) {
-        if (this.ignoreEvalErrors) {
-          return false;
-        }
-        throw new Error("jsonPath: " + e.message + ": " + code);
-      }
-    };
-    JSONPath.cache = {};
-    JSONPath.toPathString = function(pathArr) {
-      const x = pathArr, n = x.length;
-      let p = "$";
-      for (let i = 1; i < n; i++) {
-        if (!/^(~|\^|@.*?\(\))$/u.test(x[i])) {
-          p += /^[0-9*]+$/u.test(x[i]) ? "[" + x[i] + "]" : "['" + x[i] + "']";
-        }
-      }
-      return p;
-    };
-    JSONPath.toPointer = function(pointer) {
-      const x = pointer, n = x.length;
-      let p = "";
-      for (let i = 1; i < n; i++) {
-        if (!/^(~|\^|@.*?\(\))$/u.test(x[i])) {
-          p += "/" + x[i].toString().replaceAll("~", "~0").replaceAll("/", "~1");
-        }
-      }
-      return p;
-    };
-    JSONPath.toPathArray = function(expr) {
-      const {
-        cache: cache3
-      } = JSONPath;
-      if (cache3[expr]) {
-        return cache3[expr].concat();
-      }
-      const subx = [];
-      const normalized = expr.replaceAll(/@(?:null|boolean|number|string|integer|undefined|nonFinite|scalar|array|object|function|other)\(\)/gu, ";$&;").replaceAll(/[['](\??\(.*?\))[\]'](?!.\])/gu, function($0, $1) {
-        return "[#" + (subx.push($1) - 1) + "]";
-      }).replaceAll(/\[['"]([^'\]]*)['"]\]/gu, function($0, prop) {
-        return "['" + prop.replaceAll(".", "%@%").replaceAll("~", "%%@@%%") + "']";
-      }).replaceAll("~", ";~;").replaceAll(/['"]?\.['"]?(?![^[]*\])|\[['"]?/gu, ";").replaceAll("%@%", ".").replaceAll("%%@@%%", "~").replaceAll(/(?:;)?(\^+)(?:;)?/gu, function($0, ups) {
-        return ";" + ups.split("").join(";") + ";";
-      }).replaceAll(/;;;|;;/gu, ";..;").replaceAll(/;$|'?\]|'$/gu, "");
-      const exprList = normalized.split(";").map(function(exp) {
-        const match = exp.match(/#(\d+)/u);
-        return !match || !match[1] ? exp : subx[match[1]];
-      });
-      cache3[expr] = exprList;
-      return cache3[expr].concat();
-    };
-    JSONPath.prototype.safeVm = {
-      Script: SafeScript
-    };
-    JSONPath.prototype.vm = vm;
-    exports.JSONPath = JSONPath;
+        Object.values(n).forEach(visit);
+      };
+      visit(node);
+      return rows;
+    }
+    function accordionItems(accordion) {
+      const items = collectPropertyValues2(accordion, "items")[0];
+      return Array.isArray(items) ? items.filter(isNode) : [];
+    }
+    function findPmlComponent(node) {
+      const found = findNode(node, (n) => isNode(n.pml) && isNode(n.pml.component));
+      return found ? found.pml.component : null;
+    }
+    function analyticsContexts(node) {
+      const analytics = node.analytics;
+      const contexts = isNode(analytics) ? analytics.contexts : void 0;
+      return Array.isArray(contexts) ? contexts.filter(isNode) : [];
+    }
   }
 });
 
-// node_modules/picnic-api/lib/domains/catalog/helpers.js
-var require_helpers = __commonJS({
-  "node_modules/picnic-api/lib/domains/catalog/helpers.js"(exports) {
+// node_modules/picnic-api/lib/domains/catalog/tiles.js
+var require_tiles = __commonJS({
+  "node_modules/picnic-api/lib/domains/catalog/tiles.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
-    exports.extractMarkdowns = exports.findById = exports.stripMarkdownFormatting = exports.stripColorMarkup = void 0;
-    exports.extractProductDetails = extractProductDetails;
-    var jsonpath_plus_1 = require_index_node_cjs();
-    var stripColorMarkup = (text3) => text3.replace(/#\([A-Za-z0-9#_]+\)/g, "").trim();
-    exports.stripColorMarkup = stripColorMarkup;
-    var stripMarkdownFormatting = (text3) => text3.replace(/\*\*/g, "").replace(/__/g, "");
-    exports.stripMarkdownFormatting = stripMarkdownFormatting;
-    var findById = (node, id) => {
-      if (!node)
+    exports.isFusionProductTile = void 0;
+    exports.readFusionProductTile = readFusionProductTile;
+    exports.collectFusionProductTiles = collectFusionProductTiles;
+    var pml_1 = require_pml();
+    var asRecord2 = (value) => typeof value === "object" && value !== null && !Array.isArray(value) ? value : {};
+    var asArray = (value) => Array.isArray(value) ? value : [];
+    var asString = (value) => typeof value === "string" && value !== "" ? value : null;
+    var asNumber = (value) => typeof value === "number" ? value : null;
+    var PROMOTION_SCHEMA = "iglu:tech.picnic.snowplow.analytics/promotion/";
+    var LABEL_CONTAINER_ID = "selling-unit-label-container";
+    var isFusionProductTile = (node) => node.type === "PML" && asRecord2(node.content).type === "SELLING_UNIT_TILE";
+    exports.isFusionProductTile = isFusionProductTile;
+    function readFusionProductTile(tile) {
+      const unit = asRecord2(asRecord2(tile.content).sellingUnit);
+      const id = asString(unit.id);
+      const catalogName = asString(unit.name);
+      if (!id || !catalogName)
         return null;
-      if (node.id === id)
-        return node;
-      for (const key of ["child", "children"]) {
-        if (Array.isArray(node[key])) {
-          for (const child of node[key]) {
-            const result = (0, exports.findById)(child, id);
-            if (result)
-              return result;
-          }
-        } else if (node[key] && typeof node[key] === "object") {
-          const result = (0, exports.findById)(node[key], id);
-          if (result)
-            return result;
+      const promotion = asRecord2((0, pml_1.analyticsContexts)(tile).find((context) => context.schema?.startsWith(PROMOTION_SCHEMA))?.data);
+      const unitQuantity = asString(unit.unit_quantity) ?? "";
+      const info = readInfoColumn(tile.pml, unitQuantity);
+      const priceRanges = asArray(unit.price_ranges).flatMap((value) => {
+        const range = asRecord2(value);
+        const price = asNumber(range.price);
+        const fromQuantity = asNumber(range.from_quantity);
+        return price !== null && fromQuantity !== null ? [{ price, from_quantity: fromQuantity }] : [];
+      });
+      const promotionLabel = asString(promotion.promotion_label);
+      return {
+        id,
+        name: info.name ?? catalogName,
+        namePrefix: info.namePrefix,
+        brand: info.brand,
+        qualityCue: info.qualityCue,
+        imageId: asString(unit.image_id),
+        displayPrice: asNumber(unit.display_price) ?? 0,
+        originalPrice: promotion.show_strikethrough_price === true ? asNumber(promotion.strikethrough_price) : null,
+        unitPrice: null,
+        // One tier means the price doesn't depend on the quantity.
+        priceRanges: priceRanges.length > 1 ? priceRanges : null,
+        unitQuantity,
+        labels: promotionLabel ? [{ position: labelPosition(tile.pml, promotionLabel), type: "PROMO", text: promotionLabel }] : [],
+        isUnavailable: asArray(unit.decorators).some((decorator) => asRecord2(decorator).type === "UNAVAILABLE"),
+        numberOfOrders: null
+      };
+    }
+    function collectFusionProductTiles(node, skip = () => false) {
+      const tiles = /* @__PURE__ */ new Map();
+      const visit = (value) => {
+        if (Array.isArray(value))
+          return value.forEach(visit);
+        if (typeof value !== "object" || value === null)
+          return;
+        const candidate = value;
+        if (skip(candidate))
+          return;
+        if ((0, exports.isFusionProductTile)(candidate)) {
+          const tile = readFusionProductTile(candidate);
+          if (tile && !tiles.has(tile.id))
+            tiles.set(tile.id, tile);
+          return;
         }
+        Object.values(candidate).forEach(visit);
+      };
+      visit(node);
+      return [...tiles.values()];
+    }
+    function readInfoColumn(pml, unitQuantity) {
+      const opensProduct = (0, pml_1.findNode)(pml, (n) => n.type === "TOUCHABLE" && asRecord2(n.onPress).actionType === "OPEN");
+      const column = opensProduct ? (0, pml_1.findNode)(opensProduct.child, (n) => n.type === "STACK") : null;
+      const rows = column ? (0, pml_1.childrenOf)(column) : [];
+      const nameIndex = rows.findIndex((row) => row.type === "RICH_TEXT");
+      if (nameIndex < 0)
+        return { name: null, namePrefix: null, brand: null, qualityCue: null };
+      const shownName = (0, pml_1.stripColorTags)((0, pml_1.collectMarkdowns)(rows[nameIndex])[0] ?? "");
+      const prefix = /^\*\*(.+?)\*\*\s*/.exec(shownName);
+      const name = (0, pml_1.cleanMarkdown)(prefix ? shownName.slice(prefix[0].length) : shownName) || null;
+      const firstText = (row) => row ? (0, pml_1.cleanMarkdown)((0, pml_1.collectMarkdowns)(row)[0] ?? "") || null : null;
+      const rowAfterPrices = rows.slice(nameIndex + 1).find((row) => row.type === "STACK");
+      const isQuantityRow = rowAfterPrices ? (0, pml_1.collectMarkdowns)(rowAfterPrices).some((text3) => (0, pml_1.cleanMarkdown)(text3) === unitQuantity) : false;
+      return {
+        name,
+        namePrefix: prefix ? (0, pml_1.cleanMarkdown)(prefix[1]) || null : null,
+        brand: isQuantityRow ? null : firstText(rowAfterPrices),
+        qualityCue: nameIndex > 0 ? firstText(rows[0]) : null
+      };
+    }
+    function labelPosition(pml, label) {
+      const placed = (0, pml_1.findNode)((0, pml_1.findNodeById)(pml, LABEL_CONTAINER_ID), (n) => typeof n.absolutePosition === "object" && (0, pml_1.collectMarkdowns)(n).some((text3) => (0, pml_1.cleanMarkdown)(text3) === label));
+      if (!placed)
+        return "bottomLeft";
+      const position = asRecord2(placed.absolutePosition);
+      return `${"top" in position ? "top" : "bottom"}${"right" in position && !("left" in position) ? "Right" : "Left"}`;
+    }
+  }
+});
+
+// node_modules/picnic-api/lib/domains/catalog/promotions.js
+var require_promotions = __commonJS({
+  "node_modules/picnic-api/lib/domains/catalog/promotions.js"(exports) {
+    "use strict";
+    Object.defineProperty(exports, "__esModule", { value: true });
+    exports.extractPromotions = extractPromotions;
+    exports.extractPromotionGroup = extractPromotionGroup;
+    var pml_1 = require_pml();
+    var tiles_1 = require_tiles();
+    var LAYOUT_CONTENT_ID_PREFIX = "campaign-page-layout-content";
+    var PROMOTION_GROUP_ID = /[;,]promo_group_id=([^,&;]+)/;
+    function extractPromotions(page) {
+      const layout = (0, pml_1.findNodeByIdPrefix)(page, LAYOUT_CONTENT_ID_PREFIX);
+      const sections = (layout ? (0, pml_1.childrenOf)(layout) : []).filter((child) => child.type !== "PML").map(readSection).filter((section) => section.products.length > 0 || section.groups.length > 0);
+      return { sections };
+    }
+    function readSection(section) {
+      const header = (0, pml_1.findNode)(section, (n) => n.type === "RICH_TEXT" && typeof n.textType === "string" && n.textType.startsWith("HEADER") && typeof n.markdown === "string");
+      return {
+        id: typeof section.id === "string" ? section.id : "",
+        title: header ? (0, pml_1.cleanMarkdown)(header.markdown) : "",
+        products: (0, tiles_1.collectFusionProductTiles)(section),
+        groups: collectGroups(section)
+      };
+    }
+    function collectGroups(section) {
+      const groups = /* @__PURE__ */ new Map();
+      (0, pml_1.walkNodes)(section, (node) => {
+        const deeplink = (0, pml_1.analyticsContexts)(node).map((context) => context.data?.deeplink).find((link) => typeof link === "string" && link.includes("id=promo-group-deep-dive"));
+        const id = deeplink ? PROMOTION_GROUP_ID.exec(deeplink)?.[1] : void 0;
+        if (!id)
+          return;
+        const isCard = typeof node.id === "string" && node.id.endsWith(id);
+        if (groups.get(id)?.isCard || groups.has(id) && !isCard)
+          return;
+        const label = badgeText(node);
+        const [name, example] = (0, pml_1.collectMarkdowns)(node).map(pml_1.cleanMarkdown).filter((text3) => text3 !== "" && text3 !== label);
+        if (name)
+          groups.set(id, { group: { id, name, example: example ?? null, label }, isCard });
+      });
+      return [...groups.values()].map(({ group }) => group);
+    }
+    function badgeText(card) {
+      let text3 = null;
+      (0, pml_1.walkNodes)(card, (node) => {
+        if (node.type !== "CONTAINER" || typeof node.backgroundColor !== "string")
+          return;
+        const texts = (0, pml_1.collectMarkdowns)(node);
+        if (texts.length === 1)
+          text3 = (0, pml_1.cleanMarkdown)(texts[0]) || null;
+      });
+      return text3;
+    }
+    function extractPromotionGroup(groupId, content) {
+      const props = findRscNode(content.nodes, "promo-deep-dive-content")?.props ?? {};
+      const tiles = Array.isArray(props.sellableTiles) ? props.sellableTiles : [];
+      return {
+        id: groupId,
+        name: typeof props.name === "string" ? props.name : "",
+        products: tiles.filter(isProductTile2)
+      };
+    }
+    var isProductTile2 = (item) => typeof item === "object" && item !== null && typeof item.id === "string" && typeof item.displayPrice === "number";
+    function findRscNode(nodes, component) {
+      for (const node of nodes) {
+        if (node.component === component)
+          return node;
+        const found = findRscNode(node.children, component);
+        if (found)
+          return found;
       }
       return null;
+    }
+  }
+});
+
+// node_modules/picnic-api/lib/domains/catalog/favorites.js
+var require_favorites = __commonJS({
+  "node_modules/picnic-api/lib/domains/catalog/favorites.js"(exports) {
+    "use strict";
+    Object.defineProperty(exports, "__esModule", { value: true });
+    exports.extractFavorites = extractFavorites;
+    exports.extractFavoritesInAisle = extractFavoritesInAisle;
+    var pml_1 = require_pml();
+    var tiles_1 = require_tiles();
+    var AISLE_TAB_ID_PREFIX = "aisles-segment-control-";
+    var AISLE_ID_PREFIX = "aisle-";
+    var MORE_BUTTON_ID_PREFIX = "core-vertical-tiles-more-button-pml";
+    function extractFavorites(page) {
+      const aisles = [];
+      (0, pml_1.walkNodes)(page, (node) => {
+        if (typeof node.id !== "string" || !node.id.startsWith(AISLE_TAB_ID_PREFIX))
+          return;
+        const id = node.id.slice(AISLE_TAB_ID_PREFIX.length);
+        if (aisles.some((aisle) => aisle.id === id))
+          return;
+        const block = (0, pml_1.findNodeById)(page, `${AISLE_ID_PREFIX}${id}`);
+        aisles.push({
+          id,
+          title: (0, pml_1.cleanMarkdown)((0, pml_1.collectMarkdowns)(node)[0] ?? "") || id,
+          products: block ? (0, tiles_1.collectFusionProductTiles)(block, (n) => n.type === "SUSPENSE") : [],
+          complete: block !== null && (0, pml_1.findNodeByIdPrefix)(block, MORE_BUTTON_ID_PREFIX) === null
+        });
+      });
+      return { aisles };
+    }
+    function extractFavoritesInAisle(page) {
+      return (0, tiles_1.collectFusionProductTiles)(page);
+    }
+  }
+});
+
+// node_modules/picnic-api/lib/errors/product-not-found-error.js
+var require_product_not_found_error = __commonJS({
+  "node_modules/picnic-api/lib/errors/product-not-found-error.js"(exports) {
+    "use strict";
+    Object.defineProperty(exports, "__esModule", { value: true });
+    exports.ProductNotFoundError = void 0;
+    exports.isProductNotFoundError = isProductNotFoundError2;
+    var ProductNotFoundError = class extends Error {
+      constructor(productId) {
+        super(`Product "${productId}" was not found or is not available at this location.`);
+        this.name = "ProductNotFoundError";
+        this.productId = productId;
+      }
     };
-    exports.findById = findById;
-    var extractMarkdowns = (node) => {
-      if (!node)
-        return [];
-      return (0, jsonpath_plus_1.JSONPath)({ path: "$..markdown", json: node }).filter((m) => typeof m === "string");
-    };
-    exports.extractMarkdowns = extractMarkdowns;
+    exports.ProductNotFoundError = ProductNotFoundError;
+    function isProductNotFoundError2(error2) {
+      return error2 instanceof ProductNotFoundError;
+    }
+  }
+});
+
+// node_modules/picnic-api/lib/domains/catalog/product.js
+var require_product = __commonJS({
+  "node_modules/picnic-api/lib/domains/catalog/product.js"(exports) {
+    "use strict";
+    Object.defineProperty(exports, "__esModule", { value: true });
+    exports.extractProductDetails = extractProductDetails;
+    exports.productDetailsPageId = productDetailsPageId;
+    var product_not_found_error_1 = require_product_not_found_error();
+    var pml_1 = require_pml();
+    var MAIN_CONTAINER_ID = "product-details-page-root-main-container";
+    var GALLERY_ID = "product-page-image-gallery-main-image-container";
+    var LABELS_PREFIX = "product-page-labels-";
+    var DESCRIPTION_ID = "description";
+    var HIGHLIGHTS_ID = "product-page-highlights";
+    var ALLERGIES_ID = "product-page-allergies";
+    var ACCORDION_ID = "accordion-list";
+    var ALTERNATIVES_ID = "alternatives-container";
+    var CONTAINS_HEADING = /^(bevat|enthält|contient)$/i;
+    var MAY_CONTAIN_HEADING = /^(bevat\s+mogelijk|kann\s+enthalten|peut\s+contenir)$/i;
+    var NUTRITION_TITLE = /voedingswaarde|nährwert|valeurs nutritionnelles/i;
     function extractProductDetails(productId, page) {
-      const mainContainer = (0, exports.findById)(page.layout.body, "product-details-page-root-main-container");
-      const children = (0, jsonpath_plus_1.JSONPath)({ path: "$.pml.component.children", json: mainContainer })[0] ?? [];
-      const nameNode = children.find((child) => child.textType === "HEADER1");
-      const brandNode = children.find((child) => child.textAttributes?.weight === "REGULAR");
-      const stackNode = children.find((child) => child.type === "STACK");
-      const [unitQuantityNode, unitPriceNode] = stackNode?.children?.filter((child) => child.type === "RICH_TEXT") ?? [];
-      const nodeMarkdown = (node) => typeof node?.markdown === "string" ? (0, exports.stripColorMarkup)(node.markdown) : null;
-      const name = nodeMarkdown(nameNode) ?? "";
-      const brand = nodeMarkdown(brandNode);
-      const unitQuantity = nodeMarkdown(unitQuantityNode) ?? "";
-      const unitPrice = nodeMarkdown(unitPriceNode);
-      const allSellingUnits = (0, jsonpath_plus_1.JSONPath)({ path: "$..sellingUnit", json: page });
-      const mainUnit = allSellingUnits.find((u) => u.id === productId && u.max_count !== void 0) ?? {};
-      let displayPrice = mainUnit.display_price ?? 0;
-      let priceRanges = mainUnit.price_ranges ?? null;
-      if (!priceRanges) {
-        priceRanges = extractPriceRangesFromExpressions(page) ?? null;
-      }
-      if (!displayPrice) {
-        const bundleNode = (0, exports.findById)(page.layout.body, productId);
-        if (bundleNode) {
-          displayPrice = (0, jsonpath_plus_1.JSONPath)({ path: "$..price", json: bundleNode })[0] ?? 0;
-        }
-      }
-      if (!displayPrice && mainContainer) {
-        const priceComponents = (0, jsonpath_plus_1.JSONPath)({ path: "$..price", json: mainContainer }).filter((p) => typeof p === "number");
-        displayPrice = priceComponents[0] ?? 0;
-      }
-      const maxCount = mainUnit.max_count ?? 0;
-      const gallery = (0, exports.findById)(page.layout.body, "product-page-image-gallery-main-image-container");
-      const imageIds = gallery ? [...new Set((0, jsonpath_plus_1.JSONPath)({ path: "$..source.id", json: gallery }))] : mainUnit.image_id ? [mainUnit.image_id] : [];
-      const descBlock = (0, exports.findById)(page.layout.body, "description");
-      const descMarkdowns = (0, exports.extractMarkdowns)(descBlock);
-      const description = descMarkdowns.length > 0 ? descMarkdowns.join("\n") : null;
-      const highlightsBlock = (0, exports.findById)(page.layout.body, "product-page-highlights");
-      const highlights = (0, exports.extractMarkdowns)(highlightsBlock).map((h) => (0, exports.stripMarkdownFormatting)((0, exports.stripColorMarkup)(h)));
-      const allergiesBlock = (0, exports.findById)(page.layout.body, "product-page-allergies");
-      const allergenTexts = (0, exports.extractMarkdowns)(allergiesBlock).map(exports.stripColorMarkup);
-      const allergens = allergenTexts.filter((t) => !/^bevat(\s+mogelijk)?$/i.test(t.trim()));
-      const accordionBlock = (0, exports.findById)(page.layout.body, "accordion-list");
-      const infoSections = [];
-      if (accordionBlock) {
-        const items = (0, jsonpath_plus_1.JSONPath)({ path: "$..items", json: accordionBlock })[0];
-        if (Array.isArray(items)) {
-          for (const item of items) {
-            const headerTexts = (0, exports.extractMarkdowns)(item.header).map(exports.stripMarkdownFormatting).map(exports.stripColorMarkup);
-            const bodyTexts = (0, exports.extractMarkdowns)(item.body).map(exports.stripColorMarkup);
-            infoSections.push({
-              title: headerTexts[0] ?? "",
-              content: bodyTexts.join("\n")
-            });
-          }
-        }
-      }
-      let promotion = null;
-      const promoData = (0, jsonpath_plus_1.JSONPath)({ path: "$..promotion_id", json: page });
-      const promoLabels = (0, jsonpath_plus_1.JSONPath)({ path: "$..promotion_label", json: page });
-      if (promoData.length > 0 && promoLabels.length > 0) {
-        promotion = {
-          id: promoData[0],
-          label: promoLabels[0]
-        };
-      }
-      const bundles = [];
-      const bundleContainer = findBundleContainer(page.layout.body);
-      if (bundleContainer) {
-        const bundleItemNodes = [];
-        const walkBundleItems = (node) => {
-          if (!node)
-            return;
-          if (typeof node === "object" && !Array.isArray(node)) {
-            if (node.type === "STATE_BOUNDARY" && typeof node.id === "string" && node.id.startsWith("s")) {
-              bundleItemNodes.push(node);
-            }
-            for (const v of Object.values(node))
-              walkBundleItems(v);
-          } else if (Array.isArray(node)) {
-            for (const item of node)
-              walkBundleItems(item);
-          }
-        };
-        walkBundleItems(bundleContainer);
-        for (let i = 0; i < bundleItemNodes.length; i++) {
-          const bNode = bundleItemNodes[i];
-          const sellingUnits = (0, jsonpath_plus_1.JSONPath)({ path: "$..sellingUnit", json: bNode });
-          const prices = (0, jsonpath_plus_1.JSONPath)({ path: "$..price", json: bNode }).filter((p) => typeof p === "number");
-          const su = sellingUnits[0];
-          if (su) {
-            bundles.push({
-              id: su.id,
-              quantity: i + 1,
-              pricePerUnit: prices[0] ?? 0,
-              imageId: su.image_id ?? "",
-              maxCount: su.max_count ?? 0
-            });
-          }
-        }
-      }
-      const altContainer = (0, exports.findById)(page.layout.body, "alternatives-container");
-      const altSellingUnits = altContainer ? (0, jsonpath_plus_1.JSONPath)({ path: "$..sellingUnit", json: altContainer }) : [];
-      const similarProducts = altSellingUnits.filter((u) => u.display_price !== void 0).map((u) => ({
-        id: u.id,
-        name: u.name,
-        imageId: u.image_id,
-        displayPrice: u.display_price,
-        unitQuantity: u.unit_quantity,
-        maxCount: u.max_count,
-        ...u.deposit !== void 0 ? { deposit: u.deposit } : {},
-        ...u.price_ranges ? { priceRanges: u.price_ranges } : {}
-      }));
+      const mainContainer = (0, pml_1.findNodeById)(page, MAIN_CONTAINER_ID);
+      if (!mainContainer)
+        throw new product_not_found_error_1.ProductNotFoundError(productId);
+      const header = extractHeader(mainContainer);
+      const mainUnit = findMainSellingUnit(page, productId);
+      const prices = extractPrices(mainContainer, mainUnit);
+      const labels = (0, pml_1.collectBadges)((0, pml_1.findNodeByIdPrefix)(page, LABELS_PREFIX));
+      const highlightItems = collectHighlights((0, pml_1.findNodeById)(page, HIGHLIGHTS_ID));
+      const allergenGroups = extractAllergens(page);
       return {
         id: productId,
-        name,
-        brand,
-        unitQuantity,
-        unitPrice,
-        displayPrice,
-        maxCount,
-        imageIds,
-        description,
-        highlights,
-        allergens,
-        infoSections,
-        promotion,
-        bundles,
-        priceRanges,
-        similarProducts
+        ...header,
+        ...prices,
+        maxCount: typeof mainUnit?.max_count === "number" ? mainUnit.max_count : 99,
+        imageIds: extractImageIds(page, mainUnit),
+        labels,
+        description: extractDescription(page),
+        highlightItems,
+        allergenGroups,
+        infoSections: extractInfoSections(page),
+        nutritionRows: extractNutritionRows(page),
+        promotion: extractPromotion2(labels, page),
+        similarProducts: extractSimilarProducts(page)
       };
     }
-    function findBundleContainer(body) {
-      const walk = (n) => {
-        if (!n)
-          return null;
-        if (typeof n === "object" && !Array.isArray(n)) {
-          if (typeof n.id === "string" && n.id.startsWith("product-page-bundles-"))
-            return n;
-          for (const v of Object.values(n)) {
-            const result = walk(v);
-            if (result)
-              return result;
-          }
-        } else if (Array.isArray(n)) {
-          for (const item of n) {
-            const result = walk(item);
-            if (result)
-              return result;
+    function findMainSellingUnit(page, productId) {
+      const units = (0, pml_1.collectPropertyValues)(page, "sellingUnit").filter((u) => typeof u === "object" && u !== null);
+      return units.find((u) => u.id === productId && u.max_count !== void 0) ?? units.find((u) => u.id === productId) ?? null;
+    }
+    function extractHeader(mainContainer) {
+      const nameNode = (0, pml_1.findNode)(mainContainer, (n) => n.type === "RICH_TEXT" && n.textType === "HEADER1");
+      const stack = (0, pml_1.findPmlComponent)(mainContainer);
+      const parts = stack ? (0, pml_1.childrenOf)(stack) : [];
+      const brandNode = parts.find((n) => n.type === "RICH_TEXT" && typeof n.markdown === "string");
+      const row = parts.find((n) => n.type === "STACK" && (0, pml_1.childrenOf)(n).some((c) => c.type === "RICH_TEXT"));
+      const rowItems = row ? (0, pml_1.childrenOf)(row) : [];
+      const quantityBadges = (0, pml_1.collectBadges)(rowItems.filter((n) => n.type === "CONTAINER"));
+      const texts = rowItems.filter((n) => n.type === "RICH_TEXT");
+      const markdownOf = (n) => typeof n?.markdown === "string" ? n.markdown : null;
+      const tags = texts.slice(2).flatMap((n) => {
+        const markdown = markdownOf(n);
+        const text3 = markdown ? (0, pml_1.cleanMarkdown)(markdown) : "";
+        return text3 ? [{ text: text3, color: (0, pml_1.extractHighlightColor)(markdown) ?? innerColor(markdown) }] : [];
+      });
+      const unitPrice = markdownOf(texts[1]) ?? computeUnitPrice(texts[1]?.markdown);
+      return {
+        name: nameNode && typeof nameNode.markdown === "string" ? (0, pml_1.cleanMarkdown)(nameNode.markdown) : "",
+        brand: brandNode ? (0, pml_1.cleanMarkdown)(brandNode.markdown) || null : null,
+        unitQuantity: (0, pml_1.cleanMarkdown)(markdownOf(texts[0]) ?? ""),
+        unitPrice: unitPrice ? (0, pml_1.cleanMarkdown)(unitPrice) || null : null,
+        quantityBadges,
+        tags
+      };
+    }
+    function computeUnitPrice(expression) {
+      const props = typeof expression === "object" && expression !== null ? expression.props : void 0;
+      const tiers = findPriceTiers(props);
+      if (!props || !tiers || typeof props.v1 !== "number" || typeof props.v2 !== "string" || typeof props.v3 !== "string")
+        return null;
+      const firstTier = [...tiers].sort((a, b) => a.from_quantity - b.from_quantity)[0];
+      return props.v2 + (props.v1 * firstTier.price / 100).toFixed(2) + props.v3;
+    }
+    function innerColor(markdown) {
+      const colors = [...markdown.matchAll(/#\(([^)]+)\)/g)].map((m) => m[1]);
+      return colors.length > 0 ? colors[Math.floor((colors.length - 1) / 2)] : null;
+    }
+    function extractPrices(mainContainer, mainUnit) {
+      const priceNodes = (0, pml_1.collectPriceNodes)(mainContainer);
+      const active = priceNodes.find((p) => !p.isCrossed);
+      const crossed = priceNodes.find((p) => p.isCrossed);
+      const priceRanges = findPriceTiers(mainContainer) ?? collectTierTiles(mainContainer) ?? (Array.isArray(mainUnit?.price_ranges) && mainUnit.price_ranges.length > 0 ? mainUnit.price_ranges : null);
+      const lowestTier = priceRanges ? [...priceRanges].sort((a, b) => a.from_quantity - b.from_quantity)[0] : void 0;
+      const unitPrice = typeof mainUnit?.display_price === "number" ? mainUnit.display_price : void 0;
+      return {
+        displayPrice: active?.price ?? lowestTier?.price ?? unitPrice ?? 0,
+        originalPrice: crossed?.price ?? null,
+        displayPriceColor: active?.color && !(0, pml_1.isDefaultTextColor)(active.color) ? active.color : null,
+        priceRanges
+      };
+    }
+    function findPriceTiers(node) {
+      let tiers = null;
+      (0, pml_1.walkNodes)(node, (n) => {
+        if (tiers)
+          return;
+        for (const value of Object.values(n)) {
+          if (Array.isArray(value) && value.length > 0 && value.every((tier) => typeof tier?.price === "number" && typeof tier?.from_quantity === "number")) {
+            tiers = value.map((tier) => ({ price: tier.price, from_quantity: tier.from_quantity }));
+            return;
           }
         }
-        return null;
-      };
-      return walk(body);
+      });
+      return tiers;
     }
-    function extractPriceRangesFromExpressions(page) {
-      const allV1Arrays = (0, jsonpath_plus_1.JSONPath)({ path: "$..__ep1.v1", json: page });
-      for (const arr of allV1Arrays) {
-        if (Array.isArray(arr) && arr.length > 0 && arr[0].price !== void 0 && arr[0].from_quantity !== void 0) {
-          return arr;
+    function collectTierTiles(node) {
+      const byQuantity = /* @__PURE__ */ new Map();
+      (0, pml_1.walkNodes)(node, (n) => {
+        if (typeof n.price === "number" && typeof n.from_quantity === "number" && !byQuantity.has(n.from_quantity)) {
+          byQuantity.set(n.from_quantity, { price: n.price, from_quantity: n.from_quantity });
+        }
+      });
+      return byQuantity.size > 0 ? [...byQuantity.values()].sort((a, b) => a.from_quantity - b.from_quantity) : null;
+    }
+    function extractImageIds(page, mainUnit) {
+      const ids = (0, pml_1.collectPropertyValues)((0, pml_1.findNodeById)(page, GALLERY_ID), "source").map((source) => typeof source === "object" && source !== null ? source.id : void 0).filter((id) => typeof id === "string");
+      if (ids.length > 0)
+        return [...new Set(ids)];
+      return typeof mainUnit?.image_id === "string" && mainUnit.image_id ? [mainUnit.image_id] : [];
+    }
+    function extractDescription(page) {
+      const markdowns = (0, pml_1.collectMarkdowns)((0, pml_1.findNodeById)(page, DESCRIPTION_ID));
+      return markdowns.length > 0 ? markdowns.join("\n") : null;
+    }
+    function collectHighlights(node, linkTarget = null) {
+      if (Array.isArray(node))
+        return node.flatMap((child) => collectHighlights(child, linkTarget));
+      if (typeof node !== "object" || node === null)
+        return [];
+      const record = node;
+      if (record.type === "STACK" && record.axis === "HORIZONTAL") {
+        const children = (0, pml_1.childrenOf)(record);
+        const text3 = children.find((c) => c.type === "RICH_TEXT" && typeof c.markdown === "string");
+        if (text3) {
+          const icon = children.find((c) => c.type === "ICON");
+          return [{ text: text3.markdown, iconKey: typeof icon?.iconKey === "string" ? icon.iconKey : null, linkTarget }];
         }
       }
-      const allV1Ep2 = (0, jsonpath_plus_1.JSONPath)({ path: "$..__ep2.v1", json: page });
-      for (const arr of allV1Ep2) {
-        if (Array.isArray(arr) && arr.length > 0 && arr[0].price !== void 0 && arr[0].from_quantity !== void 0) {
-          return arr;
+      if (record.type === "TOUCHABLE") {
+        const onPress = record.onPress;
+        const target = onPress?.actionType === "OPEN" && typeof onPress.target === "string" ? onPress.target : null;
+        return collectHighlights(record.child, target);
+      }
+      const pml = record.pml;
+      return [...(0, pml_1.childrenOf)(record).flatMap((child) => collectHighlights(child, linkTarget)), ...pml?.component ? collectHighlights(pml.component, linkTarget) : []];
+    }
+    function extractAllergens(page) {
+      const allergens = { contains: [], mayContain: [] };
+      const component = (0, pml_1.findPmlComponent)((0, pml_1.findNodeById)(page, ALLERGIES_ID));
+      let group = allergens.contains;
+      for (const child of component ? (0, pml_1.childrenOf)(component) : []) {
+        if (child.type === "RICH_TEXT" && typeof child.markdown === "string") {
+          const heading = (0, pml_1.stripColorTags)(child.markdown);
+          if (MAY_CONTAIN_HEADING.test(heading))
+            group = allergens.mayContain;
+          else if (CONTAINS_HEADING.test(heading))
+            group = allergens.contains;
+        } else if (child.type === "STACK" && child.axis === "HORIZONTAL") {
+          group.push(...(0, pml_1.collectBadges)(child));
         }
+      }
+      return allergens;
+    }
+    function extractInfoSections(page) {
+      return (0, pml_1.accordionItems)((0, pml_1.findNodeById)(page, ACCORDION_ID)).flatMap((item) => {
+        const title = (0, pml_1.collectMarkdowns)(item.header).map(pml_1.cleanMarkdown)[0] ?? "";
+        const content = (0, pml_1.collectMarkdowns)(item.body).map(pml_1.stripColorTags).join("\n");
+        return title ? [{ title, content }] : [];
+      });
+    }
+    function extractNutritionRows(page) {
+      const item = (0, pml_1.accordionItems)((0, pml_1.findNodeById)(page, ACCORDION_ID)).find((i) => NUTRITION_TITLE.test((0, pml_1.collectMarkdowns)(i.header).map(pml_1.cleanMarkdown)[0] ?? ""));
+      return item ? (0, pml_1.collectNutritionRows)(item.body) : [];
+    }
+    function extractPromotion2(labels, page) {
+      const labelTexts = new Set(labels.map((label) => label.text));
+      const tile = (0, pml_1.findNode)(page, (n) => typeof n.promotion_id === "string" && typeof n.promotion_label === "string" && labelTexts.has(n.promotion_label));
+      return tile ? { id: tile.promotion_id, label: tile.promotion_label } : null;
+    }
+    function extractSimilarProducts(page) {
+      return (0, pml_1.collectPropertyValues)((0, pml_1.findNodeById)(page, ALTERNATIVES_ID), "sellingUnit").filter((u) => typeof u === "object" && u !== null).filter((u) => u.display_price !== void 0).map((u) => ({
+        id: String(u.id ?? ""),
+        name: String(u.name ?? ""),
+        imageId: String(u.image_id ?? ""),
+        displayPrice: Number(u.display_price ?? 0),
+        unitQuantity: String(u.unit_quantity ?? ""),
+        maxCount: Number(u.max_count ?? 0),
+        ...u.deposit !== void 0 ? { deposit: Number(u.deposit) } : {},
+        ...Array.isArray(u.price_ranges) ? { priceRanges: u.price_ranges } : {}
+      }));
+    }
+    function productDetailsPageId(productId) {
+      return `product-details-page-root?id=${encodeURIComponent(productId)}&show_category_action=true&show_remove_from_purchases_page_action=true`;
+    }
+  }
+});
+
+// node_modules/picnic-api/lib/domains/catalog/categories.js
+var require_categories = __commonJS({
+  "node_modules/picnic-api/lib/domains/catalog/categories.js"(exports) {
+    "use strict";
+    Object.defineProperty(exports, "__esModule", { value: true });
+    exports.extractCategoryTree = extractCategoryTree;
+    exports.extractSubcategories = extractSubcategories;
+    exports.extractCategoryProducts = extractCategoryProducts;
+    var search_1 = require_search();
+    var asRecord2 = (value) => typeof value === "object" && value !== null && !Array.isArray(value) ? value : null;
+    var asArray = (value) => Array.isArray(value) ? value : [];
+    var asString = (value) => typeof value === "string" && value !== "" ? value : null;
+    var TARGET_TYPES = {
+      "subcategory-page": "subcategories",
+      "category-product-overview": "products",
+      "promotion-category-page": "promotions"
+    };
+    function findNode(nodes, component) {
+      for (const node of nodes) {
+        if (node.component === component)
+          return node;
+        const found = findNode(node.children, component);
+        if (found)
+          return found;
       }
       return null;
+    }
+    function readTarget(deeplink) {
+      const [pageId, ...params] = (deeplink.split(";id=")[1] ?? "").split(",");
+      const type = TARGET_TYPES[pageId];
+      const categoryId = params.find((param) => param.startsWith("category_id="))?.slice("category_id=".length);
+      return type && categoryId ? { type, categoryId: decodeURIComponent(categoryId) } : { type: "page" };
+    }
+    function readLink(item) {
+      const entry = asRecord2(item);
+      const name = asString(entry?.title);
+      const deeplink = asString(entry?.deeplink);
+      if (!entry || !name || !deeplink)
+        return null;
+      return {
+        name,
+        imageId: asString(entry.image),
+        label: asString(asRecord2(entry.label)?.title),
+        deeplink,
+        target: readTarget(deeplink)
+      };
+    }
+    function extractCategoryTree(content) {
+      const sections = [{ title: null, links: [] }];
+      for (const item of asArray(findNode(content.nodes, "vertical-list")?.props.items)) {
+        const entry = asRecord2(item);
+        if (entry?.type === "section-title") {
+          sections.push({ title: asString(entry.title), links: [] });
+          continue;
+        }
+        const link = readLink(item);
+        if (link)
+          sections[sections.length - 1].links.push(link);
+      }
+      return sections.filter((section) => section.links.length > 0);
+    }
+    function extractSubcategories(categoryId, content) {
+      const list = findNode(content.nodes, "category-list");
+      return {
+        categoryId,
+        title: asString(list?.props.title) ?? "",
+        links: asArray(list?.props.items).flatMap((item) => readLink(item) ?? [])
+      };
+    }
+    var isProductTile2 = (item) => typeof asRecord2(item)?.id === "string" && typeof asRecord2(item)?.name === "string" && typeof asRecord2(item)?.displayPrice === "number";
+    function extractCategoryProducts(categoryId, content) {
+      const items = findNode(content.nodes, "items")?.props;
+      const filterBar = findNode(content.nodes, "filter-bar")?.props;
+      const productIdsByFacetId = {};
+      for (const [facetId, ids] of Object.entries(asRecord2(findNode(content.nodes, "context")?.props.entityIdsByFacetId) ?? {})) {
+        productIdsByFacetId[facetId] = asArray(ids).filter((id) => typeof id === "string");
+      }
+      const sections = asArray(items?.sections).map((value) => {
+        const section = asRecord2(value) ?? {};
+        return {
+          id: asString(section.id) ?? "",
+          type: asString(section.type) ?? "",
+          title: section.shouldShowHeader ? asString(section.headerName) : null,
+          products: asArray(section.items).filter(isProductTile2)
+        };
+      });
+      return {
+        categoryId,
+        title: asString(findNode(content.nodes, "page-header")?.props.title) ?? "",
+        results: {
+          sections,
+          visualFilters: (0, search_1.extractFilters)(filterBar?.visualFilters),
+          powerFilters: (0, search_1.extractFilters)(filterBar?.powerFilters ?? items?.powerFilters),
+          textualFilters: (0, search_1.extractFilters)(filterBar?.textualFilters),
+          productIdsByFacetId,
+          sortingOptions: [],
+          selectedSorting: "RELEVANCE"
+        }
+      };
     }
   }
 });
@@ -2390,19 +1664,112 @@ var require_service4 = __commonJS({
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.CatalogService = void 0;
-    var jsonpath_plus_1 = require_index_node_cjs();
-    var helpers_1 = require_helpers();
+    var promotions_1 = require_promotions();
+    var favorites_1 = require_favorites();
+    var search_1 = require_search();
+    var product_1 = require_product();
+    var rsc_1 = require_rsc();
+    var categories_1 = require_categories();
+    var SEARCH_PARAMS_MODULE = "search-page-params/search-page-params-provider.tsx";
+    var SEARCH_RESULTS_MODULE = "search-page-content/results/index.tsx";
     var CatalogService = class {
-      constructor(http) {
+      constructor(http, pages) {
         this.http = http;
+        this.pages = pages;
       }
       /**
-       * Searches for Picnic products matching the query.
-       * @param {string} query The keywords to search for.
+       * Returns the category tree as the app shows it (`category-tree-root`): links to promotions and
+       * recipes, then the categories under "Alle categorieën". A link's `target` says which method
+       * opens it.
        */
-      async search(query) {
-        const rawResults = await this.http.sendRequest("GET", `/pages/search-page-results?search_term=${encodeURIComponent(query)}`, null, true);
-        return (0, jsonpath_plus_1.JSONPath)({ path: "$..sellingUnit", json: rawResults });
+      async getCategories() {
+        return (0, categories_1.extractCategoryTree)(await this.pages.getRscContent("category-tree-root"));
+      }
+      /**
+       * Returns a category's promotions link and subcategories (`subcategory-page`).
+       * @param {string} categoryId The category id of a link with target `subcategories`, e.g. "21724".
+       */
+      async getSubcategories(categoryId) {
+        const content = await this.pages.getRscContent(`subcategory-page?category_id=${encodeURIComponent(categoryId)}`);
+        return (0, categories_1.extractSubcategories)(categoryId, content);
+      }
+      /**
+       * Returns the products of a subcategory in sections, with the filters (`category-product-overview`).
+       * @param {string} categoryId The category id of a link with target `products`, e.g. "21746".
+       */
+      async getCategoryProducts(categoryId) {
+        const content = await this.pages.getRscContent(`category-product-overview?category_id=${encodeURIComponent(categoryId)}`);
+        return (0, categories_1.extractCategoryProducts)(categoryId, content);
+      }
+      /**
+       * Returns the products on promotion in a category, in sections per promotion (`promotion-category-page`).
+       * @param {string} categoryId The category id of a link with target `promotions`, e.g. "21724".
+       */
+      async getCategoryPromotions(categoryId) {
+        const content = await this.pages.getRscContent(`promotion-category-page?category_id=${encodeURIComponent(categoryId)}`);
+        return (0, categories_1.extractCategoryProducts)(categoryId, content);
+      }
+      /**
+       * Returns the promotions page as the app shows it (`promo-page-root`): sections with products
+       * and promotion groups, e.g. the personal promotions, "Uitgelicht" and one section per category.
+       */
+      async getPromotions() {
+        return (0, promotions_1.extractPromotions)(await this.pages.getFusionPage("promo-page-root"));
+      }
+      /**
+       * Returns the products of a promotion on several products (`promo-group-deep-dive`).
+       * @param {string} groupId The id of a {@link PromotionGroup}, from {@link getPromotions}.
+       */
+      async getPromotionGroup(groupId) {
+        const content = await this.pages.getRscContent(`promo-group-deep-dive?promo_group_id=${encodeURIComponent(groupId)}`);
+        return (0, promotions_1.extractPromotionGroup)(groupId, content);
+      }
+      /**
+       * Returns the products the customer buys, per aisle, as the app's "Favorieten" tab shows them
+       * (`purchases-page-root`). Long aisles and the last aisles are incomplete (`complete: false`);
+       * {@link getFavoritesInAisle} returns an aisle's full list.
+       */
+      async getFavorites() {
+        return (0, favorites_1.extractFavorites)(await this.pages.getFusionPage("purchases-page-root"));
+      }
+      /**
+       * Returns all products the customer buys in one aisle (`aisle-deep-dive`).
+       * @param {string} aisleId The id of a {@link FavoritesAisle}, e.g. "DAIRY".
+       */
+      async getFavoritesInAisle(aisleId) {
+        return (0, favorites_1.extractFavoritesInAisle)(await this.pages.getFusionPage(`aisle-deep-dive?aisle_id=${encodeURIComponent(aisleId)}`));
+      }
+      /**
+       * Searches for products and recipes the way the app does: it fetches the search page (an RSC
+       * page with the search parameters), then runs the page's `fetchSearchResults` server action,
+       * which returns the results.
+       * @param {string} query The keywords to search for.
+       * @param {SearchOptions} [options] The sort order and the context the search is opened from.
+       */
+      async getSearchResults(query, options = {}) {
+        const contextParams = options.context === "MEALS" ? "&page_context=MEALS&is_recipe=true" : "";
+        const page = await this.pages.getRscPayload(`search-page-results?search_term=${encodeURIComponent(query)}${contextParams}`);
+        const params = (0, rsc_1.findRscElementProps)(page, SEARCH_PARAMS_MODULE)[0]?.params;
+        if (!params)
+          throw new Error("The search page has no search parameters");
+        const actionId = await this.pages.findServerActionId(page, SEARCH_RESULTS_MODULE, "fetchSearchResults");
+        if (!actionId)
+          throw new Error("The search page has no fetchSearchResults action");
+        const results = await this.pages.runServerAction(actionId, [
+          {
+            dayOffset: params.dayOffset,
+            entityType: params.requestedEntityType,
+            pageNavigationContext: params.pageNavigationContext,
+            requestedSorting: options.sorting ?? "RELEVANCE",
+            searchId: params.searchId,
+            searchQuery: query,
+            searchSessionId: params.searchSessionId
+          }
+        ], page.version);
+        const root = (0, rsc_1.decodeRscValue)(results, results.rows["0"]);
+        if (!Array.isArray(root) || root[0] !== "$")
+          throw new Error("Unexpected fetchSearchResults response");
+        return (0, search_1.extractSearchResults)(root[3] ?? {});
       }
       /**
        * Returns suggestions for Picnic products matching the query.
@@ -2411,54 +1778,59 @@ var require_service4 = __commonJS({
       getSuggestions(query) {
         return this.http.sendRequest("GET", `/suggest?search_term=${encodeURIComponent(query)}`);
       }
-      /**
-       * Returns the full product details page. The response is not typed as the content is dynamic.
-       * @param {string} productId The product ID to fetch the page for.
-       */
+      /** Fetches the product details page (Fusion). */
       getProductDetailsPage(productId) {
-        return this.http.sendRequest("GET", `/pages/product-details-page-root?id=${productId}&show_category_action=true&show_remove_from_purchases_page_action=true`, null, true);
+        return this.pages.getFusionPage((0, product_1.productDetailsPageId)(productId));
       }
       /**
-       * Returns structured product details extracted from the product details page.
-       * This is a convenience wrapper around {@link getProductDetailsPage} that parses
-       * the Fusion page response into a clean {@link ProductDetails} data model.
-       *
-       * **⚠️ Experimental:** This method parses dynamic Fusion/PML page structures and
-       * may break if Picnic changes their page layout. Use {@link getProductDetailsPage}
-       * for a stable alternative.
+       * Returns a product as the app's product page shows it (`product-details-page-root`): name,
+       * prices, price tiers, promotions, images, the information sections, nutrition and allergens.
        *
        * @param {string} productId The product ID to fetch details for.
+       * @throws {ProductNotFoundError} When the product doesn't exist or isn't available at the user's location.
        */
-      async getProductDetails(productId) {
+      async getProduct(productId) {
         const page = await this.getProductDetailsPage(productId);
-        return (0, helpers_1.extractProductDetails)(productId, page);
+        return (0, product_1.extractProductDetails)(productId, page);
       }
       /**
-       * Retrieves a product image from the server as an ArrayBuffer.
+       * Returns the URL of a product image, e.g. for an `<img>` or a chat message. The images don't
+       * need the auth key, so the URL works outside this client.
+       * @param {string} imageId The image id, e.g. `ProductTile.imageId`.
+       * @param {ImageSize} [size="medium"] The size of the image.
+       */
+      getImageUrl(imageId, size = "medium") {
+        const staticUrl = this.http.url.split("/api/")[0];
+        return `${staticUrl}/static/images/${encodeURIComponent(imageId)}/${size}.png`;
+      }
+      /**
+       * Returns a product image as PNG bytes.
        * @param {string} imageId The image id to retrieve.
        * @param {ImageSize} size The size of the image to return.
        */
       getImage(imageId, size) {
-        const alternateRoute = this.http.url.split("/api/")[0];
-        return this.http.sendRequest("GET", `${alternateRoute}/static/images/${imageId}/${size}.png`, null, false, true);
+        return this.http.sendRequest("GET", this.getImageUrl(imageId, size), null, { binary: true });
       }
       /**
-       * Retrieves a product image from the server as a Data URI.
+       * Returns a product image as a data URI.
        * @param {string} imageId The image id to retrieve.
        * @param {ImageSize} size The size of the image to return.
        */
       async getImageAsDataUri(imageId, size) {
-        const arrayBuffer = await this.getImage(imageId, size);
-        return "data:image/png;base64," + Buffer.from(arrayBuffer, "binary").toString("base64");
+        const bytes = new Uint8Array(await this.getImage(imageId, size));
+        let binary = "";
+        for (const byte of bytes)
+          binary += String.fromCharCode(byte);
+        return `data:image/png;base64,${btoa(binary)}`;
       }
     };
     exports.CatalogService = CatalogService;
   }
 });
 
-// node_modules/picnic-api/lib/domains/cart/helpers.js
-var require_helpers2 = __commonJS({
-  "node_modules/picnic-api/lib/domains/cart/helpers.js"(exports) {
+// node_modules/picnic-api/lib/domains/cart/delivery-slots.js
+var require_delivery_slots = __commonJS({
+  "node_modules/picnic-api/lib/domains/cart/delivery-slots.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.extractDeliverySlots = extractDeliverySlots;
@@ -2514,9 +1886,9 @@ var require_helpers2 = __commonJS({
   }
 });
 
-// node_modules/picnic-api/lib/domains/cart/footer-helpers.js
-var require_footer_helpers = __commonJS({
-  "node_modules/picnic-api/lib/domains/cart/footer-helpers.js"(exports) {
+// node_modules/picnic-api/lib/domains/cart/footer.js
+var require_footer = __commonJS({
+  "node_modules/picnic-api/lib/domains/cart/footer.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.extractCartFooter = extractCartFooter;
@@ -2541,7 +1913,7 @@ var require_footer_helpers = __commonJS({
       if (!tilesNode)
         return null;
       const tiles = [];
-      for (const child of asArray2(tilesNode.children)) {
+      for (const child of asArray(tilesNode.children)) {
         const tile = extractTile(child);
         if (tile)
           tiles.push(tile);
@@ -2633,8 +2005,172 @@ var require_footer_helpers = __commonJS({
     function isPmlNode(value) {
       return typeof value === "object" && value !== null && !Array.isArray(value);
     }
-    function asArray2(value) {
+    function asArray(value) {
       return Array.isArray(value) ? value : [];
+    }
+  }
+});
+
+// node_modules/picnic-api/lib/domains/cart/cart.js
+var require_cart = __commonJS({
+  "node_modules/picnic-api/lib/domains/cart/cart.js"(exports) {
+    "use strict";
+    Object.defineProperty(exports, "__esModule", { value: true });
+    exports.readCartLine = readCartLine;
+    exports.readDeposits = readDeposits;
+    exports.readFees = readFees;
+    exports.extractCart = extractCart;
+    var delivery_slots_1 = require_delivery_slots();
+    var asRecord2 = (value) => typeof value === "object" && value !== null && !Array.isArray(value) ? value : null;
+    var asRecords = (value) => Array.isArray(value) ? value.flatMap((v) => asRecord2(v) ? [asRecord2(v)] : []) : [];
+    var asString = (value) => typeof value === "string" && value !== "" ? value : null;
+    var asNumber = (value, fallback = 0) => typeof value === "number" ? value : fallback;
+    function mergeDecorators(decorators, overrides) {
+      const result = [...decorators];
+      for (const override of overrides) {
+        const index = result.findIndex((d) => d.type === override.type);
+        if (index >= 0)
+          result[index] = override;
+        else
+          result.push(override);
+      }
+      return result;
+    }
+    function readReplacement(raw) {
+      const id = asString(raw.id);
+      if (!id)
+        return null;
+      const imageIds = Array.isArray(raw.image_ids) ? raw.image_ids : [];
+      return {
+        id,
+        name: asString(raw.name) ?? "",
+        imageId: asString(raw.image_id) ?? asString(imageIds[0]),
+        displayPrice: asNumber(raw.display_price),
+        unitQuantity: asString(raw.unit_quantity) ?? "",
+        maxCount: asNumber(raw.max_count, 99)
+      };
+    }
+    function readLabels(decorators) {
+      return decorators.flatMap((d) => {
+        const text3 = asString(d.text);
+        if (d.type !== "PROMO" && d.type !== "LABEL" || !text3)
+          return [];
+        return [{ text: text3, textColor: asString(d.text_color), backgroundColor: asString(d.background_color) }];
+      });
+    }
+    function readCartLine(line, overrides = {}) {
+      const raw = line;
+      const id = asString(raw.id);
+      if (!id)
+        return null;
+      const article = asRecords(raw.items)[0];
+      const articleId = asString(article?.id);
+      const lineDecorators = mergeDecorators(asRecords(raw.decorators), asRecords(overrides[id]));
+      const articleDecorators = article ? mergeDecorators(asRecords(article.decorators), asRecords(articleId ? overrides[articleId] : [])) : [];
+      const decorators = mergeDecorators(articleDecorators, lineDecorators);
+      const find = (type) => decorators.find((d) => d.type === type);
+      const price = asNumber(raw.price);
+      const displayPrice = asNumber(find("PRICE")?.display_price, asNumber(raw.display_price));
+      const unavailable = find("UNAVAILABLE");
+      const imageIds = Array.isArray(article?.image_ids) ? article.image_ids : [];
+      const priceRanges = Array.isArray(article?.price_ranges) && article.price_ranges.length > 1 ? article.price_ranges : null;
+      return {
+        id,
+        productId: articleId ?? "",
+        name: asString(article?.name) ?? asString(raw.name) ?? "",
+        unitQuantity: asString(find("UNIT_QUANTITY")?.unit_quantity_text) ?? asString(article?.unit_quantity) ?? "",
+        imageId: asString(imageIds[0]),
+        quantity: asNumber(find("QUANTITY")?.quantity, 1),
+        maxCount: asNumber(article?.max_count, 99),
+        displayPrice,
+        originalPrice: price > displayPrice ? price : null,
+        priceColor: asString(find("PRICE_STYLE")?.price_color),
+        priceRanges,
+        labels: readLabels(decorators),
+        basePrice: asString(find("BASE_PRICE")?.base_price_text),
+        freshness: asString(find("FRESH_LABEL")?.period),
+        characteristics: asRecords(find("PRODUCT_CHARACTERISTICS")?.characteristics).flatMap((c) => asString(c.type) ?? []),
+        isUnavailable: unavailable !== void 0,
+        unavailableReason: asString(asRecord2(unavailable?.explanation)?.short_explanation),
+        replacements: asRecords(unavailable?.replacements).flatMap((r) => readReplacement(r) ?? []),
+        bundlesLink: asString(find("BUNDLES_BUTTON")?.deeplink),
+        recipeId: asString(lineDecorators.find((d) => d.type === "BASKET_GROUP")?.id)
+      };
+    }
+    function readRecipes(sections) {
+      return asRecords(sections).flatMap((section) => asRecords(section.groups).flatMap((group) => {
+        const id = asString(group.id);
+        if (!id)
+          return [];
+        return [{ id, title: asString(group.title) ?? "", preTitle: asString(group.pre_title), subtitle: asString(group.subtitle), imageId: asString(group.image_id) }];
+      }));
+    }
+    function readDeposits(raw) {
+      return asRecords(raw).map((entry) => {
+        const value = asNumber(entry.value);
+        const count2 = asNumber(entry.count);
+        return { type: asString(entry.type) ?? "", value, count: count2, total: value * count2 };
+      });
+    }
+    function readFees(raw) {
+      return asRecords(raw).map((fee) => ({ type: asString(fee.type) ?? "", name: asString(fee.name) ?? "", amount: asNumber(fee.amount) })).filter((fee) => fee.amount !== 0);
+    }
+    function extractCart(cart2) {
+      const overrides = cart2.decorator_overrides ?? {};
+      const items = (cart2.items ?? []).flatMap((line) => readCartLine(line, overrides) ?? []);
+      const deposits = readDeposits(cart2.deposit_breakdown);
+      const fees = readFees(cart2.fees);
+      const slots2 = (0, delivery_slots_1.extractDeliverySlots)({ delivery_slots: cart2.delivery_slots ?? [], selected_slot: cart2.selected_slot ?? null });
+      const selectedSlot2 = slots2.selectedSlot;
+      return {
+        id: cart2.id ?? "",
+        mts: asNumber(cart2.mts),
+        items,
+        totalCount: asNumber(cart2.total_count),
+        totalPrice: asNumber(cart2.checkout_total_price),
+        discount: items.reduce((sum, item) => sum + (item.originalPrice !== null ? item.originalPrice - item.displayPrice : 0), 0),
+        promotionSavings: asNumber(cart2.total_savings),
+        membershipSavings: asNumber(cart2.membership_savings),
+        deposits,
+        depositTotal: deposits.reduce((sum, deposit) => sum + deposit.total, 0),
+        fees,
+        minimumOrderValue: slots2.slots.find((slot2) => slot2.slotId === selectedSlot2?.slotId)?.minimumOrderValue ?? null,
+        selectedSlot: selectedSlot2,
+        recipes: readRecipes(cart2.basket_sections)
+      };
+    }
+  }
+});
+
+// node_modules/picnic-api/lib/domains/cart/replacements.js
+var require_replacements = __commonJS({
+  "node_modules/picnic-api/lib/domains/cart/replacements.js"(exports) {
+    "use strict";
+    Object.defineProperty(exports, "__esModule", { value: true });
+    exports.extractCartReplacements = extractCartReplacements;
+    var search_1 = require_search();
+    var CONTENT_COMPONENT = "unavailability-replacements-content";
+    function extractCartReplacements(content, productId) {
+      const props = findNode(content.nodes, CONTENT_COMPONENT)?.props ?? {};
+      const alternatives = Array.isArray(props.alternativeViewModels) ? props.alternativeViewModels : [];
+      return {
+        productId,
+        reason: typeof props.reason === "string" && props.reason !== "" ? props.reason : null,
+        replacements: alternatives.flatMap((tile) => {
+          const product = typeof tile === "object" && tile !== null ? (0, search_1.readSellableTile)(tile) : null;
+          return product ? [product] : [];
+        })
+      };
+    }
+    function findNode(nodes, component) {
+      for (const node of nodes) {
+        if (node.component === component)
+          return node;
+        const found = findNode(node.children, component);
+        if (found)
+          return found;
+      }
+      return null;
     }
   }
 });
@@ -2645,133 +2181,134 @@ var require_service5 = __commonJS({
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.CartService = void 0;
-    var helpers_1 = require_helpers2();
-    var footer_helpers_1 = require_footer_helpers();
-    var page_format_error_1 = require_page_format_error();
+    var delivery_slots_1 = require_delivery_slots();
+    var footer_1 = require_footer();
+    var cart_1 = require_cart();
+    var replacements_1 = require_replacements();
     var BASKET_FOOTER_PAGE_ID = "basket-footer-section-root";
     var CartService = class {
-      constructor(http) {
+      constructor(http, pages) {
         this.http = http;
+        this.pages = pages;
       }
       /**
-       * Returns the basket footer: the loyalty points line and the "Niets vergeten?" recommendation tiles.
-       * The rest of the basket comes from {@link getCart}.
-       * Throws {@link UnexpectedPageFormatError} when Picnic serves the page as an RSC payload.
+       * Returns the cart footer as the app's basket shows it: the loyalty points line and the
+       * recommendation tiles ("Niets vergeten?"). The rest of the basket comes from {@link getCart}.
+       * @throws {UnexpectedPageFormatError} When Picnic serves the page as RSC.
        */
-      async getBasketFooter() {
-        const page = await this.http.sendRequest("GET", `/pages/${BASKET_FOOTER_PAGE_ID}`, null, true);
-        if (typeof page === "string")
-          throw new page_format_error_1.UnexpectedPageFormatError(BASKET_FOOTER_PAGE_ID, "rsc");
-        return (0, footer_helpers_1.extractCartFooter)(page);
+      async getCartFooter() {
+        return (0, footer_1.extractCartFooter)(await this.pages.getFusionPage(BASKET_FOOTER_PAGE_ID));
       }
       /**
-       * Returns the cart of the current user.
+       * Returns the cart as the app's basket shows it: the lines with decorator overrides applied
+       * (quantities, member prices, labels, unavailability), the totals, deposits, fees, the
+       * selected slot and the recipes. The cart mutations return the cart in the same form.
        */
-      getCart() {
-        return this.http.sendRequest("GET", `/cart`, null, true);
+      async getCart() {
+        return (0, cart_1.extractCart)(await this.http.sendRequest("GET", `/cart`, null, { includePicnicHeaders: true }));
       }
       /**
-       * Adds a product to the shopping cart.
+       * Returns the products Picnic offers instead of a cart product that can't be delivered, with their
+       * names and prices, as the app's replacements page shows them. The cart lists the same products
+       * in `CartLineItem.replacements`, but without their names and prices.
+       * @param {string} productId The id of the cart product that can't be delivered.
+       * @throws {UnexpectedPageFormatError} When Picnic serves the page as Fusion.
+       */
+      async getReplacements(productId) {
+        const content = await this.pages.getRscContent(`unavailability-replacements-page-root?selling_unit_id=${encodeURIComponent(productId)}`);
+        return (0, replacements_1.extractCartReplacements)(content, productId);
+      }
+      /** Sends a cart mutation and returns the cart it responds with. */
+      async mutate(path, data) {
+        return (0, cart_1.extractCart)(await this.http.sendRequest("POST", path, data, { includePicnicHeaders: true }));
+      }
+      /**
+       * Adds a product to the cart and returns the cart.
        * @param {string} productId The id of the product to add.
        * @param {number} [count=1] The amount of this product to add.
-       * @param {SellingUnitContext[]} [sellingUnitContexts] Optional contexts to track the origin of the mutation (e.g. recipe, meal plan).
+       * @param {SellingUnitContext[]} [sellingUnitContexts] Contexts that say where the product was added from (e.g. a recipe).
        */
-      addProductToCart(productId, count = 1, sellingUnitContexts) {
-        return this.http.sendRequest("POST", `/cart/add_product`, {
+      addProductToCart(productId, count2 = 1, sellingUnitContexts) {
+        return this.mutate(`/cart/add_product`, {
           product_id: productId,
-          count,
+          count: count2,
           ...sellingUnitContexts && { selling_unit_contexts: sellingUnitContexts }
-        }, true);
+        });
       }
       /**
-       * Adds multiple products to the shopping cart in a single request.
-       * @param {AddProductsItem[]} products An array of products with their ids and quantities.
-       */
-      addProductsToCart(products) {
-        const body = {};
-        for (const { productId, quantity } of products) {
-          body[productId] = quantity;
-        }
-        return this.http.sendRequest("POST", `/cart/products/add`, body, true);
-      }
-      /**
-       * Removes a product from the shopping cart.
+       * Removes a product from the cart and returns the cart.
        * @param {string} productId The id of the product to remove.
        * @param {number} [count=1] The amount of this product to remove.
-       * @param {SellingUnitContext[]} [sellingUnitContexts] Optional contexts to track the origin of the mutation (e.g. recipe, meal plan).
+       * @param {SellingUnitContext[]} [sellingUnitContexts] Contexts that say where the product was removed from (e.g. a recipe).
        */
-      removeProductFromCart(productId, count = 1, sellingUnitContexts) {
-        return this.http.sendRequest("POST", `/cart/remove_product`, {
+      removeProductFromCart(productId, count2 = 1, sellingUnitContexts) {
+        return this.mutate(`/cart/remove_product`, {
           product_id: productId,
-          count,
+          count: count2,
           ...sellingUnitContexts && { selling_unit_contexts: sellingUnitContexts }
-        }, true);
+        });
       }
       /**
-       * Clears all items from the shopping cart.
+       * Removes all products from the cart and returns the cart.
        */
       clearCart() {
-        return this.http.sendRequest("POST", `/cart/clear`, null, true);
+        return this.mutate(`/cart/clear`, null);
       }
       /**
-       * Returns all available delivery slots.
+       * Returns the delivery slots with a green-choice flag and minimum order value, and the selected
+       * slot with its window. Read from the cart, which carries the slots the app's slot selector shows.
        */
-      getDeliverySlots() {
-        return this.http.sendRequest("GET", `/cart/delivery_slots`);
+      async getDeliverySlots() {
+        const cart2 = await this.http.sendRequest("GET", `/cart`, null, { includePicnicHeaders: true });
+        return (0, delivery_slots_1.extractDeliverySlots)({ delivery_slots: cart2.delivery_slots ?? [], selected_slot: cart2.selected_slot ?? null });
       }
       /**
-       * Returns all delivery slots with camelCase fields and a green-choice flag, and the selected slot with its window.
-       * This is a convenience wrapper around {@link getDeliverySlots}.
-       */
-      async getDeliverySlotOverview() {
-        return (0, helpers_1.extractDeliverySlots)(await this.getDeliverySlots());
-      }
-      /**
-       * Selects a delivery slot.
+       * Selects a delivery slot and returns the cart.
        * @param {string} slotId The id of the delivery slot to select.
        */
       setDeliverySlot(slotId) {
-        return this.http.sendRequest("POST", `/cart/set_delivery_slot`, { slot_id: slotId }, true);
+        return this.mutate(`/cart/set_delivery_slot`, { slot_id: slotId });
       }
       /**
-       * Returns the status of an order (not delivery) by its id.
-       * @param {string} orderId
-       */
-      getOrderStatus(orderId) {
-        return this.http.sendRequest("GET", `/cart/checkout/order/${orderId}/status`);
-      }
-      /**
-       * Removes an entire group of products from the cart at once.
+       * Removes a group of products from the cart at once and returns the cart.
        * @param {string} groupId The id of the group to remove.
        */
       removeGroupFromCart(groupId) {
-        return this.http.sendRequest("POST", `/cart/remove_group`, { group_id: groupId }, true);
+        return this.mutate(`/cart/remove_group`, { group_id: groupId });
       }
       /**
        * Returns the minimum order value for the currently selected delivery slot.
        * Requires a delivery slot to be selected; otherwise the API returns a 500 error.
        */
       getMinimumOrderValue() {
-        return this.http.sendRequest("GET", `/user-slot-minimum-order-value/minimum`, null, true);
+        return this.http.sendRequest("GET", `/user-slot-minimum-order-value/minimum`, null, { includePicnicHeaders: true });
+      }
+    };
+    exports.CartService = CartService;
+  }
+});
+
+// node_modules/picnic-api/lib/domains/checkout/service.js
+var require_service6 = __commonJS({
+  "node_modules/picnic-api/lib/domains/checkout/service.js"(exports) {
+    "use strict";
+    Object.defineProperty(exports, "__esModule", { value: true });
+    exports.CheckoutService = void 0;
+    var CheckoutService = class {
+      constructor(http) {
+        this.http = http;
       }
       /**
-       * Confirms and places an order identified by its order id.
-       * @param {string} orderId The id of the order to confirm.
+       * Starts the checkout of the current cart and returns the order to pay for.
+       * @param {StartCheckoutOptions} options The cart's `mts`, and what the user resolved or accepted.
+       * @throws {CheckoutIssueError} When the cart has issues to resolve first, e.g. an age check for alcohol.
        */
-      confirmOrder(orderId) {
-        return this.http.sendRequest("POST", `/cart/checkout/order/${orderId}/confirm`);
-      }
-      /**
-       * Starts the checkout flow for the current cart.
-       * Requires cart.mts to match the current cart modification timestamp.
-       * May throw CheckoutIssueError when the cart has blocking issues (e.g. alcohol age check).
-       */
-      startCheckout(input) {
+      startCheckout(options) {
         return this.http.sendRequest("POST", `/cart/checkout/start`, {
-          mts: input.mts,
-          oos_article_ids: input.oos_article_ids ?? null,
-          ...input.resolve_key ? { resolve_key: input.resolve_key } : {}
-        }, true);
+          mts: options.mts,
+          oos_article_ids: options.outOfStockArticleIds ?? null,
+          ...options.resolveKey ? { resolve_key: options.resolveKey } : {}
+        }, { includePicnicHeaders: true });
       }
       /**
        * Initiates payment for a checkout order and returns a bank redirect URL.
@@ -2781,29 +2318,43 @@ var require_service5 = __commonJS({
           order_id: orderId,
           app_return_url: appReturnUrl
         };
-        return this.http.sendRequest("POST", `/cart/checkout/initiate_payment`, body, true);
+        return this.http.sendRequest("POST", `/cart/checkout/initiate_payment`, body, { includePicnicHeaders: true });
       }
       /**
        * Polls checkout payment status while a transaction is in progress.
        */
       getCheckoutStatus(transactionId) {
-        return this.http.sendRequest("GET", `/cart/checkout/${transactionId}/status`);
+        return this.http.sendRequest("GET", `/cart/checkout/${encodeURIComponent(transactionId)}/status`);
       }
       /**
        * Cancels an in-progress checkout transaction.
        */
       cancelCheckout(transactionId) {
         const body = { transaction_id: transactionId };
-        return this.http.sendRequest("POST", `/cart/checkout/cancel`, body, true);
+        return this.http.sendRequest("POST", `/cart/checkout/cancel`, body, { includePicnicHeaders: true });
+      }
+      /**
+       * Confirms and places an order identified by its order id.
+       * @param {string} orderId The id of the order to confirm.
+       */
+      confirmOrder(orderId) {
+        return this.http.sendRequest("POST", `/cart/checkout/order/${encodeURIComponent(orderId)}/confirm`);
+      }
+      /**
+       * Returns the status of an order (not delivery) by its id.
+       * @param {string} orderId
+       */
+      getOrderStatus(orderId) {
+        return this.http.sendRequest("GET", `/cart/checkout/order/${encodeURIComponent(orderId)}/status`);
       }
     };
-    exports.CartService = CartService;
+    exports.CheckoutService = CheckoutService;
   }
 });
 
-// node_modules/picnic-api/lib/domains/delivery/helpers.js
-var require_helpers3 = __commonJS({
-  "node_modules/picnic-api/lib/domains/delivery/helpers.js"(exports) {
+// node_modules/picnic-api/lib/domains/delivery/summaries.js
+var require_summaries = __commonJS({
+  "node_modules/picnic-api/lib/domains/delivery/summaries.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.extractDeliverySummaries = extractDeliverySummaries;
@@ -2852,24 +2403,151 @@ var require_helpers3 = __commonJS({
   }
 });
 
+// node_modules/picnic-api/lib/domains/delivery/delivery.js
+var require_delivery = __commonJS({
+  "node_modules/picnic-api/lib/domains/delivery/delivery.js"(exports) {
+    "use strict";
+    Object.defineProperty(exports, "__esModule", { value: true });
+    exports.readReturnedContainers = readReturnedContainers;
+    exports.extractDelivery = extractDelivery;
+    exports.extractDeliveryPosition = extractDeliveryPosition;
+    exports.extractDeliveryRoute = extractDeliveryRoute;
+    exports.combineDeliveryTracking = combineDeliveryTracking;
+    var cart_1 = require_cart();
+    var asRecord2 = (value) => typeof value === "object" && value !== null && !Array.isArray(value) ? value : null;
+    var asRecords = (value) => Array.isArray(value) ? value.flatMap((v) => asRecord2(v) ? [asRecord2(v)] : []) : [];
+    var asString = (value) => typeof value === "string" && value !== "" ? value : null;
+    var asNumber = (value, fallback = 0) => typeof value === "number" && Number.isFinite(value) ? value : fallback;
+    function readReturnedContainers(raw) {
+      return asRecords(raw).map((entry) => ({
+        type: asString(entry.type) ?? "",
+        name: asString(entry.localized_name) ?? asString(entry.type) ?? "",
+        quantity: asNumber(entry.quantity),
+        price: asNumber(entry.price)
+      }));
+    }
+    function readPayment(raw) {
+      const info = asRecord2(raw);
+      const paymentType = asString(info?.payment_type);
+      const redactedIban = asString(info?.redacted_iban);
+      if (!paymentType && !redactedIban)
+        return null;
+      return { paymentType, redactedIban, bankId: asString(info?.bank_id) };
+    }
+    function readOrder(order) {
+      const raw = order;
+      const id = asString(raw.id);
+      if (!id)
+        return null;
+      const deposits = (0, cart_1.readDeposits)(raw.deposit_breakdown);
+      const depositTotal = deposits.reduce((sum, deposit) => sum + deposit.total, 0);
+      return {
+        id,
+        status: asString(raw.status) ?? "COMPLETED",
+        creationTime: asString(raw.creation_time) ?? "",
+        items: (order.items ?? []).flatMap((line) => (0, cart_1.readCartLine)(line, order.decorator_overrides ?? {}) ?? []),
+        totalPrice: asNumber(raw.total_price),
+        checkoutTotalPrice: asNumber(raw.checkout_total_price),
+        promotionSavings: asNumber(raw.total_savings),
+        membershipSavings: asNumber(raw.membership_savings),
+        deposits,
+        depositTotal: asNumber(raw.total_deposit) || depositTotal,
+        fees: (0, cart_1.readFees)(raw.fees),
+        cancellable: raw.cancellable === true,
+        payment: readPayment(raw.transaction_info)
+      };
+    }
+    function extractDelivery(delivery) {
+      const raw = delivery;
+      const slot2 = asRecord2(raw.slot);
+      const deliveryTime = asRecord2(raw.delivery_time);
+      const eta2 = asRecord2(raw.eta2);
+      const orders = (delivery.orders ?? []).flatMap((order) => readOrder(order) ?? []);
+      const items = orders.flatMap((order) => order.items);
+      const deposits = orders.flatMap((order) => order.deposits);
+      return {
+        id: asString(raw.delivery_id) ?? asString(raw.id) ?? "",
+        status: asString(raw.status) ?? "COMPLETED",
+        creationTime: asString(raw.creation_time) ?? "",
+        windowStart: asString(slot2?.window_start) ?? asString(deliveryTime?.start) ?? asString(eta2?.start),
+        windowEnd: asString(slot2?.window_end) ?? asString(deliveryTime?.end) ?? asString(eta2?.end),
+        orders,
+        returnedContainers: readReturnedContainers(raw.returned_containers),
+        totalPrice: orders.reduce((sum, order) => sum + order.checkoutTotalPrice, 0),
+        totalCount: items.reduce((sum, item) => sum + item.quantity, 0),
+        // Line prices are totals for the line's quantity.
+        discount: items.reduce((sum, item) => sum + (item.originalPrice !== null ? item.originalPrice - item.displayPrice : 0), 0),
+        promotionSavings: orders.reduce((sum, order) => sum + order.promotionSavings, 0),
+        membershipSavings: orders.reduce((sum, order) => sum + order.membershipSavings, 0),
+        deposits,
+        depositTotal: deposits.reduce((sum, deposit) => sum + deposit.total, 0),
+        fees: orders.flatMap((order) => order.fees),
+        cancellable: orders.some((order) => order.cancellable)
+      };
+    }
+    function readRoutePoint(raw) {
+      const lat = asNumber(raw.lat);
+      const lng = asNumber(raw.lng);
+      return lat === 0 && lng === 0 ? null : { lat, lng, ts: asNumber(raw.ts) };
+    }
+    function closestPoint(route, ts) {
+      let best = null;
+      for (const point of route) {
+        if (!best || Math.abs(point.ts - ts) < Math.abs(best.ts - ts))
+          best = point;
+      }
+      return best;
+    }
+    function extractDeliveryPosition(raw) {
+      const pos = asRecord2(raw) ?? {};
+      const etaWindow = asRecord2(pos.eta_window);
+      return {
+        routeVersion: asNumber(pos.version),
+        inProgress: pos.scenario_in_progress === true,
+        queryInterval: asNumber(pos.query_interval, 15e3),
+        eta: asNumber(pos.eta) || null,
+        etaWindowStart: asString(etaWindow?.start),
+        etaWindowEnd: asString(etaWindow?.end),
+        routeTime: asNumber(pos.scenario_ts)
+      };
+    }
+    function extractDeliveryRoute(raw) {
+      const scenario = asRecord2(raw) ?? {};
+      const points = asRecords(scenario.scenario).flatMap((point) => readRoutePoint(point) ?? []);
+      const driver = asRecord2(scenario.driver);
+      const vehicle = asRecord2(scenario.vehicle);
+      const destination = asRecord2(scenario.destination);
+      const end = points[points.length - 1];
+      const lat = asNumber(destination?.lat) || (end?.lat ?? 0);
+      const lng = asNumber(destination?.lng) || (end?.lng ?? 0);
+      const image = asString(vehicle?.image);
+      return {
+        version: asNumber(scenario.version),
+        points,
+        driverName: asString(driver?.name),
+        driverPhotoUrl: asString(driver?.photo_url),
+        vehicleName: asString(vehicle?.name),
+        vehicleImageDataUrl: image ? image.startsWith("data:") ? image : `data:image/png;base64,${image}` : null,
+        destination: lat !== 0 || lng !== 0 ? { lat, lng, street: asString(destination?.street), city: asString(destination?.city), postcode: asString(destination?.postcode) } : null
+      };
+    }
+    function combineDeliveryTracking(position, route) {
+      return { ...position, currentPosition: closestPoint(route.points, position.routeTime), route };
+    }
+  }
+});
+
 // node_modules/picnic-api/lib/domains/delivery/service.js
-var require_service6 = __commonJS({
+var require_service7 = __commonJS({
   "node_modules/picnic-api/lib/domains/delivery/service.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.DeliveryService = void 0;
-    var helpers_1 = require_helpers3();
+    var summaries_1 = require_summaries();
+    var delivery_1 = require_delivery();
     var DeliveryService = class {
       constructor(http) {
         this.http = http;
-      }
-      /**
-       * Returns all past and current deliveries, as returned by the API.
-       * @deprecated use getDeliverySummaries, which returns typed, summed entries.
-       * @param {DeliveryStatus[]} [filter=[]] An array of delivery statuses to filter on.
-       */
-      getDeliveries(filter = []) {
-        return this.http.sendRequest("POST", `/deliveries/summary`, filter);
       }
       /**
        * Returns all past and current deliveries as summaries, newest first.
@@ -2878,35 +2556,53 @@ var require_service6 = __commonJS({
        */
       async getDeliverySummaries(filter = []) {
         const raw = await this.http.sendRequest("POST", `/deliveries/summary`, filter);
-        return (0, helpers_1.extractDeliverySummaries)(raw);
+        return (0, summaries_1.extractDeliverySummaries)(raw);
       }
       /**
-       * Returns the details of a specific delivery.
+       * Returns a delivery as the app's order history shows it: its orders with their lines (read
+       * like the cart's), the returned containers and the totals over all orders.
        * @param {string} deliveryId The id of the delivery to look up.
        */
-      getDelivery(deliveryId) {
-        return this.http.sendRequest("GET", `/deliveries/${deliveryId}`);
+      async getDelivery(deliveryId) {
+        return (0, delivery_1.extractDelivery)(await this.http.sendRequest("GET", `/deliveries/${encodeURIComponent(deliveryId)}`));
       }
       /**
-       * Returns the position data of a specific delivery.
+       * Returns a delivery's position, which the app polls while the driver is on the way: the
+       * arrival estimate, whether the delivery is in progress and the version of its route.
        * @param {string} deliveryId The id of the delivery to look up.
        */
-      getDeliveryPosition(deliveryId) {
-        return this.http.sendRequest("GET", `/deliveries/${deliveryId}/position`, null, true);
+      async getDeliveryPosition(deliveryId) {
+        return (0, delivery_1.extractDeliveryPosition)(await this.http.sendRequest("GET", `/deliveries/${encodeURIComponent(deliveryId)}/position`, null, { includePicnicHeaders: true }));
       }
       /**
-       * Returns the driver and route information of a delivery.
+       * Returns a delivery's route, driver, vehicle and destination.
        * @param {string} deliveryId The id of the delivery to look up.
        */
-      getDeliveryScenario(deliveryId) {
-        return this.http.sendRequest("GET", `/deliveries/${deliveryId}/scenario`, null, true);
+      async getDeliveryRoute(deliveryId) {
+        return (0, delivery_1.extractDeliveryRoute)(await this.http.sendRequest("GET", `/deliveries/${encodeURIComponent(deliveryId)}/scenario`, null, { includePicnicHeaders: true }));
+      }
+      /**
+       * Returns where a delivery is: the position combined with the route. Poll again after
+       * `queryInterval` while `inProgress`, passing the `route` of the previous result: the route is
+       * only fetched again when the position reports another route version.
+       * @param {string} deliveryId The id of the delivery to look up.
+       * @param {DeliveryRoute} [knownRoute] The route from a previous call for this delivery.
+       */
+      async getDeliveryTracking(deliveryId, knownRoute) {
+        if (!knownRoute) {
+          const [position2, route2] = await Promise.all([this.getDeliveryPosition(deliveryId), this.getDeliveryRoute(deliveryId)]);
+          return (0, delivery_1.combineDeliveryTracking)(position2, route2);
+        }
+        const position = await this.getDeliveryPosition(deliveryId);
+        const route = knownRoute.version === position.routeVersion ? knownRoute : await this.getDeliveryRoute(deliveryId);
+        return (0, delivery_1.combineDeliveryTracking)(position, route);
       }
       /**
        * Cancels an order by delivery id.
        * @param {string} deliveryId
        */
       cancelDelivery(deliveryId) {
-        return this.http.sendRequest("POST", `/order/delivery/${deliveryId}/cancel`);
+        return this.http.sendRequest("POST", `/order/delivery/${encodeURIComponent(deliveryId)}/cancel`);
       }
       /**
        * Sets a rating for a delivery from 0 to 10. Returns 400 if the delivery already has a rating.
@@ -2914,26 +2610,100 @@ var require_service6 = __commonJS({
        * @param {number} rating
        */
       setDeliveryRating(deliveryId, rating) {
-        return this.http.sendRequest("POST", `/deliveries/${deliveryId}/rating`, { rating });
+        return this.http.sendRequest("POST", `/deliveries/${encodeURIComponent(deliveryId)}/rating`, { rating });
       }
       /**
        * (Re)sends the invoice email for a delivery.
        * @param {string} deliveryId
        */
       sendDeliveryInvoiceEmail(deliveryId) {
-        return this.http.sendRequest("POST", `/deliveries/${deliveryId}/resend_invoice_email`);
+        return this.http.sendRequest("POST", `/deliveries/${encodeURIComponent(deliveryId)}/resend_invoice_email`);
+      }
+      /**
+       * Returns parcels (externally shipped packages tracked via a carrier).
+       */
+      getParcels() {
+        return this.http.sendRequest("GET", `/parcels`, null, { includePicnicHeaders: true });
       }
     };
     exports.DeliveryService = DeliveryService;
   }
 });
 
+// node_modules/picnic-api/lib/domains/payment/wallet-transaction.js
+var require_wallet_transaction = __commonJS({
+  "node_modules/picnic-api/lib/domains/payment/wallet-transaction.js"(exports) {
+    "use strict";
+    Object.defineProperty(exports, "__esModule", { value: true });
+    exports.extractWalletTransaction = extractWalletTransaction;
+    var cart_1 = require_cart();
+    var delivery_1 = require_delivery();
+    var asRecord2 = (value) => typeof value === "object" && value !== null && !Array.isArray(value) ? value : null;
+    var asRecords = (value) => Array.isArray(value) ? value.flatMap((v) => asRecord2(v) ? [asRecord2(v)] : []) : [];
+    var asString = (value) => typeof value === "string" && value !== "" ? value : null;
+    var asNumber = (value, fallback = 0) => typeof value === "number" && Number.isFinite(value) ? value : fallback;
+    var firstImage = (raw) => asString(Array.isArray(raw?.image_ids) ? raw.image_ids[0] : null);
+    function articlesById(lines) {
+      const articles = /* @__PURE__ */ new Map();
+      for (const line of lines) {
+        for (const article of asRecords(line.items)) {
+          const id = asString(article.id);
+          if (id)
+            articles.set(id, article);
+        }
+      }
+      return articles;
+    }
+    function readSubstitution(refund, articles) {
+      const replacements = asRecords(refund.substitutions).map((sub) => ({
+        name: asString(sub.name) ?? "",
+        imageId: firstImage(sub),
+        quantity: asNumber(sub.quantity, 1)
+      }));
+      if (replacements.length === 0)
+        return null;
+      const article = articles.get(asString(refund.article_id) ?? "") ?? null;
+      return {
+        original: { name: asString(article?.name) ?? "", imageId: firstImage(article), quantity: asNumber(refund.quantity, 1) },
+        refundAmount: asNumber(refund.amount),
+        replacements
+      };
+    }
+    function extractWalletTransaction(transactionId, transaction) {
+      const raw = asRecord2(transaction) ?? {};
+      const lines = asRecords(raw.shop_items);
+      const articles = articlesById(lines);
+      const refunds = asRecords(raw.article_issue_refunds);
+      const substitutedIds = new Set(refunds.filter((refund) => asRecords(refund.substitutions).length > 0).map((refund) => asString(refund.article_id)));
+      const items = lines.filter((line) => !asRecords(line.items).some((article) => substitutedIds.has(asString(article.id)))).flatMap((line) => (0, cart_1.readCartLine)(line) ?? []);
+      const returnedContainers = (0, delivery_1.readReturnedContainers)(raw.returned_containers);
+      const displayName = asString(raw.payment_option_display_name);
+      const paidAt = asNumber(raw.payment_execution_timestamp);
+      return {
+        id: transactionId,
+        deliveryId: asString(raw.delivery_id),
+        paidAt: paidAt > 0 ? paidAt : null,
+        amount: asNumber(raw.amount_in_cents),
+        type: asString(raw.transaction_type) ?? "",
+        status: asString(raw.transaction_status) ?? "",
+        items,
+        substitutions: refunds.flatMap((refund) => readSubstitution(refund, articles) ?? []),
+        depositTotal: asRecords(raw.deposits).reduce((sum, deposit) => sum + asNumber(deposit.value) * asNumber(deposit.count), 0),
+        returnedContainers,
+        returnedDepositTotal: returnedContainers.reduce((sum, container) => sum + container.price, 0),
+        paymentMethod: displayName ? { displayName, account: asString(raw.payment_option_account), iconUrl: asString(raw.payment_method_icon_url) } : null
+      };
+    }
+  }
+});
+
 // node_modules/picnic-api/lib/domains/payment/service.js
-var require_service7 = __commonJS({
+var require_service8 = __commonJS({
   "node_modules/picnic-api/lib/domains/payment/service.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.PaymentService = void 0;
+    var wallet_transaction_1 = require_wallet_transaction();
     var PaymentService = class {
       constructor(http) {
         this.http = http;
@@ -2942,7 +2712,7 @@ var require_service7 = __commonJS({
        * Returns payment profile information.
        */
       getPaymentProfile() {
-        return this.http.sendRequest("GET", `/payment-profile`, null, true);
+        return this.http.sendRequest("GET", `/payment-profile`, null, { includePicnicHeaders: true });
       }
       /**
        * Returns a page of wallet transactions.
@@ -2952,11 +2722,13 @@ var require_service7 = __commonJS({
         return this.http.sendRequest("POST", `/wallet/transactions`, { page_number: pageNumber });
       }
       /**
-       * Returns the details of a specific wallet transaction.
+       * Returns a payment (or refund) as the app's wallet shows it: the amount, the order lines it
+       * covers (read like the cart's), the substituted products, deposits and the payment method.
        * @param {string} walletTransactionId The id of the transaction.
        */
-      getWalletTransactionDetails(walletTransactionId) {
-        return this.http.sendRequest("GET", `/wallet/transactions/${walletTransactionId}`);
+      async getWalletTransaction(walletTransactionId) {
+        const raw = await this.http.sendRequest("GET", `/wallet/transactions/${encodeURIComponent(walletTransactionId)}`);
+        return (0, wallet_transaction_1.extractWalletTransaction)(walletTransactionId, raw);
       }
     };
     exports.PaymentService = PaymentService;
@@ -2964,7 +2736,7 @@ var require_service7 = __commonJS({
 });
 
 // node_modules/picnic-api/lib/domains/consent/service.js
-var require_service8 = __commonJS({
+var require_service9 = __commonJS({
   "node_modules/picnic-api/lib/domains/consent/service.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
@@ -2974,11 +2746,16 @@ var require_service8 = __commonJS({
         this.http = http;
       }
       /**
-       * Returns the list of consent settings.
-       * @param {boolean} [general=false] If true, returns only the 'general' consent settings.
+       * Returns the consent settings.
        */
-      getConsentSettings(general = false) {
-        return this.http.sendRequest("GET", `/consents${general ? "/general" : ""}/settings-page`);
+      getConsentSettings() {
+        return this.http.sendRequest("GET", `/consents/settings-page`);
+      }
+      /**
+       * Returns the general consent settings.
+       */
+      getGeneralConsentSettings() {
+        return this.http.sendRequest("GET", `/consents/general/settings-page`);
       }
       /**
        * Sets one or multiple consent options.
@@ -3017,7 +2794,7 @@ var require_service8 = __commonJS({
 });
 
 // node_modules/picnic-api/lib/domains/customer-service/service.js
-var require_service9 = __commonJS({
+var require_service10 = __commonJS({
   "node_modules/picnic-api/lib/domains/customer-service/service.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
@@ -3030,49 +2807,19 @@ var require_service9 = __commonJS({
        * Returns customer service contact details and opening times.
        */
       getContactInfo() {
-        return this.http.sendRequest("GET", `/cs-contact-info`, null, true);
-      }
-      /**
-       * Returns popup messages in the app (e.g. post-delivery satisfaction prompts,
-       * message bar notifications, order-confirmation cards).
-       * @param {MessageDisplayPosition[]} [displayPositions] Optional filter by display position(s).
-       */
-      getMessages(displayPositions) {
-        const query = displayPositions?.length ? `?${displayPositions.map((p) => `display_position=${encodeURIComponent(p)}`).join("&")}` : "";
-        return this.http.sendRequest("GET", `/messages${query}`, null, true);
-      }
-      /**
-       * Returns the user's configured delivery reminders.
-       * Note: Reminders don't seem to be working yet.
-       */
-      getReminders() {
-        return this.http.sendRequest("GET", `/reminders`, null, true);
-      }
-      /**
-       * Sets (replaces) the user's delivery reminders.
-       * Note: Reminders don't seem to be working yet.
-       * @param {Reminder[]} reminders The new list of reminders to save.
-       */
-      setReminders(reminders) {
-        return this.http.sendRequest("PUT", `/reminders`, reminders, true);
-      }
-      /**
-       * Returns parcels (externally shipped packages tracked via a carrier).
-       */
-      getParcels() {
-        return this.http.sendRequest("GET", `/parcels`, null, true);
+        return this.http.sendRequest("GET", `/cs-contact-info`, null, { includePicnicHeaders: true });
       }
       /**
        * Returns CS contact info without requiring authentication.
        * Uses the public API endpoint (/public-api/...) with a picnic-country header.
        * @param {string} countryCode The country code to pass as the picnic-country header (e.g. 'NL').
        */
-      async getUnauthenticatedContactInfo(countryCode) {
+      getUnauthenticatedContactInfo(countryCode) {
         const publicUrl = this.http.url.replace("/api/", "/public-api/");
-        const response = await fetch(`${publicUrl}/cs-contact-info`, {
+        return this.http.sendRequest("GET", `${publicUrl}/cs-contact-info`, null, {
+          authenticated: false,
           headers: { "picnic-country": countryCode }
         });
-        return response.json();
       }
     };
     exports.CustomerServiceService = CustomerServiceService;
@@ -3080,7 +2827,7 @@ var require_service9 = __commonJS({
 });
 
 // node_modules/picnic-api/lib/domains/content/service.js
-var require_service10 = __commonJS({
+var require_service11 = __commonJS({
   "node_modules/picnic-api/lib/domains/content/service.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
@@ -3094,63 +2841,216 @@ var require_service10 = __commonJS({
        * Used to populate the in-app FAQ / help section.
        */
       getFaqContent() {
-        return this.http.sendRequest("GET", `/content/faq`, null, true);
+        return this.http.sendRequest("GET", `/content/faq`, null, { includePicnicHeaders: true });
       }
       /**
        * Returns the content shown on the search empty-state screen (no results).
        * Returned in PML (Picnic Markup Language) format.
        */
       getSearchEmptyState() {
-        return this.http.sendRequest("GET", `/content/search_empty_state`, null, true);
+        return this.http.sendRequest("GET", `/content/search_empty_state`, null, { includePicnicHeaders: true });
       }
     };
     exports.ContentService = ContentService;
   }
 });
 
-// node_modules/picnic-api/lib/domains/user-onboarding/service.js
-var require_service11 = __commonJS({
-  "node_modules/picnic-api/lib/domains/user-onboarding/service.js"(exports) {
+// node_modules/picnic-api/lib/domains/recipe/lists.js
+var require_lists = __commonJS({
+  "node_modules/picnic-api/lib/domains/recipe/lists.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
-    exports.UserOnboardingService = void 0;
-    var UserOnboardingService = class {
-      constructor(http) {
-        this.http = http;
+    exports.parseMinutes = parseMinutes;
+    exports.readRecipeTile = readRecipeTile;
+    exports.extractRecipeTiles = extractRecipeTiles;
+    exports.extractRecipeOverview = extractRecipeOverview;
+    exports.extractRecipeCategory = extractRecipeCategory;
+    exports.extractRecipeCategoryGroup = extractRecipeCategoryGroup;
+    var pml_1 = require_pml();
+    var RECIPE_SCHEMA = "iglu:tech.picnic.snowplow.analytics/recipe/jsonschema/";
+    var AISLE_SCHEMA = "iglu:tech.picnic.snowplow.analytics/aisle/jsonschema/";
+    var PAGE_SECTION_SCHEMA = "iglu:tech.picnic.snowplow.analytics/page_section/jsonschema/";
+    var PML_COMPONENT_SCHEMA = "iglu:tech.picnic.snowplow.analytics/pml_component/jsonschema/";
+    var CATEGORY_LINK = /id=meals-category(-group)?-page,(?:category_id|group_name)=([^,&]+)/;
+    function parseMinutes(text3) {
+      const sum = text3.match(/^(\d+(?:\s*\+\s*\d+)*)\s*min/i)?.[1];
+      if (sum)
+        return sum.split("+").reduce((total, part) => total + Number(part.trim()), 0);
+      const hours = text3.match(/(\d+)\s*(?:uur|u|std|h)\b/i)?.[1];
+      const minutes = text3.match(/(\d+)\s*min/i)?.[1];
+      if (hours === void 0 && minutes === void 0)
+        return null;
+      return Number(hours ?? 0) * 60 + Number(minutes ?? 0);
+    }
+    function recipeContext(tile) {
+      return (0, pml_1.analyticsContexts)(tile).find((c) => c.schema?.startsWith(RECIPE_SCHEMA) && typeof c.data?.recipe_id === "string")?.data;
+    }
+    function visibleTexts(node, texts = []) {
+      if (Array.isArray(node))
+        node.forEach((child) => visibleTexts(child, texts));
+      else if (typeof node === "object" && node !== null) {
+        const record = node;
+        if (record.isHidden !== void 0 && record.isHidden !== false)
+          return texts;
+        if (record.type === "RICH_TEXT" && typeof record.markdown === "string")
+          texts.push({ markdown: record.markdown, textType: record.textType });
+        for (const [key, value] of Object.entries(record))
+          if (key !== "analytics")
+            visibleTexts(value, texts);
       }
-      // TODO: Test route and add types
-      /**
-       * Submits household details during user onboarding.
-       * Used to personalize the shopping experience based on household composition.
-       * @param {Record<string, any>} details Household details object (exact shape unknown).
-       */
-      setHouseholdDetails(details) {
-        return this.http.sendRequest("POST", `/user-onboarding/household-details`, details);
+      return texts;
+    }
+    function readRecipeTile(tile) {
+      const recipe = recipeContext(tile);
+      if (!recipe)
+        return null;
+      const texts = visibleTexts(tile.pml).map((t) => ({ text: (0, pml_1.cleanMarkdown)(t.markdown), textType: t.textType })).filter((t) => t.text);
+      const analyticsName = typeof recipe.recipe_name === "string" ? recipe.recipe_name.trim() : "";
+      const shownName = analyticsName ? texts.findIndex((t) => t.text === analyticsName) : -1;
+      const nameIndex = shownName >= 0 ? shownName : texts.findIndex((t) => t.textType === "SUBTITLE1");
+      const name = analyticsName || (nameIndex >= 0 ? texts[nameIndex].text : "");
+      const after = nameIndex >= 0 ? texts.slice(nameIndex + 1).filter((t) => t.text !== ">") : [];
+      const subtitle = after.find((t) => t.textType === "SUBTITLE2")?.text ?? null;
+      const tags = after.filter((t) => t.textType !== "SUBTITLE2").map((t) => t.text);
+      const image = (0, pml_1.findNode)(tile.pml, (n) => n.type === "IMAGE" && typeof n.source?.id === "string");
+      const imageType = recipe.recipe_image_type ?? recipe.image_type;
+      return {
+        id: recipe.recipe_id,
+        name,
+        imageType: typeof imageType === "string" ? imageType : null,
+        imageId: image ? image.source.id : null,
+        subtitle,
+        tags,
+        cookingTimeMinutes: firstMinutes(tags)
+      };
+    }
+    var firstMinutes = (tags) => tags.map(parseMinutes).find((minutes) => minutes !== null) ?? null;
+    function extractRecipeTiles(page) {
+      const recipes = /* @__PURE__ */ new Map();
+      walkTiles(page, (tile) => {
+        const recipe = readRecipeTile(tile);
+        if (recipe && !recipes.has(recipe.id))
+          recipes.set(recipe.id, recipe);
+      });
+      return [...recipes.values()];
+    }
+    function walkTiles(node, visit) {
+      if (Array.isArray(node))
+        return node.forEach((child) => walkTiles(child, visit));
+      if (typeof node !== "object" || node === null)
+        return;
+      const record = node;
+      if (record.type === "PML" && recipeContext(record))
+        return visit(record);
+      Object.values(record).forEach((child) => walkTiles(child, visit));
+    }
+    function categoryLink(deeplink, name, imageId) {
+      const match = deeplink.match(CATEGORY_LINK);
+      if (!match)
+        return null;
+      return { type: match[1] ? "group" : "category", id: decodeURIComponent(match[2]), name, imageId };
+    }
+    function extractRecipeOverview(page) {
+      const sections = /* @__PURE__ */ new Map();
+      walkTiles(page, (tile) => {
+        const aisle = (0, pml_1.analyticsContexts)(tile).find((c) => c.schema?.startsWith(AISLE_SCHEMA))?.data;
+        const recipe = readRecipeTile(tile);
+        if (!aisle || !recipe || typeof aisle.assortment_aisle !== "string")
+          return;
+        const key = `${aisle.aisle_ranking}:${aisle.assortment_aisle}`;
+        let section = sections.get(key);
+        if (!section) {
+          const pill = typeof aisle.pill_display_name === "string" ? aisle.pill_display_name : null;
+          section = { title: aisle.assortment_aisle, pill, recipes: [], rank: Number(aisle.aisle_ranking ?? sections.size), ids: /* @__PURE__ */ new Set() };
+          sections.set(key, section);
+        }
+        if (!section.ids.has(recipe.id)) {
+          section.ids.add(recipe.id);
+          section.recipes.push(recipe);
+        }
+      });
+      const categorySections = /* @__PURE__ */ new Map();
+      (0, pml_1.walkNodes)(page, (node) => {
+        if (node.type !== "PML")
+          return;
+        const contexts = (0, pml_1.analyticsContexts)(node);
+        const deeplink = contexts.find((c) => c.schema?.startsWith(PML_COMPONENT_SCHEMA))?.data?.deeplink;
+        const heading = contexts.find((c) => c.schema?.startsWith(PAGE_SECTION_SCHEMA))?.data?.name;
+        if (typeof deeplink !== "string" || typeof heading !== "string")
+          return;
+        const component = node.pml?.component;
+        const name = typeof component?.accessibilityLabel === "string" ? component.accessibilityLabel : "";
+        const image = (0, pml_1.findNode)(component, (n) => n.type === "IMAGE");
+        const link = categoryLink(deeplink, name, typeof image?.source?.id === "string" ? image.source.id : null);
+        if (!link || !name)
+          return;
+        const section = categorySections.get(heading) ?? { title: heading, categories: [] };
+        if (!section.categories.some((c) => c.type === link.type && c.id === link.id))
+          section.categories.push(link);
+        categorySections.set(heading, section);
+      });
+      return {
+        sections: [...sections.values()].sort((a, b) => a.rank - b.rank).map(({ title, pill, recipes }) => ({ title, pill, recipes })),
+        categorySections: [...categorySections.values()]
+      };
+    }
+    var asRecord2 = (value) => typeof value === "object" && value !== null && !Array.isArray(value) ? value : null;
+    var asString = (value) => typeof value === "string" && value !== "" ? value : null;
+    function findRscNode(nodes, component) {
+      for (const node of nodes) {
+        if (node.component === component)
+          return node;
+        const found = findRscNode(node.children, component);
+        if (found)
+          return found;
       }
-      // TODO: Test route and add types
-      /**
-       * Submits business details during user onboarding (for business accounts).
-       * @param {Record<string, any>} details Business details object (exact shape unknown).
-       */
-      setBusinessDetails(details) {
-        return this.http.sendRequest("POST", `/user-onboarding/business-details`, details);
-      }
-      // TODO: Test route and add types
-      /**
-       * Subscribes the user to push notifications during the onboarding flow.
-       * @param {string[]} topics The list of push notification topics to subscribe to.
-       */
-      subscribePush(topics) {
-        return this.http.sendRequest("POST", `/user-onboarding/subscribe-push`, { topics });
-      }
-    };
-    exports.UserOnboardingService = UserOnboardingService;
+      return null;
+    }
+    function readRscRecipeTile(item) {
+      const tile = asRecord2(item);
+      const id = asString(tile?.id);
+      if (!tile || !id || tile.sellableType !== "SELLING_GROUP")
+        return null;
+      const text3 = asRecord2(tile.text);
+      const tags = (Array.isArray(text3?.tags) ? text3.tags : []).flatMap((tag) => asString(asRecord2(tag)?.text) ?? []);
+      return {
+        id,
+        name: asString(asRecord2(text3?.title)?.text) ?? "",
+        imageType: null,
+        imageId: asString(asRecord2(tile.image)?.imageId),
+        subtitle: asString(asRecord2(text3?.subtitle)?.text),
+        tags,
+        cookingTimeMinutes: firstMinutes(tags)
+      };
+    }
+    function extractRecipeCategory(categoryId, content) {
+      const items = findRscNode(content.nodes, "vertical-list")?.props.items;
+      return {
+        id: categoryId,
+        title: asString(findRscNode(content.nodes, "page-header")?.props.title) ?? "",
+        recipes: (Array.isArray(items) ? items : []).flatMap((item) => readRscRecipeTile(item) ?? [])
+      };
+    }
+    function extractRecipeCategoryGroup(name, content) {
+      const list = findRscNode(content.nodes, "category-list");
+      const items = list?.props.items;
+      return {
+        name,
+        title: asString(list?.props.title) ?? name,
+        categories: (Array.isArray(items) ? items : []).flatMap((item) => {
+          const entry = asRecord2(item);
+          const deeplink = asString(entry?.deeplink);
+          const link = deeplink ? categoryLink(deeplink, asString(entry?.title) ?? "", asString(entry?.image)) : null;
+          return link ? [link] : [];
+        })
+      };
+    }
   }
 });
 
-// node_modules/picnic-api/lib/domains/recipe/helpers.js
-var require_helpers4 = __commonJS({
-  "node_modules/picnic-api/lib/domains/recipe/helpers.js"(exports) {
+// node_modules/picnic-api/lib/domains/recipe/recipe.js
+var require_recipe = __commonJS({
+  "node_modules/picnic-api/lib/domains/recipe/recipe.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.extractUserDefinedRecipeDetails = void 0;
@@ -3160,8 +3060,11 @@ var require_helpers4 = __commonJS({
     exports.extractRecipeDetails = extractRecipeDetails;
     exports.extractIngredientQuantities = extractIngredientQuantities;
     exports.extractSuggestedImages = extractSuggestedImages;
+    var pml_1 = require_pml();
+    var lists_1 = require_lists();
     var RECIPE_SCHEMA = "iglu:tech.picnic.snowplow.analytics/recipe/jsonschema/";
     var SEGMENT_SCHEMA = "iglu:tech.picnic.snowplow.analytics/segment/jsonschema/";
+    var PROMOTION_SCHEMA = "iglu:tech.picnic.snowplow.analytics/promotion/jsonschema/";
     var walkObjects = (node, visit) => {
       if (Array.isArray(node)) {
         node.forEach((child) => walkObjects(child, visit));
@@ -3193,10 +3096,15 @@ var require_helpers4 = __commonJS({
         if (typeof recipe?.recipe_id !== "string")
           return;
         const previous = byId.get(recipe.recipe_id);
+        const tile = (0, lists_1.readRecipeTile)(obj);
         byId.set(recipe.recipe_id, {
           id: recipe.recipe_id,
-          name: previous?.name || recipe.recipe_name || textByType(obj.pml, "SUBTITLE1") || "",
-          imageType: previous?.imageType ?? recipe.recipe_image_type ?? recipe.image_type ?? null
+          name: previous?.name || recipe.recipe_name || tile?.name || "",
+          imageType: previous?.imageType ?? recipe.recipe_image_type ?? recipe.image_type ?? null,
+          imageId: previous?.imageId ?? tile?.imageId ?? null,
+          subtitle: previous?.subtitle ?? tile?.subtitle ?? null,
+          tags: previous?.tags.length ? previous.tags : tile?.tags ?? [],
+          cookingTimeMinutes: previous?.cookingTimeMinutes ?? tile?.cookingTimeMinutes ?? null
         });
       });
       return [...byId.values()];
@@ -3204,20 +3112,125 @@ var require_helpers4 = __commonJS({
     function extractUserDefinedRecipes(page) {
       return extractRecipes(page, "USER_DEFINED_RECIPES");
     }
-    function extractIngredientNames(page) {
-      const names = /* @__PURE__ */ new Map();
+    var markdownText = (node) => typeof node?.markdown === "string" ? (0, pml_1.cleanMarkdown)(node.markdown) || null : null;
+    function readIngredientTile(tile, contexts, unit) {
+      const nameNode = (0, pml_1.findNode)(tile.pml, (n) => n.type === "RICH_TEXT" && n.textType === "SUBTITLE1" && typeof n.markdown === "string");
+      const [nameStack, infoColumn] = nameNode ? (0, pml_1.ancestorsOf)(tile.pml, nameNode).filter((n) => n.type === "STACK") : [];
+      const textRow = (infoColumn ? (0, pml_1.childrenOf)(infoColumn) : []).filter((n) => n.type === "STACK" && (0, pml_1.childrenOf)(n).length > 0 && (0, pml_1.childrenOf)(n).every((c) => c.type === "RICH_TEXT" && typeof c.markdown === "string")).pop();
+      const rowTexts = textRow ? (0, pml_1.childrenOf)(textRow) : [];
+      const image = (0, pml_1.findNode)((0, pml_1.findNodeById)(tile.pml, "selling-unit-image"), (n) => n.type === "IMAGE");
+      const imageSource = image?.source;
+      const promotion = contexts.find((c) => c.schema?.startsWith(PROMOTION_SCHEMA))?.data;
+      return {
+        name: markdownText(nameNode ?? void 0),
+        brand: nameStack ? findBrand((0, pml_1.childrenOf)(nameStack).slice(1)) : null,
+        sellingUnitId: typeof unit?.selling_unit_id === "string" ? unit.selling_unit_id : null,
+        imageId: typeof imageSource?.id === "string" ? imageSource.id : null,
+        unitQuantity: markdownText(rowTexts[0]),
+        neededText: markdownText(rowTexts[1]),
+        promotionLabel: typeof promotion?.promotion_label === "string" ? promotion.promotion_label : null,
+        notice: markdownText((infoColumn ? (0, pml_1.childrenOf)(infoColumn) : []).find((n) => n.type === "RICH_TEXT"))
+      };
+    }
+    var findBrand = (nodes) => markdownText((0, pml_1.findNode)(nodes, (n) => n.type === "RICH_TEXT" && typeof n.markdown === "string") ?? void 0);
+    function extractIngredientTiles(page) {
+      const tiles = /* @__PURE__ */ new Map();
       walkObjects(page, (obj) => {
         if (obj.type !== "PML" || typeof obj.id !== "string" || !obj.id.includes("selling-unit-tile"))
           return;
         const contexts = obj.analytics?.contexts ?? [];
         const recipe = contexts.find((c) => c.schema?.startsWith(RECIPE_SCHEMA))?.data;
         const units = recipe?.selling_units;
-        const ingredientId = Array.isArray(units) && units.length === 1 ? units[0].ingredient_id : JSON.stringify(obj.pml ?? {}).match(/ingredient_id=([a-f0-9-]+)&/)?.[1];
-        const name = textByType(obj.pml, "SUBTITLE1");
-        if (typeof ingredientId === "string" && name)
-          names.set(ingredientId, name);
+        const unit = Array.isArray(units) && units.length === 1 ? units[0] : void 0;
+        const ingredientId = unit ? unit.ingredient_id : JSON.stringify(obj.pml ?? {}).match(/ingredient_id=([a-f0-9-]+)&/)?.[1];
+        if (typeof ingredientId === "string" && !tiles.has(ingredientId))
+          tiles.set(ingredientId, readIngredientTile(obj, contexts, unit));
       });
-      return names;
+      return tiles;
+    }
+    function extractIngredientStates(page) {
+      const states = /* @__PURE__ */ new Map();
+      walkObjects(page, (obj) => {
+        if (obj.type !== "STATE_BOUNDARY" || obj.id !== "sellableContentState")
+          return;
+        for (const ingredient of obj.state?.ingredientsState ?? []) {
+          if (typeof ingredient?.ingredientId === "string")
+            states.set(ingredient.ingredientId, ingredient);
+        }
+      });
+      return states;
+    }
+    function extractDefaultSelectedIngredientIds(page) {
+      const state = (0, pml_1.findNode)(page, (n) => n.type === "STATE_BOUNDARY" && n.id === "sellablePageState")?.state;
+      const ids = state?.defaultSelectedIngredientIds;
+      return Array.isArray(ids) ? new Set(ids.filter((id) => typeof id === "string")) : null;
+    }
+    function extractAllergensByIngredient(page) {
+      let components = [];
+      let names = {};
+      walkObjects(page, (obj) => {
+        if (obj.type !== "EXPRESSION" || typeof obj.expression !== "string")
+          return;
+        if (components.length === 0) {
+          const list = obj.expression.match(/const components = (\[.*?\]);\n/s)?.[1];
+          components = parseJson(list) ?? [];
+        }
+        if (Object.keys(names).length === 0) {
+          const map = obj.expression.match(/const translationsMap = (\{[^}]*\});/)?.[1];
+          names = parseJson(map?.replace(/([A-Z_]+):/g, '"$1":')) ?? {};
+        }
+      });
+      const name = (code) => names[code] ?? code;
+      return new Map(components.filter((component) => typeof component.id === "string" && !component.excluded).map((component) => {
+        const info = component.transformations?.allergy_info;
+        return [component.id, { contains: (info?.allergy_info_contains ?? []).map(name), mayContain: (info?.allergy_info_may_contain ?? []).map(name) }];
+      }));
+    }
+    function parseJson(text3) {
+      if (!text3)
+        return null;
+      try {
+        return JSON.parse(text3);
+      } catch {
+        return null;
+      }
+    }
+    function combineAllergens(allergens) {
+      return {
+        contains: [...new Set(allergens.flatMap((a) => a.contains))],
+        mayContain: [...new Set(allergens.flatMap((a) => a.mayContain))]
+      };
+    }
+    function extractTimes(page) {
+      const component = (0, pml_1.findPmlComponent)((0, pml_1.findNodeById)(page, "selling-group-time-and-price-section"));
+      return (component ? (0, pml_1.childrenOf)(component) : []).flatMap((column) => {
+        const texts = (0, pml_1.childrenOf)(column).filter((c) => c.type === "RICH_TEXT" && typeof c.markdown === "string");
+        return texts.length === 2 ? [{ value: (0, pml_1.cleanMarkdown)(texts[0].markdown), label: (0, pml_1.cleanMarkdown)(texts[1].markdown) }] : [];
+      });
+    }
+    function extractHeading(page) {
+      const component = (0, pml_1.findPmlComponent)((0, pml_1.findNodeById)(page, "selling-group-details-heading"));
+      const parts = component ? (0, pml_1.childrenOf)(component) : [];
+      const titleIndex = parts.findIndex((n) => n.type === "CONTAINER");
+      if (titleIndex < 0)
+        return { tag: null, description: null };
+      return { tag: markdownText(parts.slice(0, titleIndex).pop()), description: markdownText(parts[titleIndex + 1]) };
+    }
+    function extractSteps(page) {
+      const component = (0, pml_1.findPmlComponent)((0, pml_1.findNodeById)(page, "instructions-section"));
+      return (component ? (0, pml_1.childrenOf)(component) : []).flatMap((step) => {
+        const text3 = (0, pml_1.childrenOf)(step).filter((c) => c.type === "RICH_TEXT" && typeof c.markdown === "string")[1];
+        return text3 ? [(0, pml_1.stripColorTags)(text3.markdown)] : [];
+      });
+    }
+    function extractStepsPortions(page) {
+      const text3 = (0, pml_1.collectMarkdowns)((0, pml_1.findNodeById)(page, "instructions-portions-section"))[0];
+      const portions = text3?.match(/\d+/)?.[0];
+      return portions ? Number(portions) : null;
+    }
+    function extractRecipeNutritionRows(page) {
+      const item = (0, pml_1.accordionItems)((0, pml_1.findNodeById)(page, "accordion-list")).find((i) => /voedingswaarde|nährwert|valeurs nutritionnelles/i.test((0, pml_1.collectMarkdowns)(i.header)[0] ?? ""));
+      return item ? (0, pml_1.collectNutritionRows)(item.body) : [];
     }
     function extractIngredientProductName(page) {
       return textByType(page, "HEADER1");
@@ -3250,16 +3263,42 @@ var require_helpers4 = __commonJS({
       });
       if (!recipeContext)
         throw new Error(`Could not extract recipe ${recipeId}: recipe context missing from details page`);
-      const names = extractIngredientNames(page);
-      const ingredients = recipeContext.selling_units.map((unit) => ({
-        ingredientId: unit.ingredient_id,
-        name: names.get(unit.ingredient_id) ?? null,
-        sellingUnitId: unit.selling_unit_id ?? "",
-        quantity: unit.quantity ?? 1,
-        status: unit.status ?? "ACTIVE",
-        swapType: unit.swap_type ?? null,
-        checked: unit.checked ?? true
-      }));
+      const tiles = extractIngredientTiles(page);
+      const states = extractIngredientStates(page);
+      const allergens = extractAllergensByIngredient(page);
+      const ingredients = recipeContext.selling_units.map((unit) => {
+        const sellingUnitId = unit.selling_unit_id ?? "";
+        const tile = tiles.get(unit.ingredient_id);
+        const showsThisUnit = tile?.sellingUnitId === null || tile?.sellingUnitId === sellingUnitId;
+        const state = states.get(unit.ingredient_id);
+        const prices = state?.sellingUnits?.[sellingUnitId];
+        const price = typeof prices?.price === "number" ? prices.price : null;
+        const referencePrice = typeof prices?.referencePrice === "number" ? prices.referencePrice : null;
+        const isAvailable = state?.isAvailable ?? unit.status === "ACTIVE";
+        return {
+          ingredientId: unit.ingredient_id,
+          name: tile?.name ?? null,
+          sellingUnitId,
+          quantity: unit.quantity ?? 1,
+          status: unit.status ?? "ACTIVE",
+          swapType: unit.swap_type ?? null,
+          checked: unit.checked ?? true,
+          type: state?.ingredientType ?? "CORE",
+          isAvailable,
+          unavailableReason: isAvailable ? null : tile?.notice ?? null,
+          brand: tile?.brand ?? null,
+          imageId: showsThisUnit ? tile?.imageId ?? null : null,
+          unitQuantity: showsThisUnit ? tile?.unitQuantity ?? null : null,
+          neededText: tile?.neededText ?? null,
+          price,
+          originalPrice: price !== null && referencePrice !== null && referencePrice > price ? referencePrice : null,
+          priceRanges: Array.isArray(prices?.priceRanges) && prices.priceRanges.length > 1 ? prices.priceRanges : null,
+          promotionLabel: tile?.promotionLabel ?? null,
+          allergens: allergens.get(unit.ingredient_id) ?? { contains: [], mayContain: [] }
+        };
+      });
+      const selectedIngredientIds = extractDefaultSelectedIngredientIds(page) ?? new Set(ingredients.filter((i) => i.checked).map((i) => i.ingredientId));
+      const times = extractTimes(page);
       return {
         id: recipeId,
         name: recipeContext?.recipe_name ?? header?.sellable_name ?? owner?.name ?? "",
@@ -3272,7 +3311,15 @@ var require_helpers4 = __commonJS({
         imageType: recipeContext?.image_type ?? null,
         imageId,
         ingredients,
-        note
+        note,
+        ...extractHeading(page),
+        times,
+        cookingTimeMinutes: times.length > 0 ? (0, lists_1.parseMinutes)(times[0].value) : null,
+        steps: extractSteps(page),
+        stepsPortions: extractStepsPortions(page),
+        stepsWarning: markdownText((0, pml_1.findNode)((0, pml_1.findNodeById)(page, "warning-banner"), (n) => n.type === "RICH_TEXT" && typeof n.markdown === "string") ?? void 0),
+        nutritionRows: extractRecipeNutritionRows(page),
+        allergens: combineAllergens([...allergens].filter(([id]) => selectedIngredientIds.has(id)).map(([, a]) => a))
       };
     }
     exports.extractUserDefinedRecipeDetails = extractRecipeDetails;
@@ -3310,42 +3357,30 @@ var require_service12 = __commonJS({
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.RecipeService = void 0;
-    var service_1 = require_service4();
-    var helpers_1 = require_helpers4();
+    var product_1 = require_product();
+    var recipe_1 = require_recipe();
+    var lists_1 = require_lists();
     var RecipeService = class {
-      constructor(http) {
+      constructor(http, pages) {
         this.http = http;
+        this.pages = pages;
       }
-      /**
-       * Returns the meals / meal-planner overview page.
-       * This Fusion page is the meal planner root; its recipe content is loaded
-       * lazily via SUSPENSE boundaries. To list the user's recipes, use
-       * {@link getCookbookPage}.
-       */
+      /** Fetches the cookbook home (`meals-page-root`, Fusion). */
       getRecipesPage() {
-        return this.http.sendRequest("GET", `/pages/meals-page-root`, null, true);
+        return this.pages.getFusionPage("meals-page-root");
       }
       /**
-       * Returns the cookbook page, listing the user's recipes grouped by segment.
-       * Each recipe tile carries a `segment_type` analytics context, e.g.
-       * `SAVED_RECIPES` (saved/favourites), `USER_DEFINED_RECIPES` (the user's own
-       * recipes), `NEW_RECIPES`, `THIS_WEEK_RECIPES`, …
+       * Fetches the cookbook page (`cookbook-page-content`, Fusion), which lists the user's recipes
+       * grouped by segment. Each recipe tile carries a `segment_type` analytics context, e.g.
+       * `SAVED_RECIPES`, `USER_DEFINED_RECIPES` (the user's own recipes), `NEW_RECIPES`.
        */
       getCookbookPage() {
-        return this.http.sendRequest("GET", `/pages/cookbook-page-content`, null, true);
+        return this.pages.getFusionPage("cookbook-page-content");
       }
       /**
-       * Returns the detail page for a single recipe.
-       *
-       * Recipes are modelled as "selling groups", so a recipe id is a
-       * `selling_group_id` and the detail page is served from
-       * `selling-group-details-page`. The previous `recipe-details-page-root`
-       * route is no longer served and responds with HTTP 404
-       * (`page-template with id 'recipe-details-page-root' was not found`).
-       *
-       * Contains ingredients, cooking steps, servings, cooking time, and pricing.
-       * @param {string} recipeId The id of the recipe (a `selling_group_id`; 24 hex
-       *   chars for catalog recipes, 32 for the user's own recipes).
+       * Fetches the detail page of a recipe (Fusion). Recipes are "selling groups", so the page is
+       * `selling-group-details-page` with the recipe id as `selling_group_id`.
+       * @param {string} recipeId The recipe id (24 hex characters for catalog recipes, 32 for the user's own).
        * @param {number} [portions] Render this many portions; omit to use the app's selection.
        */
       getRecipeDetailsPage(recipeId, portions) {
@@ -3353,55 +3388,79 @@ var require_service12 = __commonJS({
           throw new RangeError("Recipe portions must be a positive integer");
         }
         const query = portions === void 0 ? "" : `&portions=${portions}`;
-        return this.http.sendRequest("GET", `/pages/selling-group-details-page?selling_group_id=${encodeURIComponent(recipeId)}${query}`, null, true);
+        return this.pages.getFusionPage(`selling-group-details-page?selling_group_id=${encodeURIComponent(recipeId)}${query}`);
       }
       /**
-       * Lists saved recipes from the cookbook's SAVED_RECIPES segment.
-       * Returns the same summary shape as {@link getUserDefinedRecipes}; use
-       * {@link getRecipe} for structured ingredients and other details.
+       * Lists the user's saved recipes, as the app's saved recipes page (`saved-deep-dive-page`)
+       * shows them. Use {@link getRecipe} for structured ingredients and other details.
        * Parses dynamic Fusion/PML tiles and may need updates if Picnic changes them.
        */
       async getSavedRecipes() {
-        return (0, helpers_1.extractRecipes)(await this.getCookbookPage(), "SAVED_RECIPES");
+        return (0, lists_1.extractRecipeTiles)(await this.pages.getFusionPage("saved-deep-dive-page-content"));
+      }
+      /**
+       * Returns the cookbook home as the app shows it: the rows of recipes (each with its selected
+       * filter pill) and the category tree, whose links open {@link getRecipeCategory} and
+       * {@link getRecipeCategoryGroup}.
+       */
+      async getRecipeOverview() {
+        return (0, lists_1.extractRecipeOverview)(await this.getRecipesPage());
+      }
+      /**
+       * Returns the recipes of a category, from the `meals-category-page` RSC page.
+       * @param {string} categoryId The `category_id` of a category link from {@link getRecipeOverview}.
+       */
+      async getRecipeCategory(categoryId) {
+        const content = await this.pages.getRscContent(`meals-category-page?category_id=${encodeURIComponent(categoryId)}`);
+        return (0, lists_1.extractRecipeCategory)(categoryId, content);
+      }
+      /**
+       * Returns the categories of a group, from the `meals-category-group-page` RSC page.
+       * @param {string} groupName The `group_name` of a group link from {@link getRecipeOverview}, e.g. "Kids".
+       */
+      async getRecipeCategoryGroup(groupName) {
+        const content = await this.pages.getRscContent(`meals-category-group-page?group_name=${encodeURIComponent(groupName)}`);
+        return (0, lists_1.extractRecipeCategoryGroup)(groupName, content);
       }
       /**
        * Returns structured catalog or user-defined recipe details at the requested
-       * portions, or the stored default when omitted. If the app initially renders a
-       * different count, refetches the full page so names, product ids and quantities
-       * come from the same response. Products may change with the portion count.
-       * `defaultPortions` retains the stored default; `portions` describes the result.
+       * portions, or, when omitted, at the count Picnic renders the page with (as the
+       * app shows it). If the page renders a different count than requested, refetches
+       * it once so names, product ids and quantities come from the same response.
+       * Products may change with the portion count. `defaultPortions` is the recipe's
+       * stored count (for catalog recipes, the portions of the original recipe);
+       * `portions` describes the result.
        *
-       * Ingredient names come from recipe tiles. Set `resolveIngredientNames` to true
-       * to fetch missing names from product pages concurrently; otherwise they remain
-       * null. These extra requests can fail the call. Quantities are selling-unit
-       * counts, not weights or volumes. The image id includes its namespace.
+       * Includes the steps, times, nutrition and allergens, and per ingredient the
+       * product, prices and allergens shown on the page. Ingredient names come from
+       * recipe tiles. Set `resolveIngredientNames` to true to fetch missing names from
+       * product pages concurrently; otherwise they remain null. These extra requests can
+       * fail the call. Quantities are selling-unit counts, not weights or volumes. The
+       * image id includes its namespace.
        *
        * Parses dynamic Fusion/PML and may need updates when Picnic changes its pages.
-       * Use {@link getRecipeDetailsPage} for raw cooking steps, time and pricing.
        * The backend can briefly fail after mutations; deleted recipes fail persistently.
        * Some recipes reject particular portion counts with a page-rendering error.
        * @param {string} recipeId The selling group id of either kind of recipe.
-       * @param {number} [portions] Positive integer portion count; defaults to the stored count.
-       * @param {RecipeDetailsOptions} [options] Optional product-name lookup requests.
+       * @param {RecipeOptions} [options] The portions, and whether to look up missing ingredient names.
        */
-      async getRecipe(recipeId, portions, options = {}) {
-        let details = (0, helpers_1.extractRecipeDetails)(recipeId, await this.getRecipeDetailsPage(recipeId, portions));
-        const requestedPortions = portions ?? details.defaultPortions;
-        if (details.portions !== requestedPortions) {
-          details = (0, helpers_1.extractRecipeDetails)(recipeId, await this.getRecipeDetailsPage(recipeId, requestedPortions));
-        }
-        if (details.portions !== requestedPortions) {
-          throw new Error(`Recipe ${recipeId} rendered ${details.portions} portions instead of ${requestedPortions}`);
+      async getRecipe(recipeId, options = {}) {
+        const { portions } = options;
+        let details = (0, recipe_1.extractRecipeDetails)(recipeId, await this.getRecipeDetailsPage(recipeId, portions));
+        if (portions !== void 0 && details.portions !== portions) {
+          details = (0, recipe_1.extractRecipeDetails)(recipeId, await this.getRecipeDetailsPage(recipeId, portions));
+          if (details.portions !== portions) {
+            throw new Error(`Recipe ${recipeId} rendered ${details.portions} portions instead of ${portions}`);
+          }
         }
         if (options.resolveIngredientNames) {
-          const catalog = new service_1.CatalogService(this.http);
           const names = /* @__PURE__ */ new Map();
           await Promise.all(details.ingredients.map(async (ingredient) => {
             if (ingredient.name !== null || !ingredient.sellingUnitId)
               return;
             let name = names.get(ingredient.sellingUnitId);
             if (!name) {
-              name = catalog.getProductDetailsPage(ingredient.sellingUnitId).then(helpers_1.extractIngredientProductName);
+              name = this.pages.getFusionPage((0, product_1.productDetailsPageId)(ingredient.sellingUnitId)).then(recipe_1.extractIngredientProductName);
               names.set(ingredient.sellingUnitId, name);
             }
             ingredient.name = await name;
@@ -3420,7 +3479,7 @@ var require_service12 = __commonJS({
             recipe_id: recipeId,
             saved_at: (/* @__PURE__ */ new Date()).toISOString()
           }
-        }, true);
+        }, { includePicnicHeaders: true });
       }
       /**
        * Removes a recipe from the user's saved recipes list.
@@ -3433,48 +3492,103 @@ var require_service12 = __commonJS({
             recipe_id: recipeId,
             saved_at: null
           }
-        }, true);
+        }, { includePicnicHeaders: true });
       }
       /**
-       * Assigns a selling group (recipe bundle) to the basket in the meal planner.
-       * @param {string} sellingGroupId The selling group / recipe id.
-       * @param {number} [dayOffset] Which delivery day to plan for (relative to the selected slot).
-       * @param {number} [portions] Number of servings.
+       * Adds a recipe's ingredients to the cart, planned for a delivery day.
+       * @param {string} recipeId The recipe id.
+       * @param {AddRecipeToCartOptions} [options] The delivery day and the number of portions.
        */
-      assignSellingGroupToBasket(sellingGroupId, dayOffset, portions) {
+      addRecipeToCart(recipeId, options = {}) {
+        const { dayOffset, portions } = options;
         return this.http.sendRequest("POST", `/pages/task/assign-selling-group-to-basket`, {
           payload: {
-            selling_group_id: sellingGroupId,
+            selling_group_id: recipeId,
             ...dayOffset !== void 0 && { day_offset: dayOffset },
             ...portions !== void 0 && { portions }
           }
-        }, true);
+        }, { includePicnicHeaders: true });
       }
       /**
-       * Updates the number of portions for a selling group already in the basket.
-       * @param {string} sellingGroupId The selling group / recipe id.
-       * @param {number} dayOffset Which delivery day the recipe is planned for.
-       * @param {number} portions The new number of servings.
+       * Changes the number of portions of a recipe that is in the cart.
+       * @param {string} recipeId The recipe id.
+       * @param {RecipePortionsInCart} planned The delivery day the recipe is planned for and the new number of portions.
        */
-      updateSellingGroupPortions(sellingGroupId, dayOffset, portions) {
+      updateRecipePortionsInCart(recipeId, planned) {
+        const { dayOffset, portions } = planned;
         return this.http.sendRequest("POST", `/pages/task/update-selling-group-number-of-portions-task`, {
           payload: {
-            selling_group_id: sellingGroupId,
+            selling_group_id: recipeId,
             day_offset: dayOffset,
             portions
           }
-        }, true);
+        }, { includePicnicHeaders: true });
       }
       /**
-       * Removes a selling group (recipe bundle) from the basket.
-       * @param {string} sellingGroupId The selling group / recipe id to remove.
+       * Removes a recipe and its ingredients from the cart.
+       * @param {string} recipeId The recipe id.
        */
-      removeSellingGroupFromBasket(sellingGroupId) {
+      removeRecipeFromCart(recipeId) {
         return this.http.sendRequest("POST", `/pages/task/remove-selling-group-from-basket`, {
           payload: {
-            selling_group_id: sellingGroupId
+            selling_group_id: recipeId
           }
-        }, true);
+        }, { includePicnicHeaders: true });
+      }
+      /**
+       * Updates an ingredient of a recipe, a catalog recipe or a user defined one: change its
+       * quantity, or swap the product by passing a different selling unit id. Mirrors the save button
+       * of the app's ingredient editor (`selling-group-component-edit-page`). When swapping an
+       * ingredient that has more than one selling unit, include each of its current selling unit ids
+       * with quantity `0` next to the new selection.
+       *
+       * A response with `shouldUpdateCart: true` means the recipe is in the cart with a selection
+       * that differs from this one; call {@link updateRecipeIngredientInCart} with the same
+       * selection to update the cart.
+       * @param {string} recipeId The recipe id.
+       * @param {string} ingredientId The ingredient (selling group component) id.
+       * @param {RecipeIngredientSelection} selection The quantities, the portions they're for and the swap type.
+       */
+      updateRecipeIngredient(recipeId, ingredientId, selection) {
+        const { quantities, portions = 4, swapType } = selection;
+        return this.http.sendRequest("POST", `/pages/task/save-selling-group-edit-task`, {
+          payload: {
+            requested_sellable_portions: String(portions),
+            selling_group_component_id: ingredientId,
+            selling_group_id: recipeId,
+            selling_unit_quantity_by_id: quantities,
+            swapType: swapType ?? void 0
+          }
+        }, { includePicnicHeaders: true });
+      }
+      /**
+       * Puts an updated ingredient selection of a recipe that is in the cart into the cart. The app
+       * calls this after {@link updateRecipeIngredient} returned `shouldUpdateCart: true`. The edit
+       * task removes the replaced product from the cart; this call adds the new selection, so without
+       * it the cart lacks that ingredient.
+       * @param {string} recipeId The recipe id.
+       * @param {string} ingredientId The ingredient (selling group component) id.
+       * @param {RecipeIngredientCartSelection} selection The selected quantities, the portions they're for and the swap type.
+       */
+      updateRecipeIngredientInCart(recipeId, ingredientId, selection) {
+        const { quantities, portions, swapType } = selection;
+        return this.http.sendRequest("POST", `/pages/task/assign-sellable-component-to-day`, {
+          payload: {
+            component_swap_type: swapType,
+            portions: String(portions),
+            required_amount_by_selling_unit_id: quantities,
+            selected_component_id: ingredientId,
+            selling_group_id: recipeId
+          }
+        }, { includePicnicHeaders: true });
+      }
+      /**
+       * Removes an ingredient from a recipe, a catalog recipe or a user defined one.
+       * @param {string} recipeId The recipe id.
+       * @param {string} ingredientId The ingredient (selling group component) id.
+       */
+      removeRecipeIngredient(recipeId, ingredientId) {
+        return this.http.sendRequest("POST", `/pages/task/delete-selling-group-component`, { payload: { selling_group_component_id: ingredientId, selling_group_id: recipeId } }, { includePicnicHeaders: true });
       }
       // ─── User defined (custom) recipes ──────────────────────────────────────────
       //
@@ -3488,42 +3602,29 @@ var require_service12 = __commonJS({
        * ("Eigen recepten") segment, with the same summary shape as {@link getSavedRecipes}.
        */
       async getUserDefinedRecipes() {
-        return (0, helpers_1.extractRecipes)(await this.getCookbookPage(), "USER_DEFINED_RECIPES");
+        return (0, recipe_1.extractRecipes)(await this.getCookbookPage(), "USER_DEFINED_RECIPES");
       }
       /**
-       * Returns the same structured details as {@link getRecipe}, including ingredient
-       * names and quantities for the requested or default portions. Extra product-name
-       * requests are opt-in, as with getRecipe.
-       * @param {string} recipeId The user-defined recipe's selling group id.
-       * @param {number} [portions] Requested count; defaults to the stored count.
-       * @param {RecipeDetailsOptions} [options] Optional product-name lookup requests.
-       */
-      getUserDefinedRecipe(recipeId, portions, options = {}) {
-        return this.getRecipe(recipeId, portions, options);
-      }
-      /**
-       * Returns the image selection page for a user defined recipe, listing the
-       * suggested images the user can pick from with {@link selectUserDefinedRecipeImage}.
-       * Unlike most pages this route returns the bare page layout without the `{ script, layout }` envelope.
-       * @param {string} recipeId The recipe id.
+       * Fetches the image selection page of a user defined recipe (Fusion). Unlike most pages it
+       * returns the bare page layout without the `{ script, layout }` envelope.
        */
       getUserDefinedRecipeImageSelectionPage(recipeId) {
-        return this.http.sendRequest("GET", `/pages/sellable-image-selection-page-root?origin=RECIPE_DETAILS&sellable_id=${encodeURIComponent(recipeId)}`, null, true);
+        return this.pages.getFusionPage(`sellable-image-selection-page-root?origin=RECIPE_DETAILS&sellable_id=${encodeURIComponent(recipeId)}`);
       }
       /**
-       * Returns the suggested images for a user defined recipe, extracted from
-       * {@link getUserDefinedRecipeImageSelectionPage}. Pass an entry's `id` and
+       * Returns the suggested images for a user defined recipe, from the app's image selection page
+       * (`sellable-image-selection-page-root`). Pass an entry's `id` and
        * `referenceImage` to {@link selectUserDefinedRecipeImage}.
        * @param {string} recipeId The recipe id.
        */
       async getUserDefinedRecipeSuggestedImages(recipeId) {
         const page = await this.getUserDefinedRecipeImageSelectionPage(recipeId);
-        return (0, helpers_1.extractSuggestedImages)(page);
+        return (0, recipe_1.extractSuggestedImages)(page);
       }
       /**
        * Creates a new user defined recipe.
        * Mirrors the "Lijstje opslaan" button of `user-defined-recipe-root`, which posts
-       * to `create-user-defined-recipe` and receives the new `sellingGroupId`.
+       * to `create-user-defined-recipe` and receives the new `recipeId`.
        * @param {string} name The recipe name (the app limits it to 43 characters).
        * @param {NewUserDefinedRecipeIngredient[]} ingredients The products to include.
        * @param {number} [portions=4] Default number of portions the quantities are based on.
@@ -3544,7 +3645,7 @@ var require_service12 = __commonJS({
             selling_unit_sources: sources,
             selling_units: sellingUnits
           }
-        }, true);
+        }, { includePicnicHeaders: true });
       }
       /**
        * Renames a user defined recipe.
@@ -3552,7 +3653,7 @@ var require_service12 = __commonJS({
        * @param {string} name The new name (the app limits it to 43 characters).
        */
       renameUserDefinedRecipe(recipeId, name) {
-        return this.http.sendRequest("POST", `/pages/task/update-name-user-defined-recipe`, { payload: { name, selling_group_id: recipeId } }, true);
+        return this.http.sendRequest("POST", `/pages/task/update-name-user-defined-recipe`, { payload: { name, selling_group_id: recipeId } }, { includePicnicHeaders: true });
       }
       /**
        * Changes the default number of portions of a user defined recipe.
@@ -3560,28 +3661,27 @@ var require_service12 = __commonJS({
        * @param {number} portions The new default number of portions.
        */
       updateUserDefinedRecipePortions(recipeId, portions) {
-        return this.http.sendRequest("POST", `/pages/task/update-portions-user-defined-recipe`, { payload: { portions, sellable_id: recipeId } }, true);
+        return this.http.sendRequest("POST", `/pages/task/update-portions-user-defined-recipe`, { payload: { portions, sellable_id: recipeId } }, { includePicnicHeaders: true });
       }
       /**
        * Deletes a user defined recipe and all its ingredients.
        * The app follows this with `remove-sellable-context-from-basket` for the same
        * `sellable_id` when the recipe is in the basket; call
-       * {@link removeSellingGroupFromBasket} first if you need that behaviour.
+       * {@link removeRecipeFromCart} first if you need that behaviour.
        * @param {string} recipeId The recipe id.
        */
       deleteUserDefinedRecipe(recipeId) {
-        return this.http.sendRequest("POST", `/pages/task/delete-user-defined-sellable`, { payload: { sellable_id: recipeId } }, true);
+        return this.http.sendRequest("POST", `/pages/task/delete-user-defined-sellable`, { payload: { sellable_id: recipeId } }, { includePicnicHeaders: true });
       }
       /**
        * Adds a product as a new ingredient to a user defined recipe.
        * Mirrors the product tiles on the ingredient search page (`page_context=RECIPE_EDITING`).
        * @param {string} recipeId The recipe id.
        * @param {string} sellingUnitId The product (selling unit) id, e.g. `s1143210`.
-       * @param {number} [quantity=1] Number of selling units for `portions` portions.
-       * @param {number} [portions=4] The recipe's number of portions the quantity is based on.
-       * @param {number} [order] Position in the ingredient list; the app sends the current ingredient count.
+       * @param {NewIngredientOptions} [options] The quantity, the portions it's for and the position in the list.
        */
-      addUserDefinedRecipeIngredient(recipeId, sellingUnitId, quantity = 1, portions = 4, order = 0) {
+      addUserDefinedRecipeIngredient(recipeId, sellingUnitId, options = {}) {
+        const { quantity = 1, portions = 4, order = 0 } = options;
         return this.http.sendRequest("POST", `/pages/task/add-ingredient-task`, {
           payload: {
             order: String(order),
@@ -3590,65 +3690,7 @@ var require_service12 = __commonJS({
             selling_group_id: recipeId,
             selling_unit_id: sellingUnitId
           }
-        }, true);
-      }
-      /**
-       * Updates an ingredient of a user defined recipe: change its quantity, or swap
-       * the product by passing a different selling unit id.
-       * Mirrors the save button of `selling-group-component-edit-page?is_udr=true`. When
-       * swapping an ingredient that has more than one selling unit, include each of its
-       * current selling unit ids with quantity `0` next to the new selection.
-       *
-       * A response with `shouldUpdateCart: true` means the recipe is in the basket with a
-       * selection that differs from this one; call {@link assignSellableComponentToDay}
-       * with the same selection to update the basket.
-       * @param {string} recipeId The recipe id.
-       * @param {string} ingredientId The ingredient (selling group component) id.
-       * @param {Record<string, number>} sellingUnitQuantities Selling unit id → quantity for this ingredient.
-       * @param {number} [portions=4] The recipe's number of portions the quantities are based on.
-       * @param {SellingGroupSwapType|null} [swapType] Swap type, when the product was swapped.
-       */
-      updateUserDefinedRecipeIngredient(recipeId, ingredientId, sellingUnitQuantities, portions = 4, swapType) {
-        return this.http.sendRequest("POST", `/pages/task/save-selling-group-edit-task`, {
-          payload: {
-            requested_sellable_portions: String(portions),
-            selling_group_component_id: ingredientId,
-            selling_group_id: recipeId,
-            selling_unit_quantity_by_id: sellingUnitQuantities,
-            swapType: swapType ?? void 0
-          }
-        }, true);
-      }
-      /**
-       * Pushes an updated ingredient selection of a recipe that is in the basket to the
-       * basket. The app calls this after {@link updateUserDefinedRecipeIngredient}
-       * returned `shouldUpdateCart: true`. The edit task itself removes the replaced
-       * product from the basket; this call adds the new selection, so without it the
-       * basket lacks that ingredient.
-       * @param {string} recipeId The recipe id.
-       * @param {string} ingredientId The ingredient (selling group component) id.
-       * @param {Record<string, number>} sellingUnitQuantities The selected selling unit id → quantity (only the selected ones, no zeroes).
-       * @param {number} portions The recipe's number of portions the quantities are based on.
-       * @param {SellingGroupSwapType} swapType The swap type that was sent to the edit task.
-       */
-      assignSellableComponentToDay(recipeId, ingredientId, sellingUnitQuantities, portions, swapType) {
-        return this.http.sendRequest("POST", `/pages/task/assign-sellable-component-to-day`, {
-          payload: {
-            component_swap_type: swapType,
-            portions: String(portions),
-            required_amount_by_selling_unit_id: sellingUnitQuantities,
-            selected_component_id: ingredientId,
-            selling_group_id: recipeId
-          }
-        }, true);
-      }
-      /**
-       * Removes an ingredient from a user defined recipe.
-       * @param {string} recipeId The recipe id.
-       * @param {string} ingredientId The ingredient (selling group component) id.
-       */
-      removeUserDefinedRecipeIngredient(recipeId, ingredientId) {
-        return this.http.sendRequest("POST", `/pages/task/delete-selling-group-component`, { payload: { selling_group_component_id: ingredientId, selling_group_id: recipeId } }, true);
+        }, { includePicnicHeaders: true });
       }
       /**
        * Sets (creates or replaces) the free-text note of a user defined recipe.
@@ -3658,14 +3700,14 @@ var require_service12 = __commonJS({
        * @param {string} note The note as HTML.
        */
       setUserDefinedRecipeNote(recipeId, note) {
-        return this.http.sendRequest("POST", `/pages/task/update-selling-group-note`, { payload: { note, selling_group_id: recipeId } }, true);
+        return this.http.sendRequest("POST", `/pages/task/update-selling-group-note`, { payload: { note, selling_group_id: recipeId } }, { includePicnicHeaders: true });
       }
       /**
        * Deletes the note of a user defined recipe.
        * @param {string} recipeId The recipe id.
        */
       deleteUserDefinedRecipeNote(recipeId) {
-        return this.http.sendRequest("POST", `/pages/task/delete-selling-group-note-task`, { payload: { selling_group_id: recipeId } }, true);
+        return this.http.sendRequest("POST", `/pages/task/delete-selling-group-note-task`, { payload: { selling_group_id: recipeId } }, { includePicnicHeaders: true });
       }
       /**
        * Uploads a custom photo for a user defined recipe.
@@ -3679,11 +3721,11 @@ var require_service12 = __commonJS({
       uploadUserDefinedRecipeImage(recipeId, image) {
         const type = (image.type ?? "image/jpeg").replace(/jpg/gi, "jpeg");
         const body = image.data instanceof Blob ? image.data : new Uint8Array(image.data);
-        return this.http.sendRequest("POST", `/user-defined-sellable/${encodeURIComponent(recipeId)}`, body, true, false, type);
+        return this.http.sendRequest("POST", `/user-defined-sellable/${encodeURIComponent(recipeId)}`, body, { includePicnicHeaders: true, contentType: type });
       }
       /**
        * Sets the image of a user defined recipe, either a suggested image from
-       * {@link getUserDefinedRecipeImageSelectionPage} or a photo uploaded with
+       * {@link getUserDefinedRecipeSuggestedImages} or a photo uploaded with
        * {@link uploadUserDefinedRecipeImage}.
        * @param {string} recipeId The recipe id.
        * @param {string} imageId The image id to select.
@@ -3696,7 +3738,7 @@ var require_service12 = __commonJS({
             selected_image_id: imageId,
             ...referenceImage !== void 0 && { reference_image: referenceImage }
           }
-        }, true);
+        }, { includePicnicHeaders: true });
       }
     };
     exports.RecipeService = RecipeService;
@@ -3712,6 +3754,7 @@ var require_lib = __commonJS({
     };
     var http_client_1 = __importDefault(require_http_client());
     var service_1 = require_service();
+    var page_client_1 = require_page_client();
     var service_2 = require_service2();
     var service_3 = require_service3();
     var service_4 = require_service4();
@@ -3723,8 +3766,10 @@ var require_lib = __commonJS({
     var service_10 = require_service10();
     var service_11 = require_service11();
     var service_12 = require_service12();
+    var api_error_1 = require_api_error();
     var checkout_error_1 = require_checkout_error();
     var page_format_error_1 = require_page_format_error();
+    var product_not_found_error_1 = require_product_not_found_error();
     var PicnicClient2 = class extends http_client_1.default {
       /**
        * Creates a new Picnic API client.
@@ -3736,24 +3781,29 @@ var require_lib = __commonJS({
        */
       constructor(options) {
         super(options);
-        this.app = new service_1.AppService(this);
+        const pages = new page_client_1.PageClient(this);
+        this.app = new service_1.AppService(this, pages);
         this.auth = new service_2.AuthService(this);
-        this.user = new service_3.UserService(this);
-        this.catalog = new service_4.CatalogService(this);
-        this.cart = new service_5.CartService(this);
-        this.delivery = new service_6.DeliveryService(this);
-        this.payment = new service_7.PaymentService(this);
-        this.consent = new service_8.ConsentService(this);
-        this.customerService = new service_9.CustomerServiceService(this);
-        this.content = new service_10.ContentService(this);
-        this.userOnboarding = new service_11.UserOnboardingService(this);
-        this.recipe = new service_12.RecipeService(this);
+        this.user = new service_3.UserService(this, pages);
+        this.catalog = new service_4.CatalogService(this, pages);
+        this.cart = new service_5.CartService(this, pages);
+        this.checkout = new service_6.CheckoutService(this);
+        this.delivery = new service_7.DeliveryService(this);
+        this.payment = new service_8.PaymentService(this);
+        this.consent = new service_9.ConsentService(this);
+        this.customerService = new service_10.CustomerServiceService(this);
+        this.content = new service_11.ContentService(this);
+        this.recipe = new service_12.RecipeService(this, pages);
       }
     };
+    PicnicClient2.PicnicApiError = api_error_1.PicnicApiError;
+    PicnicClient2.isPicnicApiError = api_error_1.isPicnicApiError;
     PicnicClient2.CheckoutIssueError = checkout_error_1.CheckoutIssueError;
     PicnicClient2.isCheckoutIssueError = checkout_error_1.isCheckoutIssueError;
     PicnicClient2.UnexpectedPageFormatError = page_format_error_1.UnexpectedPageFormatError;
     PicnicClient2.isUnexpectedPageFormatError = page_format_error_1.isUnexpectedPageFormatError;
+    PicnicClient2.ProductNotFoundError = product_not_found_error_1.ProductNotFoundError;
+    PicnicClient2.isProductNotFoundError = product_not_found_error_1.isProductNotFoundError;
     module.exports = PicnicClient2;
   }
 });
@@ -3765,7 +3815,7 @@ import { dirname, join as join5 } from "node:path";
 import { fileURLToPath } from "node:url";
 
 // src/server/app.ts
-import { createHash as createHash2 } from "node:crypto";
+import { createHash } from "node:crypto";
 import { readFile as readFile2 } from "node:fs/promises";
 import { extname, join as join4, normalize, sep } from "node:path";
 
@@ -3873,24 +3923,50 @@ var NextResponse = class _NextResponse extends Response {
   }
 };
 
-// vendor/picnic-web/src/lib/core/api-error.ts
-var AUTH_STATUS_PREFIX = /^(401|403)\b/;
-function hasAuthWording(message) {
-  return message.includes("unauthorized") || message.includes("forbidden") || message.includes("login failed");
+// vendor/picnic-web/src/lib/core/types.ts
+var SUPPORTED_COUNTRY_CODES = ["NL", "DE", "FR"];
+var DEFAULT_COUNTRY_CODE = "NL";
+var COUNTRY_COOKIE_NAME = "picnic_country";
+function getImageCdnBase(countryCode) {
+  return `https://storefront-prod.${countryCode.toLowerCase()}.picnicinternational.com/static/images`;
 }
+
+// vendor/picnic-web/src/lib/core/picnic-client.ts
+var PicnicClient = require_lib();
+var isPicnicApiError = PicnicClient.isPicnicApiError;
+async function getFusionPage(client, pageId) {
+  const page = await client.app.getPage(pageId);
+  if (page.format !== "fusion") throw new PicnicClient.UnexpectedPageFormatError(pageId, "rsc");
+  return page.page;
+}
+async function getRscPageContent(client, pageId) {
+  const page = await client.app.getPage(pageId);
+  if (page.format !== "rsc") throw new PicnicClient.UnexpectedPageFormatError(pageId, "fusion");
+  return page.content;
+}
+var isProductNotFoundError = PicnicClient.isProductNotFoundError;
+function buildPicnicClient(authToken, countryCode = DEFAULT_COUNTRY_CODE) {
+  return new PicnicClient({
+    countryCode,
+    authKey: authToken
+  });
+}
+function buildPicnicClientAnonymous(countryCode = DEFAULT_COUNTRY_CODE) {
+  return new PicnicClient({
+    countryCode
+  });
+}
+
+// vendor/picnic-web/src/lib/core/api-error.ts
+var OTP_NOT_VALID = "OTP_NOT_VALID";
 function isUpstreamBlockError(error2) {
-  return error2 instanceof Error && /<html[\s>]/i.test(error2.message);
+  return isPicnicApiError(error2) && /<html[\s>]/i.test(error2.body);
 }
 function isApiAuthError(error2) {
-  if (!(error2 instanceof Error)) return false;
-  const message = error2.message.toLowerCase();
-  if (isUpstreamBlockError(error2)) return false;
-  return AUTH_STATUS_PREFIX.test(message) || hasAuthWording(message);
+  return isPicnicApiError(error2) && (error2.status === 401 || error2.status === 403) && !isUpstreamBlockError(error2);
 }
 function is2FAError(error2) {
-  if (!(error2 instanceof Error)) return false;
-  const message = error2.message.toLowerCase();
-  return message.includes("2fa") || AUTH_STATUS_PREFIX.test(message) || hasAuthWording(message);
+  return isPicnicApiError(error2) && error2.code === OTP_NOT_VALID || isApiAuthError(error2);
 }
 
 // vendor/picnic-web/src/lib/core/concurrency.ts
@@ -3907,1442 +3983,66 @@ async function mapWithConcurrency(items, worker, limit) {
   return results;
 }
 
-// vendor/picnic-web/src/lib/core/types.ts
-var SUPPORTED_COUNTRY_CODES = ["NL", "DE", "FR"];
-var DEFAULT_COUNTRY_CODE = "NL";
-var COUNTRY_COOKIE_NAME = "picnic_country";
-function getImageCdnBase(countryCode) {
-  return `https://storefront-prod.${countryCode.toLowerCase()}.picnicinternational.com/static/images`;
-}
-var PRODUCT_MAIN_CONTAINER_ID = "product-details-page-root-main-container";
-var PRODUCT_GALLERY_CONTAINER_ID = "product-page-image-gallery-main-image-container";
-var PRODUCT_DESCRIPTION_ID = "description";
-var PRODUCT_HIGHLIGHTS_ID = "product-page-highlights";
-var PRODUCT_ALLERGIES_ID = "product-page-allergies";
-var PRODUCT_ACCORDION_ID = "accordion-list";
-var PRODUCT_BUNDLES_PREFIX = "product-page-bundles-";
-var PRODUCT_ALTERNATIVES_ID = "alternatives-container";
-var PRODUCT_LABELS_PREFIX = "product-page-labels-";
-
-// vendor/picnic-web/src/lib/core/picnic-client.ts
-var PicnicClient = require_lib();
-var isUnexpectedPageFormatError = PicnicClient.isUnexpectedPageFormatError;
-function buildPicnicClient(authToken, countryCode = DEFAULT_COUNTRY_CODE) {
-  return new PicnicClient({
-    countryCode,
-    authKey: authToken
-  });
-}
-function buildPicnicClientAnonymous(countryCode = DEFAULT_COUNTRY_CODE) {
-  return new PicnicClient({
-    countryCode
-  });
-}
-
-// vendor/picnic-web/src/lib/core/constants.ts
-var MEAL_PLAN_MAX_CANDIDATES = 40;
-var RECIPE_PAGE_CONCURRENCY = 5;
-var MEAL_PLAN_RECIPE_CONCURRENCY = 3;
-var INGREDIENT_CONCURRENCY = 5;
-
-// vendor/picnic-web/src/lib/core/page-cache.ts
-import { createHash } from "node:crypto";
-var cache = /* @__PURE__ */ new Map();
-var PAGE_CACHE_TTL_MS = 10 * 60 * 1e3;
-var MAX_ENTRIES = 500;
-function cacheKey(client, path) {
-  const token = client.authKey ?? "";
-  const scope = createHash("sha256").update(token).digest("hex").slice(0, 16);
-  return `${client.countryCode ?? ""}:${scope}:${path}`;
-}
-function evictIfFull() {
-  if (cache.size < MAX_ENTRIES) return;
-  const now = Date.now();
-  for (const [key, entry] of cache) {
-    if (entry.expiresAt <= now) cache.delete(key);
-  }
-  while (cache.size >= MAX_ENTRIES) {
-    const oldest = cache.keys().next();
-    if (oldest.done) break;
-    cache.delete(oldest.value);
-  }
-}
-async function fetchCachedPage(client, path, ttlMs = PAGE_CACHE_TTL_MS) {
-  const typed = client;
-  const key = cacheKey(typed, path);
-  const hit = cache.get(key);
-  if (hit && hit.expiresAt > Date.now()) return hit.promise;
-  const promise = typed.sendRequest("GET", path, null, true);
-  evictIfFull();
-  cache.set(key, { promise, expiresAt: Date.now() + ttlMs });
-  promise.catch(() => {
-    if (cache.get(key)?.promise === promise) cache.delete(key);
-  });
-  return promise;
-}
-
-// vendor/picnic-web/src/lib/pml/pml-helpers.ts
-function stripColorTags(md) {
-  return md.replace(/#\([^)]+\)/g, "").trim();
-}
-function cleanMarkdown(md) {
-  return stripColorTags(md).replace(/\*\*/g, "").replace(/__/g, "").trim();
-}
-function extractInnerColor(md) {
-  const colorRegex = /#\(([^)]+)\)/g;
-  const colors = [];
-  let match;
-  while ((match = colorRegex.exec(md)) !== null) {
-    colors.push(match[1]);
-  }
-  if (colors.length === 0) return null;
-  const DEFAULT_COLORS = /* @__PURE__ */ new Set(["#333333", "#5b534e", "#787570"]);
-  for (const color of colors) {
-    if (!DEFAULT_COLORS.has(color.toLowerCase())) {
-      return color;
-    }
-  }
-  return null;
-}
-function findSellingUnitContainers(obj) {
-  const results = [];
-  if (typeof obj !== "object" || obj === null) return results;
-  if (Array.isArray(obj)) {
-    for (const item of obj) {
-      results.push(...findSellingUnitContainers(item));
-    }
-    return results;
-  }
-  const record = obj;
-  if (record.type === "PML" && typeof record.id === "string" && record.id.includes("selling-unit") && record.id.includes("tile")) {
-    results.push(record);
-  }
-  for (const value of Object.values(record)) {
-    results.push(...findSellingUnitContainers(value));
-  }
-  return results;
-}
-function collectMarkdowns(node) {
-  const results = [];
-  if (typeof node !== "object" || node === null) return results;
-  if (Array.isArray(node)) {
-    for (const item of node) {
-      results.push(...collectMarkdowns(item));
-    }
-    return results;
-  }
-  const record = node;
-  if (typeof record.markdown === "string") {
-    results.push(record.markdown);
-  }
-  for (const value of Object.values(record)) {
-    if (typeof value === "object" && value !== null) {
-      results.push(...collectMarkdowns(value));
-    }
-  }
-  return results;
-}
-function findNodeById(obj, id) {
-  if (typeof obj !== "object" || obj === null) return null;
-  if (Array.isArray(obj)) {
-    for (const item of obj) {
-      const result = findNodeById(item, id);
-      if (result) return result;
-    }
-    return null;
-  }
-  const record = obj;
-  if (record.id === id) return record;
-  for (const value of Object.values(record)) {
-    const result = findNodeById(value, id);
-    if (result) return result;
-  }
-  return null;
-}
-function findNodeByIdPrefix(obj, prefix) {
-  if (typeof obj !== "object" || obj === null) return null;
-  if (Array.isArray(obj)) {
-    for (const item of obj) {
-      const result = findNodeByIdPrefix(item, prefix);
-      if (result) return result;
-    }
-    return null;
-  }
-  const record = obj;
-  if (typeof record.id === "string" && record.id.startsWith(prefix)) {
-    return record;
-  }
-  for (const value of Object.values(record)) {
-    const result = findNodeByIdPrefix(value, prefix);
-    if (result) return result;
-  }
-  return null;
-}
-function findNodeByIdSubstring(obj, idSubstring) {
-  if (typeof obj !== "object" || obj === null) return null;
-  if (Array.isArray(obj)) {
-    for (const item of obj) {
-      const result = findNodeByIdSubstring(item, idSubstring);
-      if (result) return result;
-    }
-    return null;
-  }
-  const record = obj;
-  if (typeof record.id === "string" && record.id.includes(idSubstring)) {
-    return record;
-  }
-  for (const value of Object.values(record)) {
-    const result = findNodeByIdSubstring(value, idSubstring);
-    if (result) return result;
-  }
-  return null;
-}
-function collectPropertyValues(node, key) {
-  const results = [];
-  if (typeof node !== "object" || node === null) return results;
-  if (Array.isArray(node)) {
-    for (const item of node) {
-      results.push(...collectPropertyValues(item, key));
-    }
-    return results;
-  }
-  const record = node;
-  if (key in record) {
-    results.push(record[key]);
-  }
-  for (const [k, value] of Object.entries(record)) {
-    if (k !== key && typeof value === "object" && value !== null) {
-      results.push(...collectPropertyValues(value, key));
-    }
-  }
-  return results;
-}
-function findIconNodes(node) {
-  const results = [];
-  if (typeof node !== "object" || node === null) return results;
-  if (Array.isArray(node)) {
-    for (const item of node) {
-      results.push(...findIconNodes(item));
-    }
-    return results;
-  }
-  const record = node;
-  if (record.type === "ICON" && typeof record.iconKey === "string") {
-    const fallback = record.fallback;
-    results.push({
-      iconKey: record.iconKey,
-      fallbackId: fallback?.id ?? null,
-      color: typeof record.color === "string" ? record.color : null
-    });
-  }
-  for (const value of Object.values(record)) {
-    if (typeof value === "object" && value !== null) {
-      results.push(...findIconNodes(value));
-    }
-  }
-  return results;
-}
-
-// vendor/picnic-web/src/lib/product/extract-product-data.ts
-function findMainSellingUnit(page, productId) {
-  const allUnits = collectPropertyValues(page, "sellingUnit").filter(
-    (u) => typeof u === "object" && u !== null
-  );
-  const mainUnit = allUnits.find((u) => u.id === productId && u.max_count !== void 0);
-  return {
-    displayPrice: mainUnit?.display_price ?? 0,
-    maxCount: mainUnit?.max_count ?? 99,
-    imageId: mainUnit?.image_id ?? ""
-  };
-}
-function resolveDisplayPrice(page, productId, mainUnitPrice) {
-  if (mainUnitPrice) return mainUnitPrice;
-  const bundleNode = findNodeById(page, productId);
-  if (bundleNode) {
-    const prices = collectPropertyValues(bundleNode, "price").filter(
-      (p) => typeof p === "number"
-    );
-    if (prices[0]) return prices[0];
-  }
-  const mainContainer = findNodeById(page, PRODUCT_MAIN_CONTAINER_ID);
-  if (mainContainer) {
-    const prices = collectPropertyValues(mainContainer, "price").filter(
-      (p) => typeof p === "number"
-    );
-    if (prices[0]) return prices[0];
-  }
-  return 0;
-}
-function extractPromotion(page) {
-  const promoIds = collectPropertyValues(page, "promotion_id");
-  const promoLabels = collectPropertyValues(page, "promotion_label");
-  if (promoIds.length === 0 || promoLabels.length === 0) return null;
-  const id = promoIds[0];
-  const label = promoLabels[0];
-  if (typeof id !== "string" || typeof label !== "string") return null;
-  return { id, label };
-}
-function findStateBoundarySellingUnits(container) {
-  const results = [];
-  if (typeof container !== "object" || container === null) return results;
-  if (Array.isArray(container)) {
-    for (const item of container) {
-      results.push(...findStateBoundarySellingUnits(item));
-    }
-    return results;
-  }
-  const record = container;
-  if (record.type === "STATE_BOUNDARY" && typeof record.id === "string" && record.id.startsWith("s")) {
-    results.push(record);
-  }
-  for (const value of Object.values(record)) {
-    if (typeof value === "object" && value !== null) {
-      results.push(...findStateBoundarySellingUnits(value));
-    }
-  }
-  return results;
-}
-function extractBundles(page) {
-  const tiers = findBundleTiers(page);
-  if (tiers.length > 0) {
-    return tiers.map((tier) => ({
-      id: "",
-      quantity: tier.from_quantity,
-      pricePerUnit: tier.price,
-      imageId: "",
-      maxCount: 0
-    }));
-  }
-  const bundleContainer = findNodeByIdPrefix(page, PRODUCT_BUNDLES_PREFIX);
-  if (!bundleContainer) return [];
-  const bundleItemNodes = findStateBoundarySellingUnits(bundleContainer);
-  const bundles = [];
-  for (let i = 0; i < bundleItemNodes.length; i++) {
-    const node = bundleItemNodes[i];
-    const sellingUnits = collectPropertyValues(node, "sellingUnit").filter(
-      (u) => typeof u === "object" && u !== null
-    );
-    const prices = collectPropertyValues(node, "price").filter(
-      (p) => typeof p === "number"
-    );
-    const su = sellingUnits[0];
-    if (!su) continue;
-    bundles.push({
-      id: su.id ?? "",
-      quantity: i + 1,
-      pricePerUnit: prices[0] ?? 0,
-      imageId: su.image_id ?? "",
-      maxCount: su.max_count ?? 0
-    });
-  }
-  return bundles;
-}
-function findBundleTiers(obj) {
-  if (typeof obj !== "object" || obj === null) return [];
-  if (Array.isArray(obj)) {
-    if (obj.length > 1 && isBundleTier(obj[0])) {
-      return obj;
-    }
-    for (const item of obj) {
-      const result = findBundleTiers(item);
-      if (result.length > 0) return result;
-    }
-    return [];
-  }
-  const record = obj;
-  const ep1 = record["__ep1"];
-  if (typeof ep1 === "object" && ep1 !== null && !Array.isArray(ep1)) {
-    const v1 = ep1["v1"];
-    if (Array.isArray(v1) && v1.length > 1 && isBundleTier(v1[0])) {
-      return v1;
-    }
-  }
-  for (const value of Object.values(record)) {
-    const result = findBundleTiers(value);
-    if (result.length > 0) return result;
-  }
-  return [];
-}
-function isBundleTier(obj) {
-  return typeof obj === "object" && obj !== null && typeof obj["price"] === "number" && typeof obj["from_quantity"] === "number";
-}
-function extractSimilarProducts(page) {
-  const altContainer = findNodeById(page, PRODUCT_ALTERNATIVES_ID);
-  if (!altContainer) return [];
-  const allUnits = collectPropertyValues(altContainer, "sellingUnit").filter(
-    (u) => typeof u === "object" && u !== null
-  );
-  return allUnits.filter((u) => u.display_price !== void 0).map((u) => ({
-    id: u.id ?? "",
-    name: u.name ?? "",
-    imageId: u.image_id ?? "",
-    displayPrice: u.display_price ?? 0,
-    unitQuantity: u.unit_quantity ?? "",
-    maxCount: u.max_count ?? 0,
-    ...u.deposit !== void 0 ? { deposit: u.deposit } : {}
-  }));
-}
-
-// vendor/picnic-web/src/lib/pml/pml-product-helpers.ts
-function collectPriceNodes(node) {
-  const results = [];
-  if (typeof node !== "object" || node === null) return results;
-  if (Array.isArray(node)) {
-    for (const item of node) {
-      results.push(...collectPriceNodes(item));
-    }
-    return results;
-  }
-  const record = node;
-  if (record.type === "PRICE" && typeof record.price === "number") {
-    results.push({
-      price: record.price,
-      isCrossed: record.isCrossed === true,
-      color: record.color ?? null
-    });
-  }
-  for (const value of Object.values(record)) {
-    if (typeof value === "object" && value !== null) {
-      results.push(...collectPriceNodes(value));
-    }
-  }
-  return results;
-}
-function collectHighlightRows(node) {
-  const results = [];
-  if (typeof node !== "object" || node === null) return results;
-  const record = node;
-  const children = record.children ?? record.child;
-  if (record.type === "STACK" && record.axis === "HORIZONTAL") {
-    const rowChildren = Array.isArray(children) ? children : [];
-    const richText = rowChildren.find(
-      (c) => typeof c === "object" && c !== null && c.type === "RICH_TEXT"
-    );
-    if (richText?.markdown && typeof richText.markdown === "string") {
-      const icon = rowChildren.find(
-        (c) => typeof c === "object" && c !== null && c.type === "ICON"
-      );
-      results.push({
-        markdown: richText.markdown,
-        iconKey: icon?.iconKey ?? null,
-        linkTarget: null
-      });
-      return results;
-    }
-  }
-  if (record.type === "TOUCHABLE") {
-    const onPress = record.onPress;
-    const target = onPress?.actionType === "OPEN" ? onPress.target ?? null : null;
-    const innerRows = collectHighlightRows(record.child);
-    for (const row of innerRows) {
-      row.linkTarget = target;
-    }
-    return innerRows;
-  }
-  if (Array.isArray(children)) {
-    for (const child of children) {
-      results.push(...collectHighlightRows(child));
-    }
-  } else if (typeof children === "object" && children !== null) {
-    results.push(...collectHighlightRows(children));
-  }
-  const pml = record.pml;
-  if (pml?.component) {
-    results.push(...collectHighlightRows(pml.component));
-  }
-  return results;
-}
-function collectLabels(node) {
-  const results = [];
-  if (typeof node !== "object" || node === null) return results;
-  if (Array.isArray(node)) {
-    for (const item of node) {
-      results.push(...collectLabels(item));
-    }
-    return results;
-  }
-  const record = node;
-  if (record.type === "CONTAINER" && typeof record.backgroundColor === "string" && typeof record.borderRadius === "number") {
-    const markdowns = collectMarkdowns(record);
-    if (markdowns.length > 0) {
-      const textColors = collectPropertyValues(record, "textAttributes").filter((a) => typeof a === "object" && a !== null).map((a) => a.color).filter((c) => typeof c === "string");
-      results.push({
-        text: stripColorTags(markdowns[0]),
-        textColor: textColors[0] ?? "#333333",
-        backgroundColor: record.backgroundColor
-      });
-      return results;
-    }
-  }
-  for (const value of Object.values(record)) {
-    if (typeof value === "object" && value !== null) {
-      results.push(...collectLabels(value));
-    }
-  }
-  return results;
-}
-function collectNutritionRows(node) {
-  const results = [];
-  if (typeof node !== "object" || node === null) return results;
-  if (Array.isArray(node)) {
-    for (const item of node) {
-      results.push(...collectNutritionRows(item));
-    }
-    return results;
-  }
-  const record = node;
-  if (record.type === "STACK" && record.axis === "HORIZONTAL" && (record.distribution === "SPACE_BETWEEN" || record.distribution === "END")) {
-    const rowChildren = Array.isArray(record.children) ? record.children : [];
-    const texts = rowChildren.filter(
-      (c) => typeof c === "object" && c !== null && c.type === "RICH_TEXT"
-    ).map((c) => ({
-      text: stripColorTags(c.markdown ?? ""),
-      textType: c.textType ?? ""
-    }));
-    if (texts.length > 0) {
-      const label = texts[0].text;
-      const value = texts.length > 1 ? texts[1].text : null;
-      const isCategory = texts[0].textType === "HEADLINE2";
-      const bg = typeof record.backgroundColor === "string" ? record.backgroundColor : null;
-      results.push({ label, value, isCategory, backgroundColor: bg });
-      return results;
-    }
-  }
-  const children = record.children ?? record.child;
-  if (Array.isArray(children)) {
-    for (const child of children) {
-      results.push(...collectNutritionRows(child));
-    }
-  } else if (typeof children === "object" && children !== null) {
-    results.push(...collectNutritionRows(children));
-  }
-  return results;
-}
-var ALLERGEN_HEADING_PATTERN = /^(bevat(\s+mogelijk)?|enthält|kann enthalten)$/i;
-function collectAllergenGroups(node) {
-  const results = [];
-  if (typeof node !== "object" || node === null) return results;
-  const component = findPmlComponent(node);
-  if (!component) return results;
-  const record = component;
-  const children = Array.isArray(record.children) ? record.children : [];
-  let currentCategory = "confirmed";
-  for (const child of children) {
-    if (typeof child !== "object" || child === null) continue;
-    const childRecord = child;
-    if (childRecord.type === "RICH_TEXT" && typeof childRecord.markdown === "string") {
-      const text3 = stripColorTags(childRecord.markdown).trim();
-      if (ALLERGEN_HEADING_PATTERN.test(text3)) {
-        currentCategory = text3.toLowerCase().includes("mogelijk") ? "mayContain" : "confirmed";
-        continue;
-      }
-    }
-    if (childRecord.type === "STACK" && childRecord.axis === "HORIZONTAL") {
-      const badges = collectLabels(childRecord);
-      if (badges.length > 0) {
-        results.push({ category: currentCategory, badges });
-      }
-    }
-  }
-  return results;
-}
-function findPmlComponent(node) {
-  if (typeof node !== "object" || node === null) return null;
-  const record = node;
-  const pml = record.pml;
-  if (pml?.component) return pml.component;
-  const children = record.children ?? record.child;
-  if (Array.isArray(children)) {
-    for (const child of children) {
-      const found = findPmlComponent(child);
-      if (found) return found;
-    }
-  } else if (typeof children === "object" && children !== null) {
-    return findPmlComponent(children);
-  }
-  return null;
-}
-
-// vendor/picnic-web/src/lib/product/parse-fusion-product.ts
-function extractMainContainerInfo(page) {
-  const mainContainer = findNodeById(page, PRODUCT_MAIN_CONTAINER_ID);
-  const texts = collectMarkdowns(mainContainer).map((md) => md);
-  const name = stripColorTags(texts[0] ?? "");
-  const brand = stripColorTags(texts[1] ?? "");
-  const unitQuantity = stripColorTags(texts[2] ?? "");
-  const unitPrice = texts[3] ? stripColorTags(texts[3]) || null : null;
-  let categoryTag = null;
-  if (texts[4]) {
-    const color = extractInnerColor(texts[4]);
-    const text3 = stripColorTags(texts[4]);
-    if (text3 && color) {
-      categoryTag = { text: text3, color };
-    }
-  }
-  return { name, brand, unitQuantity, unitPrice, categoryTag };
-}
-function extractImageIds(page, fallbackImageId) {
-  const gallery = findNodeById(page, PRODUCT_GALLERY_CONTAINER_ID);
-  if (!gallery) {
-    return fallbackImageId ? [fallbackImageId] : [];
-  }
-  const sourceIds = collectPropertyValues(gallery, "source").filter((s) => typeof s === "object" && s !== null).map((s) => s.id).filter((id) => typeof id === "string");
-  const uniqueIds = [...new Set(sourceIds)];
-  return uniqueIds.length > 0 ? uniqueIds : fallbackImageId ? [fallbackImageId] : [];
-}
-function extractDescription(page) {
-  const descBlock = findNodeById(page, PRODUCT_DESCRIPTION_ID);
-  const markdowns = collectMarkdowns(descBlock);
-  return markdowns.length > 0 ? markdowns.join("\n") : null;
-}
-function extractHighlights(page) {
-  const highlightsBlock = findNodeById(page, PRODUCT_HIGHLIGHTS_ID);
-  if (!highlightsBlock) return [];
-  const rows = collectHighlightRows(highlightsBlock);
-  return rows.map((row) => ({
-    text: row.markdown,
-    iconKey: row.iconKey,
-    linkTarget: row.linkTarget
-  }));
-}
-function extractAllergens(page) {
-  const allergiesBlock = findNodeById(page, PRODUCT_ALLERGIES_ID);
-  if (!allergiesBlock) return { confirmed: [], mayContain: [] };
-  const groups = collectAllergenGroups(allergiesBlock);
-  const confirmed = [];
-  const mayContain = [];
-  for (const group of groups) {
-    const target = group.category === "mayContain" ? mayContain : confirmed;
-    for (const badge of group.badges) {
-      target.push({
-        text: badge.text,
-        backgroundColor: badge.backgroundColor,
-        textColor: badge.textColor
-      });
-    }
-  }
-  return { confirmed, mayContain };
-}
-function extractInfoSections(page) {
-  const accordionBlock = findNodeById(page, PRODUCT_ACCORDION_ID);
-  if (!accordionBlock) return [];
-  const itemsArrays = collectPropertyValues(accordionBlock, "items");
-  const items = Array.isArray(itemsArrays[0]) ? itemsArrays[0] : [];
-  const sections = [];
-  for (const item of items) {
-    if (typeof item !== "object" || item === null) continue;
-    const record = item;
-    const headerTexts = collectMarkdowns(record.header).map(cleanMarkdown);
-    const bodyTexts = collectMarkdowns(record.body).map(stripColorTags);
-    const title = headerTexts[0] ?? "";
-    const content = bodyTexts.join("\n");
-    if (title) {
-      sections.push({ title, content });
-    }
-  }
-  return sections;
-}
-function extractLabels(page) {
-  const labelsNode = findNodeByIdPrefix(page, PRODUCT_LABELS_PREFIX);
-  if (!labelsNode) return [];
-  return collectLabels(labelsNode);
-}
-function extractOriginalPrice(page) {
-  const mainContainer = findNodeById(page, PRODUCT_MAIN_CONTAINER_ID);
-  if (!mainContainer) return null;
-  const priceNodes = collectPriceNodes(mainContainer);
-  const crossedPrice = priceNodes.find((p) => p.isCrossed);
-  return crossedPrice?.price ?? null;
-}
-var DEFAULT_PRICE_COLORS = /* @__PURE__ */ new Set(["#333333", "#5b534e", "#787570"]);
-function extractDisplayPriceColor(page, displayPrice) {
-  const mainContainer = findNodeById(page, PRODUCT_MAIN_CONTAINER_ID);
-  if (!mainContainer) return null;
-  const priceNodes = collectPriceNodes(mainContainer);
-  const active = priceNodes.find((p) => !p.isCrossed && p.price === displayPrice) ?? priceNodes.find((p) => !p.isCrossed);
-  const color = active?.color ?? null;
-  if (!color || DEFAULT_PRICE_COLORS.has(color.toLowerCase())) return null;
-  return color;
-}
-function extractNutritionRows(page) {
-  const accordionBlock = findNodeById(page, PRODUCT_ACCORDION_ID);
-  if (!accordionBlock) return [];
-  const itemsArrays = collectPropertyValues(accordionBlock, "items");
-  const items = Array.isArray(itemsArrays[0]) ? itemsArrays[0] : [];
-  for (const item of items) {
-    if (typeof item !== "object" || item === null) continue;
-    const record = item;
-    const headerTexts = collectMarkdowns(record.header).map(cleanMarkdown);
-    const title = headerTexts[0] ?? "";
-    if (title.toLowerCase().includes("voedingswaarde") || title.toLowerCase().includes("nährwert")) {
-      return collectNutritionRows(record.body);
-    }
-  }
-  return [];
-}
-function extractProductNutritionRows(rawPage) {
-  const page = rawPage?.body ?? rawPage;
-  return extractNutritionRows(page);
-}
-function extractProductTileData(rawPage, productId) {
-  const page = rawPage?.body ?? rawPage;
-  const mainContainer = findNodeById(page, PRODUCT_MAIN_CONTAINER_ID);
-  const texts = collectMarkdowns(mainContainer).map(stripColorTags);
-  const name = cleanMarkdown(texts[0] ?? "");
-  const unitQuantity = cleanMarkdown(texts[2] ?? "");
-  const allUnits = collectPropertyValues(rawPage, "sellingUnit").filter(
-    (u) => typeof u === "object" && u !== null
-  );
-  const unit = allUnits.find((u) => u.id === productId) ?? allUnits[0] ?? null;
-  const rawPrice = unit?.display_price ?? 0;
-  const maxCount = unit?.max_count ?? 99;
-  const unitImageId = unit?.image_id ?? "";
-  const imageId = unitImageId || (() => {
-    const gallery = findNodeById(page, PRODUCT_GALLERY_CONTAINER_ID);
-    const ids = collectPropertyValues(gallery, "source").filter((s) => typeof s === "object" && s !== null).map((s) => s.id).filter((id) => typeof id === "string");
-    return ids[0] ?? "";
-  })();
-  let displayPrice = resolveDisplayPrice(page, productId, rawPrice);
-  if (!displayPrice) {
-    const allPriceNodes = collectPriceNodes(rawPage);
-    const active = allPriceNodes.find((p) => !p.isCrossed && p.price > 0);
-    if (active) displayPrice = active.price;
-  }
-  if (!displayPrice && texts[3]) {
-    const m = texts[3].match(/(\d+)[.,](\d{2})/);
-    if (m) displayPrice = parseInt(m[1]) * 100 + parseInt(m[2]);
-  }
-  const originalPrice = extractOriginalPrice(page);
-  const bundleOptions = extractBundles(rawPage);
-  const selfBundle = bundleOptions.find((b) => b.id === productId && b.quantity > 1);
-  if (selfBundle) {
-    const baseOption = bundleOptions.find((b) => b.quantity === 1);
-    const singlePackPrice = baseOption?.pricePerUnit ?? 0;
-    const bundleTotal = selfBundle.quantity * selfBundle.pricePerUnit;
-    const originalTotal = singlePackPrice > 0 ? selfBundle.quantity * singlePackPrice : null;
-    return {
-      name,
-      unitQuantity,
-      imageId,
-      displayPrice: bundleTotal,
-      maxCount,
-      originalPrice: originalTotal !== null && originalTotal > bundleTotal ? originalTotal : null,
-      priceRanges: null
-    };
-  }
-  let priceRanges = null;
-  if (bundleOptions.length > 0) {
-    const thresholds = bundleOptions.filter((b) => b.pricePerUnit > 0).map((b) => ({ quantity: b.quantity, pricePerUnit: b.pricePerUnit })).sort((a, b) => a.quantity - b.quantity);
-    if (thresholds.length > 0) priceRanges = thresholds;
-  }
-  return { name, unitQuantity, imageId, displayPrice, maxCount, originalPrice, priceRanges };
-}
-function parseProductDetailPage(rawPage, productId) {
-  const page = rawPage?.body ?? rawPage;
-  const mainInfo = extractMainContainerInfo(page);
-  const mainUnit = findMainSellingUnit(rawPage, productId);
-  const displayPrice = resolveDisplayPrice(page, productId, mainUnit.displayPrice);
-  const promotion = extractPromotion(rawPage);
-  const labels = extractLabels(page).filter((l) => !promotion || l.text !== promotion.label);
-  return {
-    id: productId,
-    name: mainInfo.name,
-    brand: mainInfo.brand,
-    unitQuantity: mainInfo.unitQuantity,
-    unitPrice: mainInfo.unitPrice,
-    categoryTag: mainInfo.categoryTag,
-    displayPrice,
-    originalPrice: extractOriginalPrice(page),
-    displayPriceColor: extractDisplayPriceColor(page, displayPrice),
-    maxCount: mainUnit.maxCount,
-    imageIds: extractImageIds(page, mainUnit.imageId),
-    labels,
-    description: extractDescription(page),
-    highlights: extractHighlights(page),
-    allergens: extractAllergens(page),
-    infoSections: extractInfoSections(page),
-    promotion,
-    bundles: extractBundles(page),
-    similarProducts: extractSimilarProducts(page),
-    nutritionRows: extractNutritionRows(page)
-  };
-}
-
-// vendor/picnic-web/src/lib/product/extract-card-data.ts
-function extractPromotionLabel(contexts) {
-  if (!contexts) return null;
-  for (const ctx of contexts) {
-    if (ctx.schema?.includes("promotion")) {
-      const label = ctx.data?.promotion_label;
-      if (typeof label === "string" && label.trim() !== "") {
-        return label.trim();
-      }
-    }
-  }
-  return null;
-}
-function extractPromotionBadge(contexts, pml, stackChildren) {
-  const label = extractPromotionLabel(contexts);
-  if (!label) return null;
-  const matches = (l) => cleanMarkdown(l.text) === label;
-  const inline = collectLabels(stackChildren).find(matches);
-  const colored = inline ?? collectLabels(pml).find(matches);
-  return {
-    badge: {
-      text: label,
-      variant: "promo",
-      backgroundColor: colored?.backgroundColor,
-      textColor: colored?.textColor
-    },
-    placement: inline ? "inline" : "image"
-  };
-}
-function findTextStackChildren(pml) {
-  if (!pml) return null;
-  const component = pml.component;
-  if (!component) return null;
-  const topChildren = component.children;
-  if (!topChildren || topChildren.length < 2) return null;
-  function findVerticalStack(node, depth) {
-    if (depth > 5 || typeof node !== "object" || node === null) return null;
-    if (Array.isArray(node)) {
-      for (const item of node) {
-        const r = findVerticalStack(item, depth + 1);
-        if (r) return r;
-      }
-      return null;
-    }
-    const record = node;
-    if (record.type === "STACK" && record.axis === "VERTICAL" && typeof record.spacing === "number" && Array.isArray(record.children)) {
-      return record;
-    }
-    for (const value of Object.values(record)) {
-      const r = findVerticalStack(value, depth + 1);
-      if (r) return r;
-    }
-    return null;
-  }
-  const textArea = topChildren[1];
-  const stack = findVerticalStack(textArea, 0);
-  return stack?.children ?? null;
-}
-var SIZE_LABELS = /* @__PURE__ */ new Set(["Klein", "XL", "Groot"]);
-function splitFlankingIcons(row) {
-  const tokens = [];
-  const walk = (node) => {
-    if (Array.isArray(node)) {
-      for (const item of node) walk(item);
-      return;
-    }
-    if (typeof node !== "object" || node === null) return;
-    const record = node;
-    if (record.type === "ICON" && typeof record.iconKey === "string") {
-      const fallback = record.fallback;
-      if (fallback?.id) {
-        tokens.push({
-          kind: "icon",
-          icon: {
-            imageId: fallback.id,
-            color: typeof record.color === "string" ? record.color : null
-          }
-        });
-      }
-      return;
-    }
-    if (typeof record.markdown === "string" && cleanMarkdown(record.markdown) !== "") {
-      tokens.push({ kind: "text" });
-    }
-    for (const value of Object.values(record)) walk(value);
-  };
-  walk(row);
-  const firstTextIdx = tokens.findIndex((t) => t.kind === "text");
-  if (firstTextIdx === -1) {
-    const firstIcon = tokens.find(
-      (t) => t.kind === "icon"
-    );
-    return { leading: firstIcon?.icon ?? null, trailing: null };
-  }
-  const lastTextIdx = tokens.map((t) => t.kind).lastIndexOf("text");
-  let leading = null;
-  let trailing = null;
-  for (let i = 0; i < tokens.length; i++) {
-    const t = tokens[i];
-    if (t.kind !== "icon") continue;
-    if (i < firstTextIdx && !leading) leading = t.icon;
-    else if (i > lastTextIdx && !trailing) trailing = t.icon;
-  }
-  return { leading, trailing };
-}
-function extractTextStackInfo(stackChildren, suName, unitQuantity) {
-  const result = {
-    subtitle: null,
-    subtitleColor: null,
-    subtitleLeadingIcon: null,
-    subtitleTrailingIcon: null,
-    displayName: null,
-    namePrefix: null,
-    brand: null,
-    highlight: null,
-    flagIconKey: null,
-    flagFallbackImageId: null,
-    extraLabel: null
-  };
-  if (!stackChildren || stackChildren.length < 3) return result;
-  let nameRowIdx = -1;
-  for (let i = 0; i < stackChildren.length; i++) {
-    const json2 = JSON.stringify(stackChildren[i]);
-    if (json2.includes("PicnicSymbols")) {
-      nameRowIdx = i;
-      break;
-    }
-  }
-  if (nameRowIdx === -1) {
-    nameRowIdx = stackChildren.length >= 5 ? 1 : 0;
-  }
-  if (nameRowIdx > 0) {
-    const subtitleRow = stackChildren[0];
-    const markdowns = collectMarkdowns(subtitleRow);
-    const text3 = markdowns.map((m) => cleanMarkdown(m)).filter(Boolean).join(" ");
-    if (text3) {
-      result.subtitle = text3;
-      for (const md of markdowns) {
-        const color = extractInnerColor(md);
-        if (color) {
-          result.subtitleColor = color;
-          break;
-        }
-      }
-      const { leading, trailing } = splitFlankingIcons(subtitleRow);
-      result.subtitleLeadingIcon = leading;
-      result.subtitleTrailingIcon = trailing;
-    }
-  }
-  const nameRow = stackChildren[nameRowIdx];
-  const nameMarkdowns = collectMarkdowns(nameRow);
-  for (const md of nameMarkdowns) {
-    if (cleanMarkdown(md) === ">" || cleanMarkdown(md) === "") continue;
-    const stripped = stripColorTags(md);
-    const boldMatch = stripped.match(/\*\*([^*]+)\*\*\s+(.*)/);
-    if (boldMatch) {
-      result.namePrefix = boldMatch[1].trim();
-      const remaining = boldMatch[2].replace(/\s+$/, "").replace(/\u00a0/g, "").trim();
-      if (remaining) result.displayName = remaining;
-    } else {
-      const clean = cleanMarkdown(md);
-      if (clean && clean !== ">") {
-        result.displayName = clean;
-      }
-    }
-  }
-  const brandRowIdx = nameRowIdx + 1;
-  if (brandRowIdx < stackChildren.length - 2) {
-    const brandRow = stackChildren[brandRowIdx];
-    const icons = findIconNodes(brandRow);
-    for (const icon of icons) {
-      if (icon.iconKey.startsWith("flag")) {
-        result.flagIconKey = icon.iconKey;
-        result.flagFallbackImageId = icon.fallbackId;
-        break;
-      }
-    }
-    const markdowns = collectMarkdowns(brandRow);
-    for (const md of markdowns) {
-      const clean = cleanMarkdown(md);
-      if (!clean || clean === ">" || clean === "·") continue;
-      const highlightColor = extractInnerColor(md);
-      if (highlightColor) {
-        result.highlight = { text: clean, color: highlightColor };
-      } else if (!/^\d+[.,]\d{2}$/.test(clean) && !clean.startsWith("€")) {
-        result.brand = clean;
-      }
-    }
-  }
-  const lastChild = stackChildren[stackChildren.length - 1];
-  const lastMarkdowns = collectMarkdowns(lastChild);
-  const cleanTexts = lastMarkdowns.map((m) => cleanMarkdown(m)).filter((t) => t !== "" && t !== ">");
-  const UNIT_PATTERNS = /gram|liter|stuks|kilo|\bml\b|\bcl\b|\bkg\b/i;
-  for (const text3 of cleanTexts) {
-    if (text3 === unitQuantity || UNIT_PATTERNS.test(text3)) continue;
-    if (SIZE_LABELS.has(text3)) {
-      result.extraLabel = { text: text3, variant: "size" };
-    } else if (text3.startsWith("€") || text3.includes("/l") || text3.includes("/kg")) {
-      result.extraLabel = { text: text3, variant: "unit-price" };
-    } else {
-      result.extraLabel = { text: text3, variant: "info" };
-    }
-    break;
-  }
-  return result;
-}
-function extractUnavailabilityFromPml(pml) {
-  if (!pml) return { isUnavailable: false, reason: null };
-  const component = pml.component;
-  if (!component) return { isUnavailable: false, reason: null };
-  const topChildren = component.children;
-  if (!topChildren) return { isUnavailable: false, reason: null };
-  for (const child of topChildren) {
-    const a11yLabel = child.accessibilityLabel;
-    if (typeof a11yLabel === "string" && a11yLabel.includes(",")) {
-      const commaIdx = a11yLabel.indexOf(",");
-      const reason = a11yLabel.substring(commaIdx + 1).trim();
-      if (reason) {
-        return { isUnavailable: true, reason };
-      }
-    }
-  }
-  const allMarkdowns = collectMarkdowns(pml);
-  for (const md of allMarkdowns) {
-    const clean = cleanMarkdown(md);
-    if (clean === "Snel weer terug" || clean === "Tijdelijk niet leverbaar" || clean === "Niet meer leverbaar") {
-      return { isUnavailable: true, reason: clean };
-    }
-  }
-  return { isUnavailable: false, reason: null };
-}
-function extractOriginalPriceFromPml(stackChildren, displayPrice) {
-  if (!stackChildren) return null;
-  for (const child of stackChildren) {
-    const markdowns = collectMarkdowns(child);
-    const cleanTexts = markdowns.map((m) => cleanMarkdown(m)).filter((t) => t !== "" && t !== ">");
-    const prices = [];
-    for (const text3 of cleanTexts) {
-      const priceMatch = text3.match(/^(\d+[.,]\d{2})$/);
-      if (priceMatch) {
-        prices.push(Math.round(parseFloat(priceMatch[1].replace(",", ".")) * 100));
-      }
-    }
-    if (prices.length === 2) {
-      const original = Math.max(...prices);
-      if (original > displayPrice) {
-        return original;
-      }
-    }
-  }
-  return null;
-}
-var DEFAULT_PRICE_COLORS2 = /* @__PURE__ */ new Set(["#333333", "#5b534e", "#787570"]);
-function extractDisplayPriceColor2(stackChildren, displayPrice) {
-  if (!stackChildren) return null;
-  let found = null;
-  const walk = (node) => {
-    if (found) return;
-    if (Array.isArray(node)) {
-      for (const item of node) walk(item);
-      return;
-    }
-    if (typeof node !== "object" || node === null) return;
-    const record = node;
-    const md = record.markdown;
-    if (typeof md === "string") {
-      const match = cleanMarkdown(md).match(/^€?\s*(\d+)[.,](\d{2})$/);
-      if (match) {
-        const cents = parseInt(match[1], 10) * 100 + parseInt(match[2], 10);
-        if (cents === displayPrice) {
-          const attrs = record.textAttributes;
-          const color = typeof attrs?.color === "string" ? attrs.color : null;
-          if (color && !DEFAULT_PRICE_COLORS2.has(color.toLowerCase())) {
-            found = color;
-            return;
-          }
-        }
-      }
-    }
-    for (const value of Object.values(record)) walk(value);
-  };
-  walk(stackChildren);
-  return found;
-}
-
-// vendor/picnic-web/src/lib/recipe/parse-recipe-detail.ts
+// vendor/picnic-web/src/lib/recipe/map-recipe-details.ts
+var DEFAULT_MAX_COUNT = 99;
 var ALLERGEN_CONFIRMED_BG = "#fef3c7";
 var ALLERGEN_CONFIRMED_TEXT = "#92400e";
 var ALLERGEN_MAY_CONTAIN_BG = "#f3f4f6";
 var ALLERGEN_MAY_CONTAIN_TEXT = "#4b5563";
-function extractCookingTimeFromMarkdowns(markdowns) {
-  const cleaned = markdowns.map((md) => cleanMarkdown(md).trim()).filter(Boolean);
-  for (let i = 0; i < cleaned.length; i++) {
-    const line = cleaned[i];
-    const combined = /^(\d+)\s*[Mm]in\.?$/.exec(line);
-    if (combined) return parseInt(combined[1], 10);
-    if (/^\d+$/.test(line) && i + 1 < cleaned.length && /^[Mm]in\.?$/.test(cleaned[i + 1])) {
-      return parseInt(line, 10);
-    }
-  }
-  return null;
-}
-function findRecipeAnalyticsData(obj) {
-  if (typeof obj !== "object" || obj === null) return null;
-  if (Array.isArray(obj)) {
-    for (const item of obj) {
-      const r = findRecipeAnalyticsData(item);
-      if (r) return r;
-    }
-    return null;
-  }
-  const record = obj;
-  const analytics = record.analytics;
-  for (const ctx of analytics?.contexts ?? []) {
-    if (typeof ctx !== "object" || ctx === null) continue;
-    const c = ctx;
-    if (typeof c.schema === "string" && c.schema.includes("recipe")) {
-      const data = c.data;
-      if (data && Array.isArray(data.selling_units) && typeof data.recipe_id === "string") {
-        return data;
-      }
-    }
-  }
-  for (const value of Object.values(record)) {
-    const r = findRecipeAnalyticsData(value);
-    if (r) return r;
-  }
-  return null;
-}
-function collectSellingUnitMap(obj, map) {
-  if (typeof obj !== "object" || obj === null) return;
-  if (Array.isArray(obj)) {
-    for (const item of obj) collectSellingUnitMap(item, map);
-    return;
-  }
-  const record = obj;
-  if (typeof record.id === "string" && /^s\d+$/.test(record.id) && typeof record.name === "string" && typeof record.display_price === "number") {
-    const su = record;
-    if (!map.has(su.id)) {
-      map.set(su.id, {
-        name: cleanMarkdown(su.name),
-        imageId: su.image_id ?? null,
-        displayPrice: su.display_price,
-        unitQuantity: su.unit_quantity ?? "",
-        maxCount: su.max_count ?? 99
-      });
-    }
-  }
-  for (const value of Object.values(record)) {
-    collectSellingUnitMap(value, map);
-  }
-}
-var NEEDED_MD_RE = /^\(\d+(?:[.,]\d+)?\s+\S/;
-var PACKAGE_SIZE_RE = /^\d+\s*(g|ml|kg|l)\b/i;
-function buildRecipeQuantityMap(rawPage, sellingUnits) {
-  const result = /* @__PURE__ */ new Map();
-  const seen = /* @__PURE__ */ new Set();
-  const activeIds = [];
-  for (const u of sellingUnits) {
-    if (!u.selling_unit_id || seen.has(u.selling_unit_id)) continue;
-    if (u.status !== "ACTIVE") continue;
-    seen.add(u.selling_unit_id);
-    activeIds.push(u.selling_unit_id);
-  }
-  if (activeIds.length === 0) return result;
-  const allMarkdowns = collectMarkdowns(rawPage).map((md) => cleanMarkdown(md).trim()).filter(Boolean);
-  const pairs = [];
-  let prevMd = null;
-  for (const md of allMarkdowns) {
-    if (NEEDED_MD_RE.test(md)) {
-      const packageSize = prevMd && PACKAGE_SIZE_RE.test(prevMd) ? prevMd : null;
-      pairs.push({ neededText: md, packageSize });
-    }
-    prevMd = md;
-  }
-  for (let i = 0; i < Math.min(activeIds.length, pairs.length); i++) {
-    result.set(activeIds[i], pairs[i]);
-  }
-  return result;
-}
-function extractImageId(obj) {
-  if (typeof obj !== "object" || obj === null) return null;
-  if (Array.isArray(obj)) {
-    for (const item of obj) {
-      const id = extractImageId(item);
-      if (id) return id;
-    }
-    return null;
-  }
-  const record = obj;
-  if (record.type === "IMAGE") {
-    const source = record.source;
-    if (typeof source?.id === "string") return source.id;
-    const fallback = record.fallbackSource;
-    if (typeof fallback?.id === "string") return fallback.id;
-  }
-  for (const value of Object.values(record)) {
-    const id = extractImageId(value);
-    if (id) return id;
-  }
-  return null;
-}
-function parseStepsWarningFromMarkdowns(markdowns) {
-  for (const raw of markdowns) {
-    const clean = stripColorTags(cleanMarkdown(raw)).trim();
-    if (/^(achtung|let op)[:\s]/i.test(clean)) return clean;
-  }
-  return null;
-}
-function parseStepsFromMarkdowns(markdowns) {
-  const steps = [];
-  let expectingContent = false;
-  for (const raw of markdowns) {
-    const clean = cleanMarkdown(raw).trim();
-    if (/^(schritt|stap)\s*\d+$/i.test(clean)) {
-      expectingContent = true;
-    } else if (expectingContent && clean && clean !== "Notiz" && clean !== "Hinzufügen...") {
-      steps.push(stripColorTags(raw).trim());
-      expectingContent = false;
-    }
-  }
-  return steps;
-}
-function parseNutritionFromMarkdowns(markdowns) {
-  const rows = [];
-  let inNutrition = false;
-  let pendingLabel = null;
-  const pendingValues = [];
-  const flush = () => {
-    if (pendingLabel === null || pendingValues.length === 0) return;
-    const filtered = pendingValues.filter((v) => !/^(kcal|kJ)$/i.test(v.trim()));
-    if (filtered.length === 0) return;
-    const label = pendingLabel;
-    const value = filtered.join(" / ");
-    const isCategory = !label.toLowerCase().startsWith("davon") && !label.toLowerCase().startsWith("waarvan");
-    rows.push({ label, value, isCategory, backgroundColor: null });
-    pendingLabel = null;
-    pendingValues.length = 0;
-  };
-  for (const raw of markdowns) {
-    const clean = cleanMarkdown(raw).trim();
-    if (!clean) continue;
-    if (!inNutrition) {
-      if (/nährwert|voedingswaarde/i.test(raw)) inNutrition = true;
-      continue;
-    }
-    if (/allergen/i.test(raw)) {
-      flush();
-      break;
-    }
-    if (clean.length > 40 || /portion|ungefähr|bevat|enthält/i.test(clean)) continue;
-    const hasDigit = /\d/.test(clean);
-    const isUnitOnly = /^(kcal|kJ)$/i.test(clean);
-    if (hasDigit || isUnitOnly) {
-      if (pendingLabel !== null) pendingValues.push(clean);
-    } else {
-      flush();
-      pendingLabel = clean;
-    }
-  }
-  flush();
-  return rows;
-}
-function parseAllergensFromMarkdowns(markdowns) {
-  const confirmed = [];
-  const mayContain = [];
-  let inAllergens = false;
-  let afterIngredientHeader = false;
-  let inMayContain = false;
-  for (const raw of markdowns) {
-    const clean = cleanMarkdown(raw).trim();
-    if (!inAllergens) {
-      if (/allergen/i.test(clean)) inAllergens = true;
-      continue;
-    }
-    if (/^(zutaten|ingrediënten|so wird|bereiding|schritt|stap)\b/i.test(clean)) break;
-    if (/zutaten.*enthalten|ingrediënten.*bevatten/i.test(clean)) {
-      afterIngredientHeader = true;
-      continue;
-    }
-    if (/kann enthalten|kan bevatten/i.test(clean)) {
-      inMayContain = true;
-      continue;
-    }
-    if (/keine allergene|geen allergenen|enthält keine|bevat geen/i.test(clean)) continue;
-    if (!clean || clean.length > 40) continue;
-    if (inMayContain) mayContain.push(clean);
-    else if (afterIngredientHeader) confirmed.push(clean);
-  }
+function mapAllergens(allergens) {
   return {
-    confirmed: confirmed.map((text3) => ({
+    confirmed: allergens.contains.map((text3) => ({
       text: text3,
       backgroundColor: ALLERGEN_CONFIRMED_BG,
       textColor: ALLERGEN_CONFIRMED_TEXT
     })),
-    mayContain: mayContain.map((text3) => ({
+    mayContain: allergens.mayContain.map((text3) => ({
       text: text3,
       backgroundColor: ALLERGEN_MAY_CONTAIN_BG,
       textColor: ALLERGEN_MAY_CONTAIN_TEXT
     }))
   };
 }
-var QUANTITY_ONLY_RE = /^\d+(?:[.,]\d+)?\s*(?:x\s*\d+(?:[.,]\d+)?\s*)?(?:g|kg|ml|cl|l|st|stk|stuk|stuks|st[üu]ck|pack|packs|portie|portion(?:en)?)\.?$/i;
-function buildIngredientTileNameMap(rawPage) {
-  const result = /* @__PURE__ */ new Map();
-  function getMarkdowns(obj, acc) {
-    if (!obj || typeof obj !== "object") return;
-    if (Array.isArray(obj)) {
-      obj.forEach((v) => getMarkdowns(v, acc));
-      return;
-    }
-    const o = obj;
-    if (typeof o.markdown === "string") acc.push(o.markdown);
-    for (const v of Object.values(o)) getMarkdowns(v, acc);
-  }
-  function walk(obj, depth) {
-    if (depth > 60 || !obj || typeof obj !== "object") return;
-    if (Array.isArray(obj)) {
-      obj.forEach((v) => walk(v, depth + 1));
-      return;
-    }
-    const o = obj;
-    if (o.type === "PML" && o.analytics && o.pml) {
-      const ctxs = o.analytics.contexts ?? [];
-      const productCtx = ctxs.find(
-        (c) => typeof c === "object" && c !== null && typeof c.schema === "string" && c.schema.includes("/product/") && typeof c.data?.product_id === "string"
-      );
-      if (productCtx) {
-        const productId = productCtx.data.product_id;
-        const promotionLabel = extractPromotionLabel(ctxs)?.toLowerCase();
-        const markdowns = [];
-        getMarkdowns(o.pml, markdowns);
-        const clean = markdowns.map(
-          (t) => t.replace(/#\([^)]+\)/g, "").replace(/\*\*/g, "").replace(/\xa0/g, " ").trim()
-        ).filter(Boolean);
-        const name = clean.find(
-          (t) => !/^[><%]/.test(t) && !/^-?\d+%/.test(t) && !/€/.test(t) && !/jetzt|nu\s+tijdelijk/i.test(t) && // A product name always contains letters. This rejects the tile's
-          // quantity-stepper value ("1") and any other bare number.
-          new RegExp("\\p{L}{2}", "u").test(t) && // Quantity lines ("500 g", "1 Stück", "2 x 400 ml") sit above the name
-          // in the tile; without this they win and the real name is never used.
-          !QUANTITY_ONLY_RE.test(t) && t.toLowerCase() !== promotionLabel
-        );
-        if (name && productId && !result.has(productId)) result.set(productId, name);
-        return;
-      }
-    }
-    for (const v of Object.values(o)) walk(v, depth + 1);
-  }
-  walk(rawPage, 0);
-  return result;
-}
-function parseRecipeDetail(rawPage, recipeId) {
-  const meta = findRecipeAnalyticsData(rawPage);
-  const name = meta?.recipe_name ?? "";
-  const portions = meta?.portions ?? 2;
-  const imageId = extractImageId(rawPage);
-  const tileMap = /* @__PURE__ */ new Map();
-  collectSellingUnitMap(rawPage, tileMap);
-  const tileNameByProductId = buildIngredientTileNameMap(rawPage);
-  const tileNameByUnitId = /* @__PURE__ */ new Map();
-  for (const unit of meta?.selling_units ?? []) {
-    if (unit.ingredient_id) {
-      const tileName = tileNameByProductId.get(unit.ingredient_id);
-      if (tileName) tileNameByUnitId.set(unit.selling_unit_id, tileName);
-    }
-  }
-  const recipeQtyMap = buildRecipeQuantityMap(rawPage, meta?.selling_units ?? []);
-  const ingredients = [];
+function mapIngredients(recipe) {
   const seen = /* @__PURE__ */ new Set();
-  const seenIngredientIds = /* @__PURE__ */ new Set();
-  for (const unit of meta?.selling_units ?? []) {
-    if (!unit.selling_unit_id || seen.has(unit.selling_unit_id)) continue;
-    if (unit.status !== "ACTIVE") continue;
-    if (unit.ingredient_id && seenIngredientIds.has(unit.ingredient_id)) continue;
-    seen.add(unit.selling_unit_id);
-    if (unit.ingredient_id) seenIngredientIds.add(unit.ingredient_id);
-    const tile = tileMap.get(unit.selling_unit_id);
-    const recipeInfo = recipeQtyMap.get(unit.selling_unit_id) ?? null;
-    const displayName = tileNameByUnitId.get(unit.selling_unit_id) ?? tile?.name ?? "";
-    ingredients.push({
-      id: unit.selling_unit_id,
-      ingredientId: unit.ingredient_id ?? null,
-      name: displayName,
-      imageId: tile?.imageId ?? null,
-      displayPrice: tile?.displayPrice ?? 0,
-      unitQuantity: tile?.unitQuantity ?? "",
-      maxCount: tile?.maxCount ?? 99,
-      quantity: unit.quantity ?? 1,
-      isCondiment: !unit.checked,
-      nutritionRows: [],
-      recipeQuantityText: recipeInfo?.neededText ?? null,
-      recipePackageSize: recipeInfo?.packageSize ?? null,
-      originalPrice: null,
-      priceRanges: null
-    });
-  }
-  const allMarkdowns = collectMarkdowns(rawPage);
-  const steps = parseStepsFromMarkdowns(allMarkdowns);
-  const stepsPortionWarning = parseStepsWarningFromMarkdowns(allMarkdowns);
-  const recipeNutritionRows = parseNutritionFromMarkdowns(allMarkdowns);
-  const allergens = parseAllergensFromMarkdowns(allMarkdowns);
-  const cookingTimeMinutes = meta?.cooking_time_minutes != null ? meta.cooking_time_minutes : extractCookingTimeFromMarkdowns(allMarkdowns);
-  return {
-    id: recipeId,
-    name: name || recipeId,
-    imageId,
-    cookingTimeMinutes,
-    portions,
-    ingredients,
-    steps,
-    stepsPortionWarning,
-    recipeNutritionRows,
-    allergens
-  };
-}
-
-// vendor/picnic-web/src/lib/recipe/fetch-recipe-detail.ts
-async function fetchRecipePage(client, id, portions) {
-  const portionsParam = portions ? `&portions=${portions}` : "";
-  try {
-    return await fetchCachedPage(
-      client,
-      `/pages/selling-group-details-page?selling_group_id=${encodeURIComponent(id)}${portionsParam}`
-    );
-  } catch {
-  }
-  return fetchCachedPage(
-    client,
-    `/pages/recipe-details-page-root?recipe_id=${encodeURIComponent(id)}${portionsParam}`
-  );
-}
-async function enrichIngredients(client, ingredients) {
-  const uniqueIds = [...new Set(ingredients.map((i) => i.id))];
-  const tileMap = /* @__PURE__ */ new Map();
-  await mapWithConcurrency(
-    uniqueIds,
-    async (unitId) => {
-      try {
-        const rawPage = await fetchCachedPage(
-          client,
-          `/pages/product-details-page-root?id=${encodeURIComponent(unitId)}`
-        );
-        const tile = extractProductTileData(rawPage, unitId);
-        const nutritionRows = extractProductNutritionRows(rawPage);
-        if (tile.name) tileMap.set(unitId, { ...tile, nutritionRows });
-      } catch {
+  return recipe.ingredients.flatMap((ingredient) => {
+    if (ingredient.status !== "ACTIVE" || !ingredient.sellingUnitId) return [];
+    if (seen.has(ingredient.ingredientId)) return [];
+    seen.add(ingredient.ingredientId);
+    return [
+      {
+        id: ingredient.sellingUnitId,
+        ingredientId: ingredient.ingredientId,
+        name: ingredient.name ?? "",
+        imageId: ingredient.imageId,
+        displayPrice: ingredient.price ?? 0,
+        unitQuantity: ingredient.unitQuantity ?? "",
+        maxCount: DEFAULT_MAX_COUNT,
+        quantity: ingredient.quantity,
+        isCondiment: !ingredient.checked,
+        recipeQuantityText: ingredient.neededText,
+        originalPrice: ingredient.originalPrice,
+        priceRanges: ingredient.priceRanges?.map((tier) => ({
+          quantity: tier.from_quantity,
+          pricePerUnit: tier.price
+        })) ?? null
       }
-    },
-    INGREDIENT_CONCURRENCY
-  );
-  return ingredients.map((ing) => {
-    const data = tileMap.get(ing.id);
-    if (!data) return ing;
-    return {
-      ...ing,
-      // Keep the recipe-page tile name (short display name); fall back to product page name
-      name: ing.name || data.name,
-      imageId: data.imageId || ing.imageId,
-      displayPrice: data.displayPrice ?? ing.displayPrice,
-      unitQuantity: data.unitQuantity || ing.unitQuantity,
-      maxCount: data.maxCount || ing.maxCount,
-      nutritionRows: data.nutritionRows,
-      originalPrice: data.originalPrice,
-      priceRanges: data.priceRanges
-    };
+    ];
   });
 }
-async function fetchRecipeDetail(client, id, portions) {
-  const rawPage = await fetchRecipePage(client, id, portions);
-  const detail = parseRecipeDetail(rawPage, id);
-  const ingredients = await enrichIngredients(
-    client,
-    detail.ingredients
-  );
-  return { ...detail, ingredients };
+function mapRecipeDetails(recipe) {
+  return {
+    id: recipe.id,
+    name: recipe.name || recipe.id,
+    imageId: recipe.imageId,
+    cookingTimeMinutes: recipe.cookingTimeMinutes,
+    portions: recipe.portions,
+    ingredients: mapIngredients(recipe),
+    steps: recipe.steps,
+    stepsPortionWarning: recipe.stepsWarning,
+    recipeNutritionRows: recipe.nutritionRows,
+    allergens: mapAllergens(recipe.allergens)
+  };
 }
 
 // src/shared/recipe-price.ts
@@ -5350,11 +4050,11 @@ function packs(ingredient, portions, basePortions) {
   if (basePortions <= 0) return Math.max(1, ingredient.quantity);
   return Math.max(1, Math.ceil(ingredient.quantity * portions / basePortions));
 }
-function packsPrice(ingredient, count) {
-  const tier = ingredient.priceRanges?.filter((t) => t.quantity <= count).at(-1);
+function packsPrice(ingredient, count2) {
+  const tier = ingredient.priceRanges?.filter((t) => t.quantity <= count2).at(-1);
   const unit = tier ? tier.pricePerUnit : ingredient.displayPrice;
-  const total = unit * count;
-  const regular = tier ? ingredient.displayPrice * count : ingredient.originalPrice !== null ? ingredient.originalPrice * count : null;
+  const total = unit * count2;
+  const regular = tier ? ingredient.displayPrice * count2 : ingredient.originalPrice !== null ? ingredient.originalPrice * count2 : null;
   return { total, was: regular !== null && regular > total ? regular : null };
 }
 function recipePrice(recipe, portions = recipe.portions) {
@@ -5454,9 +4154,10 @@ function productDetail(id) {
     id: product.id,
     name: product.name,
     brand: product.brand ?? "",
+    quantityBadges: product.unitQuantity === "1 kg" ? [{ text: "XL", textColor: "#ffffff", backgroundColor: "#295813" }] : [],
     unitQuantity: product.unitQuantity,
     unitPrice: `€${(product.displayPrice / 100 * 1.5).toFixed(2).replace(".", ",")}/kg`,
-    categoryTag: { text: product.category[0].toUpperCase() + product.category.slice(1), color: "#295813" },
+    tags: [{ text: product.category[0].toUpperCase() + product.category.slice(1), color: "#295813" }],
     displayPrice: product.displayPrice,
     originalPrice: product.originalPrice,
     displayPriceColor: null,
@@ -5498,37 +4199,37 @@ var L1_CATEGORIES = [
     id: "21001",
     name: "Brood & ontbijt",
     children: [
-      { id: "22001", name: "Brood", imageId: img("cat-brood"), deepLinkTarget: "app.picnic://store/page;id=L2-category-page-root,category_id=22001" },
-      { id: "22002", name: "Croissants & koffiebroodjes", imageId: img("cat-croissant"), deepLinkTarget: "app.picnic://store/page;id=L2-category-page-root,category_id=22002" }
+      { id: "22001", name: "Brood", imageId: img("cat-brood") },
+      { id: "22002", name: "Croissants & koffiebroodjes", imageId: img("cat-croissant") }
     ]
   },
   {
     id: "21002",
     name: "Vegetarisch & vegan",
     children: [
-      { id: "22003", name: "Tofu & tempeh", imageId: img("cat-tofu"), deepLinkTarget: "app.picnic://store/page;id=L2-category-page-root,category_id=22003" },
-      { id: "22004", name: "Plantaardige zuivel", imageId: img("cat-plantmelk"), deepLinkTarget: "app.picnic://store/page;id=L2-category-page-root,category_id=22004" }
+      { id: "22003", name: "Tofu & tempeh", imageId: img("cat-tofu") },
+      { id: "22004", name: "Plantaardige zuivel", imageId: img("cat-plantmelk") }
     ]
   },
   {
     id: "21003",
     name: "Groente & fruit",
     children: [
-      { id: "22005", name: "Groente", imageId: img("cat-groente"), deepLinkTarget: "app.picnic://store/page;id=L2-category-page-root,category_id=22005" },
-      { id: "22006", name: "Fruit", imageId: img("cat-fruit"), deepLinkTarget: "app.picnic://store/page;id=L2-category-page-root,category_id=22006" }
+      { id: "22005", name: "Groente", imageId: img("cat-groente") },
+      { id: "22006", name: "Fruit", imageId: img("cat-fruit") }
     ]
   },
   {
     id: "21004",
     name: "Zuivel & kaas",
-    children: [{ id: "22007", name: "Melk & yoghurt", imageId: img("cat-zuivel"), deepLinkTarget: "app.picnic://store/page;id=L2-category-page-root,category_id=22007" }]
+    children: [{ id: "22007", name: "Melk & yoghurt", imageId: img("cat-zuivel") }]
   },
   {
     id: "21005",
     name: "Voorraadkast",
     children: [
-      { id: "22008", name: "Pasta, rijst & wereldkeuken", imageId: img("cat-pasta"), deepLinkTarget: "app.picnic://store/page;id=L2-category-page-root,category_id=22008" },
-      { id: "22009", name: "Koffie", imageId: img("cat-koffie"), deepLinkTarget: "app.picnic://store/page;id=L2-category-page-root,category_id=22009" }
+      { id: "22008", name: "Pasta, rijst & wereldkeuken", imageId: img("cat-pasta") },
+      { id: "22009", name: "Koffie", imageId: img("cat-koffie") }
     ]
   }
 ];
@@ -6373,7 +5074,7 @@ var DeskRoutes = class {
       } else {
         try {
           const client = buildPicnicClient(this.desk.session.token, this.desk.session.country);
-          recipe = parseRecipeDetail(await fetchRecipePage(client, id), id);
+          recipe = mapRecipeDetails(await client.recipe.getRecipe(id, { resolveIngredientNames: false }));
         } catch (err) {
           if (isApiAuthError(err)) return signedOut();
           return NextResponse.json({ error: "Picnic did not send the recipe." }, { status: 502 });
@@ -6493,8 +5194,8 @@ var DeskRoutes = class {
     await run("slots", "Delivery slots", async () => {
       const picker = await get("cart/delivery-slots");
       const days = picker.dayGroups ?? [];
-      const count = days.reduce((n, d) => n + d.greenSlots.length + d.regularSlots.length, 0);
-      return `${count} slots over ${days.length} days`;
+      const count2 = days.reduce((n, d) => n + d.greenSlots.length + d.regularSlots.length, 0);
+      return `${count2} slots over ${days.length} days`;
     });
     await run("categories", "Categories", async () => {
       const page = await get("rsc-pages?pageId=category-tree-root");
@@ -6521,7 +5222,7 @@ var DeskRoutes = class {
     } else {
       try {
         const client = buildPicnicClient(this.desk.session.token, this.desk.session.country);
-        content = await client.sendRequest("GET", `/pages/${page}`, null, true);
+        content = await client.sendRequest("GET", `/pages/${page}`, null, { includePicnicHeaders: true });
       } catch (err) {
         if (isApiAuthError(err)) return signedOut();
         return error(`Picnic answered: ${err instanceof Error ? err.message.slice(0, 300) : "unknown error"}`, 502);
@@ -6997,7 +5698,7 @@ var Desk = class {
       send(res, 404, text2("Not found."));
       return;
     }
-    const etag = `"${createHash2("sha256").update(data).digest("base64url").slice(0, 22)}"`;
+    const etag = `"${createHash("sha256").update(data).digest("base64url").slice(0, 22)}"`;
     const headers = {
       "content-type": TYPES2[extname(path)] ?? "application/octet-stream",
       "cache-control": "no-cache",
@@ -7275,7 +5976,7 @@ function send(res, status, reply, extra = {}) {
 
 // src/server/fetch-timeout.ts
 var UPSTREAM_TIMEOUT_MS = 25e3;
-var PICNIC_HOST = /^storefront-prod\.(nl|de|fr)\.picnicinternational\.com$/;
+var PICNIC_HOST = /^(storefront|pages)-prod\.(nl|de|fr)\.picnicinternational\.com$/;
 function installFetchTimeout(timeoutMs = UPSTREAM_TIMEOUT_MS) {
   const original = globalThis.fetch;
   if (original.deskTimeout) return;
@@ -7342,6 +6043,14 @@ function formatDeliveryWindowText(windowStart, windowEnd, countryCode) {
   const end = new Date(windowEnd);
   const dayLabel = getRelativeDayLabel(start, countryCode);
   return `${dayLabel} ${formatTime(start)} - ${formatTime(end)}`;
+}
+function formatEtaText(etaMs, countryCode) {
+  if (etaMs === null || etaMs <= 0) return null;
+  const eta = new Date(etaMs);
+  const time = formatTime(eta);
+  if (countryCode === "DE") return `Ankunft ca. ${time}`;
+  if (countryCode === "FR") return `Arrivée vers ${time}`;
+  return `Aankomst rond ${time}`;
 }
 function getRelativeDayLabel(date, countryCode) {
   const today = /* @__PURE__ */ new Date();
@@ -7437,14 +6146,6 @@ function demoShop(state = new DemoState()) {
       }
       case "GET pages": {
         const pageId = q.get("pageId") ?? "";
-        if (pageId.startsWith("promo-group-deep-dive")) {
-          return ok({
-            title: "Acties",
-            products: [],
-            sections: [],
-            rscPage: promoPage(pageId)
-          });
-        }
         const products = PRODUCTS.filter((p) => p.promoBadge || p.priceRanges).map(plainProduct);
         return ok({
           title: pageId === "basket-recommendations" ? "Niets vergeten?" : "",
@@ -7481,7 +6182,7 @@ function demoShop(state = new DemoState()) {
       case "POST meal-plan":
         return mealPlan(segments[1], await body());
       case "GET deliveries":
-        return deliveriesGet(state, segments, q.get("status"));
+        return deliveriesGet(state, segments, q);
       case "POST deliveries":
         return deliveriesPost(state, segments, await body());
       case "GET parcels":
@@ -7500,9 +6201,8 @@ function demoShop(state = new DemoState()) {
           });
         }
         break;
-      case "GET debug-cookbook":
-      case "GET debug-category-page":
-        return ok({ demo: true, route });
+      case "GET promotions":
+        return segments[1] ? promotionGroup(segments[1]) : ok(promotions());
     }
     return fail("Not found.", 404);
   };
@@ -7578,13 +6278,14 @@ function categoryTree() {
       {
         id: "list",
         component: "vertical-list",
+        modulePath: "./logical-components/sections/vertical-list/vertical-list.tsx",
         children: [],
         props: {
           items: [
-            row("Acties", img("cat-acties"), "app.picnic://store/page;id=promo-group-deep-dive,promo_group_id=demo", "12 producten"),
+            row("Acties", img("cat-acties"), "app.picnic://store/page;id=promo-page-root", "12 producten"),
             { type: "section-title", title: "Alle categorieën" },
             ...L1_CATEGORIES.map(
-              (c) => row(c.name, img(`l1-${c.id}`), `app.picnic://store/page;id=L1-category-page-root,category_id=${c.id}`)
+              (c) => row(c.name, img(`l1-${c.id}`), `app.picnic://store/page;id=subcategory-page,category_id=${c.id}`)
             )
           ]
         }
@@ -7592,32 +6293,26 @@ function categoryTree() {
     ]
   };
 }
-function promoPage(pageId) {
+function promotions() {
+  const offers = PRODUCTS.filter((p) => p.promoBadge).map(plainProduct);
+  const tiers = PRODUCTS.filter((p) => p.priceRanges).map(plainProduct);
   return {
-    pageId,
-    tokens: {},
-    nodes: [
+    sections: [
       {
-        id: "promo",
-        component: "promo-deep-dive-content",
-        children: [],
-        props: {
-          // The shape lib/rsc/map-sellable-tile.ts reads.
-          sellableTiles: PRODUCTS.filter((p) => p.promoBadge).map((p) => ({
-            type: "sellable",
-            id: p.id,
-            title: { title: p.name },
-            subtitle: p.brand ? { text: p.brand } : void 0,
-            images: { primaryImage: { imageId: p.imageId } },
-            price: { priceValue: p.displayPrice / 100, referencePriceValue: p.originalPrice ? p.originalPrice / 100 : void 0 },
-            suffixes: [{ type: "TEXT", text: p.unitQuantity }],
-            labels: { bottomLeft: [{ type: "PROMO", labelText: p.promoBadge.text }] },
-            unavailability: null
-          }))
-        }
-      }
+        title: "Acties",
+        products: offers,
+        groups: [{ id: "demo-koffie", name: "Koffie van Lavazza", example: "Koffiebonen espresso", label: "18% korting" }]
+      },
+      { title: "Meer voor minder", products: tiers, groups: [] }
     ]
   };
+}
+function promotionGroup(id) {
+  if (id !== "demo-koffie") return fail("Failed to load the promotion. Please try again later.", 502);
+  return ok({
+    name: "Koffie van Lavazza",
+    products: PRODUCTS.filter((p) => p.category === "koffie").map(plainProduct)
+  });
 }
 function slotList(state) {
   const out = [];
@@ -7699,7 +6394,6 @@ function lineItem(line, index) {
     badges: tier ? [{ text: `${tier.quantity} voor ${(tier.pricePerUnit * tier.quantity / 100).toFixed(2).replace(".", ",")}`, variant: "bundle" }] : [],
     isUnavailable: product.isUnavailable,
     unavailableExplanation: product.unavailableReason,
-    replacements: product.isUnavailable ? PRODUCTS.filter((p) => p.category === product.category && !p.isUnavailable).slice(0, 3).map((p) => ({ id: p.id, name: p.name, imageId: p.imageId, displayPrice: p.displayPrice, unitQuantity: p.unitQuantity, maxCount: p.maxCount })) : [],
     basketGroupId: line.group
   };
 }
@@ -7724,7 +6418,6 @@ function cart(state) {
     promoSavings,
     fees: [],
     minimumOrderValue: 3500,
-    suggestions: PRODUCTS.filter((p) => p.promoBadge).slice(0, 4).map((p) => ({ id: p.id, name: p.name, imageId: p.imageId, displayPrice: p.displayPrice, unitQuantity: p.unitQuantity, maxCount: p.maxCount })),
     selectedSlot: slot2,
     deliveryBannerText: state.explicitSlot ? formatBannerText(slot2.windowStart, slot2.windowEnd, "NL") ?? "Kies je bezorgmoment" : "Kies je bezorgmoment",
     recipeGroups: groups.map((id) => {
@@ -7744,13 +6437,13 @@ function footer(state) {
     }
   };
 }
-function addLine(state, productId, count, group = null) {
+function addLine(state, productId, count2, group = null) {
   const line = state.lines.find((l) => l.productId === productId);
   if (line) {
-    line.quantity += count;
+    line.quantity += count2;
     if (group && !line.group) line.group = group;
   } else {
-    state.lines.push({ productId, quantity: count, group });
+    state.lines.push({ productId, quantity: count2, group });
   }
 }
 function cartPost(state, segments, body, origin) {
@@ -8017,7 +6710,7 @@ function deliveryList(state) {
     d.setHours(hour, 0, 0, 0);
     return d.toISOString();
   };
-  const make = (id, status, offset, total, count) => ({
+  const make = (id, status, offset, total, count2) => ({
     id,
     status: state.cancelled.has(id) ? "CANCELLED" : status,
     creationTime: at(offset - 2, 12),
@@ -8026,7 +6719,7 @@ function deliveryList(state) {
     deliveryWindowText: formatDeliveryWindowText(at(offset, 17), at(offset, 18), "NL"),
     orderCount: 1,
     totalPrice: total,
-    itemCount: count
+    itemCount: count2
   });
   return [
     make("demo-delivery-current", "CURRENT", 0, 5412, 14),
@@ -8082,7 +6775,8 @@ function deliveryDetail(state, id) {
     cancellable: summary.status === "CURRENT"
   };
 }
-function deliveriesGet(state, segments, status) {
+function deliveriesGet(state, segments, q) {
+  const status = q.get("status");
   if (segments.length === 1) {
     const all = deliveryList(state);
     return ok({ deliveries: status ? all.filter((d) => d.status === status) : all });
@@ -8090,25 +6784,35 @@ function deliveriesGet(state, segments, status) {
   const id = segments[1];
   const detail = deliveryDetail(state, id);
   if (!detail) return fail("Failed to load delivery. Please try again later.", 502);
-  if (segments[2] === "position") {
-    const base = state.now();
-    return ok({
-      version: 1,
-      scenario_ts: base - 6e4,
-      scenario_in_progress: detail.status === "CURRENT",
-      query_interval: 15e3,
-      eta: base + 20 * 6e4,
-      eta_window: { start: new Date(base + 15 * 6e4).toISOString(), end: new Date(base + 25 * 6e4).toISOString() }
-    });
-  }
-  if (segments[2] === "scenario") {
-    const base = state.now();
+  const base = state.now();
+  const position = {
+    routeVersion: 1,
+    inProgress: detail.status === "CURRENT",
+    queryInterval: 15e3,
+    eta: base + 20 * 6e4,
+    etaWindowStart: new Date(base + 15 * 6e4).toISOString(),
+    etaWindowEnd: new Date(base + 25 * 6e4).toISOString(),
+    routeTime: base - 6e4
+  };
+  if (segments[2] === "position") return ok(position);
+  if (segments[2] === "tracking") {
     const route = Array.from({ length: 12 }, (_, i) => ({ lat: 52.37 + i * 2e-3, lng: 4.88 + i * 3e-3, ts: base - (11 - i) * 6e4 }));
+    const known = q.get("routeVersion") === String(position.routeVersion);
     return ok({
-      version: 1,
-      scenario: route,
-      driver: { name: "Sam" },
-      vehicle: { name: "Elektrisch busje" },
+      routeVersion: position.routeVersion,
+      scenarioInProgress: position.inProgress,
+      queryInterval: position.queryInterval,
+      eta: position.eta,
+      etaWindowStart: position.etaWindowStart,
+      etaWindowEnd: position.etaWindowEnd,
+      etaText: formatEtaText(position.eta, "NL"),
+      currentPosition: route[10],
+      // Left out when the caller has this version already, as picnic-web does.
+      route: known ? [] : route,
+      driverName: "Sam",
+      driverPhotoUrl: null,
+      vehicleName: "Elektrisch busje",
+      vehicleImageDataUrl: null,
       destination: { lat: 52.395, lng: 4.92, street: "Demostraat 1", city: "Amsterdam", postcode: "1000 AA" }
     });
   }
@@ -8241,7 +6945,7 @@ async function POST2(request) {
         error: "CREDENTIALS_INVALID"
       });
     }
-    if (result.second_factor_authentication_required) {
+    if (result.secondFactorAuthenticationRequired) {
       await client.auth.generate2FACode("SMS");
       const response2 = NextResponse.json({
         success: false,
@@ -8404,7 +7108,6 @@ var de = {
   emptyCartText: "Füge Produkte über die Picnic-App hinzu oder suche etwas.",
   goToSearch: "Zur Suche",
   cartTitle: "Warenkorb",
-  nothingForgotten: "Alles dabei?",
   cartMutationError: "Ein Fehler ist aufgetreten. Bitte versuche es erneut.",
   cartLoadError: "Ein Fehler ist aufgetreten. Bitte versuche es später erneut.",
   cartOtherItems: "Weitere Produkte",
@@ -8540,9 +7243,17 @@ var de = {
   accountSupport: "Kundenservice",
   accountFaq: "Häufige Fragen",
   comingSoon: "Demnächst",
-  // Discover and favorites placeholders
+  // Discover placeholder
   discoverTitle: "Entdecken",
+  // Favorites
   favoritesTitle: "Favoriten",
+  favoritesLoadError: "Favoriten konnten nicht geladen werden.",
+  favoritesEmpty: "Noch keine Favoriten. Produkte, die du bestellst, erscheinen hier.",
+  favoritesShowAll: "Alle anzeigen",
+  // Promotions
+  promotionsTitle: "Angebote",
+  promotionsLoadError: "Angebote konnten nicht geladen werden.",
+  promotionsEmpty: "Zurzeit gibt es keine Angebote.",
   // Recipe detail
   recipeIngredients: "Zutaten",
   recipeSteps: "Zubereitung",
@@ -8708,7 +7419,6 @@ var fr = {
   emptyCartText: "Ajoutez des produits via l'application Picnic ou recherchez quelque chose.",
   goToSearch: "Aller à la recherche",
   cartTitle: "Panier",
-  nothingForgotten: "Rien oublié ?",
   cartMutationError: "Une erreur s'est produite. Veuillez réessayer.",
   cartLoadError: "Une erreur s'est produite. Veuillez réessayer plus tard.",
   cartOtherItems: "Autres produits",
@@ -8844,9 +7554,17 @@ var fr = {
   accountSupport: "Service client",
   accountFaq: "Questions fréquentes",
   comingSoon: "Bientôt",
-  // Discover and favorites placeholders
+  // Discover placeholder
   discoverTitle: "Découvrir",
+  // Favorites
   favoritesTitle: "Favoris",
+  favoritesLoadError: "Impossible de charger les favoris.",
+  favoritesEmpty: "Pas encore de favoris. Les produits que vous commandez apparaîtront ici.",
+  favoritesShowAll: "Tout afficher",
+  // Promotions
+  promotionsTitle: "Promotions",
+  promotionsLoadError: "Impossible de charger les promotions.",
+  promotionsEmpty: "Aucune promotion pour le moment.",
   // Recipe detail
   recipeIngredients: "Ingrédients",
   recipeSteps: "Préparation",
@@ -9012,7 +7730,6 @@ var nl = {
   emptyCartText: "Voeg producten toe via de Picnic app of zoek iets op.",
   goToSearch: "Naar zoeken",
   cartTitle: "Winkelwagen",
-  nothingForgotten: "Niets vergeten?",
   cartMutationError: "Er ging iets mis. Probeer het opnieuw.",
   cartLoadError: "Er is iets misgegaan. Probeer het later opnieuw.",
   cartOtherItems: "Overige producten",
@@ -9148,9 +7865,17 @@ var nl = {
   accountSupport: "Klantenservice",
   accountFaq: "Veelgestelde vragen",
   comingSoon: "Binnenkort",
-  // Discover and favorites placeholders
+  // Discover placeholder
   discoverTitle: "Ontdek",
+  // Favorites
   favoritesTitle: "Favorieten",
+  favoritesLoadError: "Favorieten konden niet worden geladen.",
+  favoritesEmpty: "Nog geen favorieten. Producten die je bestelt verschijnen hier.",
+  favoritesShowAll: "Toon alles",
+  // Promotions
+  promotionsTitle: "Aanbiedingen",
+  promotionsLoadError: "Aanbiedingen konden niet worden geladen.",
+  promotionsEmpty: "Er zijn nu geen aanbiedingen.",
   // Recipe detail
   recipeIngredients: "Ingrediënten",
   recipeSteps: "Bereiding",
@@ -9265,356 +7990,61 @@ function getTranslations(countryCode) {
   return translations[countryCode];
 }
 
-// vendor/picnic-web/src/lib/core/type-guards.ts
-function isObject2(val) {
-  return typeof val === "object" && val !== null && !Array.isArray(val);
+// vendor/picnic-web/src/lib/cart/map-cart.ts
+function mapBadges(line) {
+  return [
+    ...line.labels.map(
+      (label) => ({
+        text: label.text,
+        variant: label.text.toLowerCase().includes("bundel") ? "bundle" : "promo",
+        backgroundColor: label.backgroundColor ?? void 0,
+        textColor: label.textColor ?? void 0
+      })
+    ),
+    ...line.freshness ? [{ text: line.freshness, variant: "freshness" }] : [],
+    ...line.basePrice ? [{ text: line.basePrice, variant: "unit-price" }] : [],
+    ...line.bundlesLink ? [{ text: "BundelBonus", variant: "bundle" }] : []
+  ];
 }
-function isArray(val) {
-  return Array.isArray(val);
-}
-function asString(val, fallback = "") {
-  return typeof val === "string" ? val : fallback;
-}
-function asNumber(val, fallback = 0) {
-  return typeof val === "number" && isFinite(val) ? val : fallback;
-}
-function asArray(val) {
-  return isArray(val) ? val : [];
-}
-
-// vendor/picnic-web/src/lib/cart/parse-cart.ts
-function getDecorators(item) {
-  return asArray(item["decorators"]).filter(isObject2);
-}
-function mergeOverrides(decorators, overrides) {
-  if (overrides.length === 0) return decorators;
-  const result = [...decorators];
-  for (const override of overrides) {
-    const overrideType = asString(override["type"]);
-    const existingIdx = result.findIndex((d) => asString(d["type"]) === overrideType);
-    if (existingIdx >= 0) {
-      result[existingIdx] = override;
-    } else {
-      result.push(override);
-    }
-  }
-  return result;
-}
-function applyDecoratorOverrides(items, overridesMap) {
-  return items.map((rawLine) => {
-    if (!isObject2(rawLine)) return rawLine;
-    const lineId = asString(rawLine["id"]);
-    const lineOverrides = asArray(overridesMap[lineId]).filter(isObject2);
-    const mergedLineDecorators = mergeOverrides(getDecorators(rawLine), lineOverrides);
-    let overrideDisplayPrice;
-    let overridePrice;
-    for (const ov of lineOverrides) {
-      if (typeof ov["display_price"] === "number") {
-        overrideDisplayPrice = ov["display_price"];
-      }
-      if (typeof ov["price"] === "number") {
-        overridePrice = ov["price"];
-      }
-    }
-    const articles = asArray(rawLine["items"]).map((rawArticle) => {
-      if (!isObject2(rawArticle)) return rawArticle;
-      const articleId = asString(rawArticle["id"]);
-      const articleOverrides = asArray(overridesMap[articleId]).filter(isObject2);
-      for (const ov of articleOverrides) {
-        if (typeof ov["display_price"] === "number") {
-          overrideDisplayPrice = ov["display_price"];
-        }
-        if (typeof ov["price"] === "number") {
-          overridePrice = ov["price"];
-        }
-      }
-      return {
-        ...rawArticle,
-        decorators: mergeOverrides(getDecorators(rawArticle), articleOverrides)
-      };
-    });
-    const lineScalarOverrides = {};
-    if (overrideDisplayPrice !== void 0) {
-      lineScalarOverrides["display_price"] = overrideDisplayPrice;
-    }
-    if (overridePrice !== void 0) {
-      lineScalarOverrides["price"] = overridePrice;
-    }
-    return {
-      ...rawLine,
-      ...lineScalarOverrides,
-      decorators: mergedLineDecorators,
-      items: articles
-    };
-  });
-}
-function mapDecoratorsToBadges(decorators) {
-  const badges = [];
-  for (const dec of decorators) {
-    const type = asString(dec["type"]);
-    switch (type) {
-      case "LABEL":
-      case "PROMO": {
-        const text3 = asString(dec["text"]);
-        if (!text3) break;
-        const isBundleLabel = text3.toLowerCase().includes("bundel");
-        const backgroundColor = asString(dec["background_color"]) || void 0;
-        const textColor = asString(dec["text_color"]) || void 0;
-        badges.push({
-          text: text3,
-          variant: isBundleLabel ? "bundle" : "promo",
-          backgroundColor,
-          textColor
-        });
-        break;
-      }
-      case "FRESH_LABEL": {
-        const period = asString(dec["period"]);
-        if (period) badges.push({ text: period, variant: "freshness" });
-        break;
-      }
-      case "BASE_PRICE": {
-        const basePriceText = asString(dec["base_price_text"]);
-        if (basePriceText) badges.push({ text: basePriceText, variant: "unit-price" });
-        break;
-      }
-      case "BUNDLES_BUTTON":
-        badges.push({ text: "BundelBonus", variant: "bundle" });
-        break;
-    }
-  }
-  return badges;
-}
-function extractQuantity(decorators) {
-  const quantityDec = decorators.find((d) => asString(d["type"]) === "QUANTITY");
-  if (quantityDec) {
-    return asNumber(quantityDec["quantity"], 1);
-  }
-  return 1;
-}
-function extractUnavailableInfo(decorators) {
-  const unavailableDec = decorators.find((d) => asString(d["type"]) === "UNAVAILABLE");
-  if (!unavailableDec) {
-    return { isUnavailable: false, unavailableExplanation: null, replacements: [] };
-  }
-  const explanation = isObject2(unavailableDec["explanation"]) ? asString(unavailableDec["explanation"]["short_explanation"], null) : null;
-  const replacements = asArray(unavailableDec["replacements"]).filter(isObject2).map(mapRawToSliderProduct).filter((p) => p !== null);
+function mapCartLine(line) {
   return {
-    isUnavailable: true,
-    unavailableExplanation: explanation || null,
-    replacements
+    id: line.id,
+    productId: line.productId,
+    name: line.name,
+    unitQuantity: line.unitQuantity,
+    imageId: line.imageId ?? "",
+    displayPrice: line.displayPrice,
+    originalPrice: line.originalPrice,
+    quantity: line.quantity,
+    maxCount: line.maxCount,
+    badges: mapBadges(line),
+    isUnavailable: line.isUnavailable,
+    unavailableExplanation: line.unavailableReason,
+    basketGroupId: line.recipeId
   };
 }
-function mapRawToSliderProduct(raw) {
-  const id = asString(raw["id"]);
-  if (!id) return null;
-  const imageIds = asArray(raw["image_ids"]);
-  return {
-    id,
-    name: asString(raw["name"]),
-    imageId: typeof imageIds[0] === "string" ? imageIds[0] : "",
-    displayPrice: asNumber(raw["display_price"]),
-    unitQuantity: asString(raw["unit_quantity"]),
-    maxCount: asNumber(raw["max_count"], 99)
-  };
-}
-function mapDepositBreakdown(raw) {
-  return asArray(raw).filter(isObject2).map((entry) => {
-    const value = asNumber(entry["value"]);
-    const count = asNumber(entry["count"]);
-    return {
-      type: asString(entry["type"]),
-      value,
-      count,
-      total: value * count
-    };
-  });
-}
-function extractMinimumOrderValue(raw) {
-  const selectedSlot2 = raw["selected_slot"];
-  if (!isObject2(selectedSlot2)) return null;
-  const slotId = asString(selectedSlot2["slot_id"]);
-  if (!slotId) return null;
-  const deliverySlots = asArray(raw["delivery_slots"]);
-  const matchedSlot = deliverySlots.filter(isObject2).find((slot2) => asString(slot2["slot_id"]) === slotId);
-  if (!matchedSlot) return null;
-  const mov = matchedSlot["minimum_order_value"];
-  if (typeof mov !== "number") return null;
-  return mov;
-}
-function parseSelectedSlot(raw) {
-  const selectedSlot2 = raw["selected_slot"];
-  if (!isObject2(selectedSlot2)) return null;
-  const slotId = asString(selectedSlot2["slot_id"]);
-  if (!slotId) return null;
-  const state = asString(selectedSlot2["state"]);
-  const matchedSlot = asArray(raw["delivery_slots"]).filter(isObject2).find((slot2) => asString(slot2["slot_id"]) === slotId);
-  return {
-    slotId,
-    state,
-    windowStart: matchedSlot && asString(matchedSlot["window_start"]) || null,
-    windowEnd: matchedSlot && asString(matchedSlot["window_end"]) || null,
-    isExplicitSelection: state !== "IMPLICIT" && state !== ""
-  };
-}
-function extractRecipeGroups(raw) {
-  const groups = [];
-  for (const section of asArray(raw["basket_sections"]).filter(isObject2)) {
-    for (const group of asArray(section["groups"]).filter(isObject2)) {
-      const id = asString(group["id"]);
-      if (!id) continue;
-      groups.push({
-        id,
-        title: asString(group["title"]),
-        imageId: asString(group["image_id"]) || null
-      });
-    }
-  }
-  return groups;
-}
-function extractSuggestions(raw) {
-  const sections = asArray(raw["basket_sections"]);
-  const suggestions = [];
-  for (const section of sections) {
-    if (!isObject2(section)) continue;
-    const items = asArray(section["items"] ?? section["products"] ?? []);
-    for (const item of items) {
-      if (!isObject2(item)) continue;
-      const mapped = mapRawToSliderProduct(item);
-      if (mapped) {
-        suggestions.push(mapped);
-        continue;
-      }
-      const articles = asArray(item["items"]);
-      for (const article of articles) {
-        if (!isObject2(article)) continue;
-        const mappedArticle = mapRawToSliderProduct(article);
-        if (mappedArticle) suggestions.push(mappedArticle);
-      }
-    }
-  }
-  return suggestions;
-}
-function mapOrderLineToCartItem(rawLine) {
-  if (!isObject2(rawLine)) return null;
-  const lineId = asString(rawLine["id"]);
-  if (!lineId) return null;
-  const lineDecorators = getDecorators(rawLine);
-  const articles = asArray(rawLine["items"]).filter(isObject2);
-  const firstArticle = articles[0];
-  const articleDecorators = firstArticle ? getDecorators(firstArticle) : [];
-  const effectiveDecorators = mergeOverrides(articleDecorators, lineDecorators);
-  const productId = firstArticle ? asString(firstArticle["id"]) : "";
-  const name = firstArticle ? asString(firstArticle["name"]) : asString(rawLine["name"]);
-  const unitQuantity = firstArticle ? asString(firstArticle["unit_quantity"]) : asString(rawLine["unit_quantity"]);
-  const imageIds = firstArticle ? asArray(firstArticle["image_ids"]) : [];
-  const imageId = typeof imageIds[0] === "string" ? imageIds[0] : "";
-  let displayPrice = asNumber(rawLine["display_price"]);
-  const rawPrice = asNumber(rawLine["price"]);
-  const priceDec = effectiveDecorators.find((d) => asString(d["type"]) === "PRICE");
-  if (priceDec && typeof priceDec["display_price"] === "number") {
-    displayPrice = priceDec["display_price"];
-  }
-  const originalPrice = rawPrice !== displayPrice ? rawPrice : null;
-  const quantity = extractQuantity(effectiveDecorators);
-  const badges = mapDecoratorsToBadges(effectiveDecorators);
-  const unavailable = extractUnavailableInfo(effectiveDecorators);
-  const basketGroupDec = lineDecorators.find((d) => asString(d["type"]) === "BASKET_GROUP");
-  const basketGroupId = basketGroupDec ? asString(basketGroupDec["id"]) || null : null;
-  return {
-    id: lineId,
-    productId,
-    name,
-    unitQuantity,
-    imageId,
-    displayPrice,
-    originalPrice,
-    quantity,
-    maxCount: firstArticle ? asNumber(firstArticle["max_count"], 99) : 99,
-    badges,
-    isUnavailable: unavailable.isUnavailable,
-    unavailableExplanation: unavailable.unavailableExplanation,
-    replacements: unavailable.replacements,
-    basketGroupId
-  };
-}
-function parseCartResponse(rawData, countryCode) {
-  if (!isObject2(rawData)) {
-    return emptyCartData(countryCode);
-  }
-  const overridesMap = isObject2(rawData["decorator_overrides"]) ? rawData["decorator_overrides"] : {};
-  const rawItems = applyDecoratorOverrides(asArray(rawData["items"]), overridesMap);
-  const items = rawItems.map(mapOrderLineToCartItem).filter((item) => item !== null);
-  items.sort((a, b) => {
-    if (a.isUnavailable === b.isUnavailable) return 0;
-    return a.isUnavailable ? 1 : -1;
-  });
-  const totalPrice = asNumber(rawData["checkout_total_price"]);
-  const totalCount = asNumber(rawData["total_count"]);
-  const membershipSavings = asNumber(rawData["membership_savings"]);
-  const promoSavings = asNumber(rawData["total_savings"]);
-  const fees = asArray(rawData["fees"]).filter(isObject2).map((f) => ({
-    type: asString(f["type"]),
-    name: asString(f["name"]),
-    amount: asNumber(f["amount"])
-  })).filter((f) => f.amount !== 0);
-  let totalDiscount = 0;
-  for (const rawLine of rawItems) {
-    if (!isObject2(rawLine)) continue;
-    const price = asNumber(rawLine["price"]);
-    let effectiveDisplayPrice = asNumber(rawLine["display_price"]);
-    const lineDecs = getDecorators(rawLine);
-    const articleDecs = asArray(rawLine["items"]).filter(isObject2).flatMap((a) => getDecorators(a));
-    const allDecs = mergeOverrides(articleDecs, lineDecs);
-    const priceDec = allDecs.find((d) => asString(d["type"]) === "PRICE");
-    if (priceDec && typeof priceDec["display_price"] === "number") {
-      effectiveDisplayPrice = priceDec["display_price"];
-    }
-    if (price > effectiveDisplayPrice) {
-      totalDiscount += price - effectiveDisplayPrice;
-    }
-  }
-  const depositBreakdown = mapDepositBreakdown(rawData["deposit_breakdown"]);
-  const depositTotal = depositBreakdown.reduce((sum, e) => sum + e.total, 0);
-  const minimumOrderValue = extractMinimumOrderValue(rawData);
-  const recipeGroups = extractRecipeGroups(rawData);
-  const suggestions = extractSuggestions(rawData);
-  const selectedSlot2 = parseSelectedSlot(rawData);
-  const t = getTranslations(countryCode);
-  const deliveryBannerText = (selectedSlot2?.isExplicitSelection ? formatBannerText(selectedSlot2.windowStart, selectedSlot2.windowEnd, countryCode) : null) ?? t.pickerTitle;
+function mapCart(cart2, countryCode) {
+  const items = cart2.items.map(mapCartLine).sort((a, b) => Number(a.isUnavailable) - Number(b.isUnavailable));
+  const slot2 = cart2.selectedSlot;
+  const deliveryBannerText = (slot2?.isExplicitSelection ? formatBannerText(slot2.windowStart, slot2.windowEnd, countryCode) : null) ?? getTranslations(countryCode).pickerTitle;
   return {
     items,
-    totalPrice,
-    totalCount,
-    totalDiscount,
-    depositTotal,
-    depositBreakdown,
-    membershipSavings,
-    promoSavings,
-    fees,
-    minimumOrderValue,
-    suggestions,
-    selectedSlot: selectedSlot2,
+    totalPrice: cart2.totalPrice,
+    totalCount: cart2.totalCount,
+    totalDiscount: cart2.discount,
+    depositTotal: cart2.depositTotal,
+    depositBreakdown: cart2.deposits,
+    membershipSavings: cart2.membershipSavings,
+    promoSavings: cart2.promotionSavings,
+    fees: cart2.fees,
+    minimumOrderValue: cart2.minimumOrderValue,
+    selectedSlot: slot2,
     deliveryBannerText,
-    recipeGroups
-  };
-}
-function emptyCartData(countryCode) {
-  return {
-    items: [],
-    totalPrice: 0,
-    totalCount: 0,
-    totalDiscount: 0,
-    depositTotal: 0,
-    depositBreakdown: [],
-    membershipSavings: 0,
-    promoSavings: 0,
-    fees: [],
-    minimumOrderValue: null,
-    suggestions: [],
-    selectedSlot: null,
-    deliveryBannerText: getTranslations(countryCode).pickerTitle,
-    recipeGroups: []
+    recipeGroups: cart2.recipes.map((recipe) => ({
+      id: recipe.id,
+      title: recipe.title,
+      imageId: recipe.imageId
+    }))
   };
 }
 
@@ -9630,8 +8060,7 @@ async function GET(request) {
   const countryCode = readCountryCode(request);
   try {
     const client = buildPicnicClient(token, countryCode);
-    const rawCart = await client.sendRequest("GET", "/cart", null, true);
-    const cartData = parseCartResponse(rawCart, countryCode);
+    const cartData = mapCart(await client.cart.getCart(), countryCode);
     return NextResponse.json(cartData);
   } catch (error2) {
     if (isApiAuthError(error2)) {
@@ -9661,8 +8090,7 @@ async function DELETE(request) {
   const countryCode = readCountryCode(request);
   try {
     const client = buildPicnicClient(token, countryCode);
-    const rawCart = await client.cart.clearCart();
-    const cartData = parseCartResponse(rawCart, countryCode);
+    const cartData = mapCart(await client.cart.clearCart(), countryCode);
     return NextResponse.json(cartData);
   } catch (error2) {
     if (isApiAuthError(error2)) {
@@ -9700,19 +8128,10 @@ async function POST5(request) {
   if (body.action !== "add" && body.action !== "remove") {
     return NextResponse.json({ error: 'action must be "add" or "remove"' }, { status: 400 });
   }
-  const endpoint = body.action === "add" ? "/cart/add_product" : "/cart/remove_product";
   try {
     const client = buildPicnicClient(token, countryCode);
-    const rawCart = await client.sendRequest(
-      "POST",
-      endpoint,
-      {
-        product_id: body.productId,
-        count: body.count
-      },
-      true
-    );
-    const cartData = parseCartResponse(rawCart, countryCode);
+    const cart2 = body.action === "add" ? await client.cart.addProductToCart(body.productId, body.count) : await client.cart.removeProductFromCart(body.productId, body.count);
+    const cartData = mapCart(cart2, countryCode);
     return NextResponse.json(cartData);
   } catch (error2) {
     if (isApiAuthError(error2)) {
@@ -9757,7 +8176,7 @@ async function POST6(request) {
   }
   try {
     const client = buildPicnicClient(token, readCountryCode(request));
-    await client.cart.cancelCheckout(transactionId);
+    await client.checkout.cancelCheckout(transactionId);
     return NextResponse.json({ success: true });
   } catch (error2) {
     if (isApiAuthError(error2)) {
@@ -9805,7 +8224,7 @@ async function POST7(request) {
   try {
     const client = buildPicnicClient(token, readCountryCode(request));
     if (transactionId) {
-      const status = await client.cart.getCheckoutStatus(transactionId);
+      const status = await client.checkout.getCheckoutStatus(transactionId);
       if (status.checkout_status !== "FINISHED") {
         return NextResponse.json(
           { error: "Payment not completed yet. Cannot confirm order." },
@@ -9813,7 +8232,7 @@ async function POST7(request) {
         );
       }
     }
-    const confirmation = await client.cart.confirmOrder(orderId);
+    const confirmation = await client.checkout.confirmOrder(orderId);
     return NextResponse.json({ success: true, orderId: confirmation.order_id });
   } catch (error2) {
     if (isApiAuthError(error2)) {
@@ -9858,10 +8277,13 @@ async function POST8(request) {
   const returnUrl = `${origin}/checkout/return`;
   try {
     const client = buildPicnicClient(token, readCountryCode(request));
-    const raw = await client.cart.initiatePayment(orderId, returnUrl);
+    const raw = await client.checkout.initiatePayment(orderId, returnUrl);
     const redirectUrl = raw.action?.redirect_url ?? raw.issuer_authentication_url ?? "";
     if (!redirectUrl) {
-      return NextResponse.json({ error: "Payment redirect URL missing from Picnic response" }, { status: 502 });
+      return NextResponse.json(
+        { error: "Payment redirect URL missing from Picnic response" },
+        { status: 502 }
+      );
     }
     return NextResponse.json({
       paymentId: raw.payment_id,
@@ -9890,44 +8312,27 @@ __export(route_exports9, {
   GET: () => GET2
 });
 
-// vendor/picnic-web/src/lib/checkout/parse-checkout.ts
-function parseCheckoutStart(raw) {
-  if (!isObject2(raw)) {
-    return emptyCheckoutStart();
-  }
+// vendor/picnic-web/src/lib/checkout/map-checkout.ts
+function mapCheckoutStart(result) {
   return {
-    orderId: asString(raw["order_id"]),
-    totalPrice: asNumber(raw["total_price"]),
-    totalCount: asNumber(raw["total_count"]),
-    totalDeposit: asNumber(raw["total_deposit"]),
-    totalSavings: asNumber(raw["total_savings"]),
-    transactionExpiry: asString(raw["transaction_expiry"])
+    orderId: result.order_id,
+    totalPrice: result.total_price,
+    totalCount: result.total_count,
+    totalDeposit: result.total_deposit,
+    totalSavings: result.total_savings,
+    transactionExpiry: result.transaction_expiry
   };
 }
-function emptyCheckoutStart() {
+function mapPaymentProfile(profile) {
   return {
-    orderId: "",
-    totalPrice: 0,
-    totalCount: 0,
-    totalDeposit: 0,
-    totalSavings: 0,
-    transactionExpiry: ""
-  };
-}
-function parsePaymentProfile(raw) {
-  if (!isObject2(raw)) {
-    return { preferredPaymentOptionId: "", storedOptions: [] };
-  }
-  const stored = asArray(raw["stored_payment_options"]).filter(isObject2).map((option) => ({
-    id: asString(option["id"]),
-    displayName: asString(option["display_name"]),
-    account: asString(option["account"]) || null,
-    paymentMethod: asString(option["payment_method"]),
-    iconUrl: asString(option["icon_url"])
-  }));
-  return {
-    preferredPaymentOptionId: asString(raw["preferred_payment_option_id"]),
-    storedOptions: stored
+    preferredPaymentOptionId: profile.preferred_payment_option_id,
+    storedOptions: (profile.stored_payment_options ?? []).map((option) => ({
+      id: option.id,
+      displayName: option.display_name,
+      account: option.account || null,
+      paymentMethod: option.payment_method,
+      iconUrl: option.icon_url
+    }))
   };
 }
 
@@ -9942,8 +8347,7 @@ async function GET2(request) {
   }
   try {
     const client = buildPicnicClient(token, readCountryCode(request));
-    const raw = await client.payment.getPaymentProfile();
-    return NextResponse.json(parsePaymentProfile(raw));
+    return NextResponse.json(mapPaymentProfile(await client.payment.getPaymentProfile()));
   } catch (error2) {
     if (isApiAuthError(error2)) {
       return NextResponse.json(
@@ -10009,11 +8413,8 @@ async function POST9(request) {
       const cart2 = await client.cart.getCart();
       mts = cart2.mts;
     }
-    const raw = await client.cart.startCheckout({
-      mts,
-      ...resolveKey ? { resolve_key: resolveKey } : {}
-    });
-    return NextResponse.json(parseCheckoutStart(raw));
+    const result = await client.checkout.startCheckout({ mts, resolveKey });
+    return NextResponse.json(mapCheckoutStart(result));
   } catch (error2) {
     if (isCheckoutIssueError(error2)) {
       return NextResponse.json({ issue: mapCheckoutIssue(error2) }, { status: 409 });
@@ -10026,7 +8427,10 @@ async function POST9(request) {
     }
     const message = error2 instanceof Error ? error2.message : "Unknown error occurred";
     console.error("[/api/cart/checkout/start] Failed:", message);
-    return NextResponse.json({ error: "Failed to start checkout. Please try again later." }, { status: 502 });
+    return NextResponse.json(
+      { error: "Failed to start checkout. Please try again later." },
+      { status: 502 }
+    );
   }
 }
 
@@ -10049,7 +8453,7 @@ async function GET3(request) {
   }
   try {
     const client = buildPicnicClient(token, readCountryCode(request));
-    const raw = await client.cart.getCheckoutStatus(transactionId);
+    const raw = await client.checkout.getCheckoutStatus(transactionId);
     return NextResponse.json({ checkoutStatus: raw.checkout_status });
   } catch (error2) {
     if (isApiAuthError(error2)) {
@@ -10101,10 +8505,10 @@ function groupSlotsByDay(slots2, countryCode) {
     return { date: dateKey, dayLabel, dateLabel, greenSlots, regularSlots };
   });
 }
-function buildSlotPicker(overview, countryCode) {
+function buildSlotPicker(slots2, countryCode) {
   return {
-    dayGroups: groupSlotsByDay(overview.slots, countryCode),
-    selectedSlot: overview.selectedSlot
+    dayGroups: groupSlotsByDay(slots2.slots, countryCode),
+    selectedSlot: slots2.selectedSlot
   };
 }
 
@@ -10120,8 +8524,8 @@ async function GET4(request) {
   const countryCode = readCountryCode(request);
   try {
     const client = buildPicnicClient(token, countryCode);
-    const overview = await client.cart.getDeliverySlotOverview();
-    const pickerData = buildSlotPicker(overview, countryCode);
+    const slots2 = await client.cart.getDeliverySlots();
+    const pickerData = buildSlotPicker(slots2, countryCode);
     return NextResponse.json(pickerData);
   } catch (error2) {
     if (isApiAuthError(error2)) {
@@ -10160,8 +8564,7 @@ async function POST10(request) {
   }
   try {
     const client = buildPicnicClient(token, countryCode);
-    const rawCart = await client.cart.setDeliverySlot(body.slotId);
-    const cartData = parseCartResponse(rawCart, countryCode);
+    const cartData = mapCart(await client.cart.setDeliverySlot(body.slotId), countryCode);
     return NextResponse.json(cartData);
   } catch (error2) {
     if (isApiAuthError(error2)) {
@@ -10196,7 +8599,7 @@ async function GET5(request) {
   }
   try {
     const client = buildPicnicClient(token, readCountryCode(request));
-    return NextResponse.json(await client.cart.getBasketFooter());
+    return NextResponse.json(await client.cart.getCartFooter());
   } catch (error2) {
     if (isApiAuthError(error2)) {
       return NextResponse.json(
@@ -10219,403 +8622,115 @@ __export(route_exports14, {
   GET: () => GET6
 });
 
-// vendor/picnic-web/src/lib/search/parse-content-page.ts
-function extractSectionTitle(headerNode) {
-  const markdowns = collectMarkdowns(headerNode);
-  const cleaned = markdowns.map((md) => stripColorTags(md)).filter(Boolean);
-  return cleaned.join(" / ");
-}
-function extractProductsFromWrappers(wrappers, seenIds) {
-  const products = [];
-  for (const wrapper of wrappers) {
-    const containers = findSellingUnitContainers(wrapper);
-    for (const container of containers) {
-      const product = containerToProduct(container);
-      if (!product || seenIds.has(product.id)) continue;
-      seenIds.add(product.id);
-      products.push(product);
+// vendor/picnic-web/src/lib/category/map-categories.ts
+var PROMOTIONS_PREFIX = "promotions-";
+function mapSubcategories(subcategories) {
+  return subcategories.links.flatMap((link) => {
+    const imageId = link.imageId ?? "";
+    if (link.target.type === "products")
+      return [{ id: link.target.categoryId, name: link.name, imageId }];
+    if (link.target.type === "promotions") {
+      return [{ id: `${PROMOTIONS_PREFIX}${link.target.categoryId}`, name: link.name, imageId }];
     }
-  }
-  return products;
-}
-function findAllByIdPrefix(obj, prefix, results = []) {
-  if (typeof obj !== "object" || obj === null) return results;
-  if (Array.isArray(obj)) {
-    for (const item of obj) findAllByIdPrefix(item, prefix, results);
-    return results;
-  }
-  const record = obj;
-  if (typeof record.id === "string" && record.id.startsWith(prefix)) {
-    results.push(record);
-    return results;
-  }
-  for (const value of Object.values(record)) {
-    findAllByIdPrefix(value, prefix, results);
-  }
-  return results;
-}
-function findAllByRegex(obj, regex, results = []) {
-  if (typeof obj !== "object" || obj === null) return results;
-  if (Array.isArray(obj)) {
-    for (const item of obj) findAllByRegex(item, regex, results);
-    return results;
-  }
-  const record = obj;
-  if (typeof record.id === "string" && regex.test(record.id)) {
-    results.push(record);
-    return results;
-  }
-  for (const value of Object.values(record)) {
-    findAllByRegex(value, regex, results);
-  }
-  return results;
-}
-var CAMPAIGN_SECTION_RE = /^(?:\d+-)?campaign-(?:promo|highlight|selling-unit-horizontal-carousel)-section_/;
-var CORE_SUB_HEADER_SUFFIX = "-core-sub-header";
-function parseCampaignPageSections(rawPage) {
-  const campaignSections = findAllByRegex(rawPage, CAMPAIGN_SECTION_RE);
-  if (campaignSections.length === 0) {
-    return parseHorizontalSellingSections(rawPage);
-  }
-  const seenIds = /* @__PURE__ */ new Set();
-  const sections = [];
-  for (const section of campaignSections) {
-    const sectionId = section.id ?? "";
-    const subHeaderId = sectionId + CORE_SUB_HEADER_SUFFIX;
-    const subHeader = findNodeByIdSubstring(section, subHeaderId);
-    let title = "";
-    if (subHeader) {
-      title = extractSectionTitle(subHeader);
-    }
-    const products2 = extractProductsFromWrappers([section], seenIds);
-    if (products2.length === 0) continue;
-    if (!title) title = "Producten";
-    sections.push({ title, products: products2 });
-  }
-  const products = sections.flatMap((s) => s.products);
-  return { sections, products };
-}
-var HORIZONTAL_SECTION_PREFIX = "core-horizontal-selling-unit-section-localized";
-var SUB_HEADER_PML_PREFIX = "horizontal-selling-unit-tiles-sub-header-pml";
-function parseHorizontalSellingSections(rawPage) {
-  const hSections = findAllByIdPrefix(rawPage, HORIZONTAL_SECTION_PREFIX);
-  if (hSections.length === 0) {
-    return fallbackFlatParse(rawPage);
-  }
-  const seenIds = /* @__PURE__ */ new Set();
-  const sections = [];
-  for (const section of hSections) {
-    const subHeader = findNodeByIdPrefix(section, SUB_HEADER_PML_PREFIX);
-    let title = "";
-    if (subHeader) {
-      title = extractSectionTitle(subHeader);
-    }
-    const products2 = extractProductsFromWrappers([section], seenIds);
-    if (products2.length === 0) continue;
-    if (!title) title = "Producten";
-    sections.push({ title, products: products2 });
-  }
-  const hasRealTitles = sections.some((s) => s.title !== "Producten");
-  if (!hasRealTitles) {
-    const allProducts = sections.flatMap((s) => s.products);
-    return { sections: [], products: allProducts };
-  }
-  const products = sections.flatMap((s) => s.products);
-  return { sections, products };
-}
-function fallbackFlatParse(rawPage) {
-  const containers = findSellingUnitContainers(rawPage);
-  const productMap = /* @__PURE__ */ new Map();
-  for (const container of containers) {
-    const product = containerToProduct(container);
-    if (!product) continue;
-    const existing = productMap.get(product.id);
-    if (!existing || product.badges.length > existing.badges.length || product.namePrefix || product.subtitle || product.brand) {
-      productMap.set(product.id, product);
-    }
-  }
-  const products = Array.from(productMap.values());
-  return { sections: [], products };
-}
-function parseContentPageSections(rawPage) {
-  return parseCampaignPageSections(rawPage);
+    return [];
+  });
 }
 
-// vendor/picnic-web/src/lib/search/parse-fusion-search.ts
-function parsePriceRangesFromRaw(raw) {
-  if (!raw || raw.length === 0) return null;
-  const thresholds = [];
-  for (const entry of raw) {
-    if (typeof entry === "object" && entry !== null && "price" in entry && typeof entry.price === "number" && "from_quantity" in entry && typeof entry.from_quantity === "number") {
-      const e = entry;
-      thresholds.push({ quantity: e.from_quantity, pricePerUnit: e.price });
-    }
-  }
-  if (thresholds.length === 0) return null;
-  thresholds.sort((a, b) => a.quantity - b.quantity);
-  return thresholds;
-}
-function containerToProduct(container) {
-  const su = container.content?.sellingUnit;
-  if (!su) return null;
-  const pml = container.pml?.component ? container.pml : void 0;
-  const contexts = container.analytics?.contexts;
-  const stackChildren = findTextStackChildren(pml);
-  const promotion = extractPromotionBadge(contexts, pml, stackChildren);
-  const textInfo = extractTextStackInfo(stackChildren, su.name, su.unit_quantity);
-  const { isUnavailable, reason } = extractUnavailabilityFromPml(pml);
-  const originalPrice = extractOriginalPriceFromPml(stackChildren, su.display_price);
-  const badges = [];
-  if (textInfo.extraLabel) {
-    badges.push(textInfo.extraLabel);
-  }
-  const hasDiscount = originalPrice !== null && originalPrice > su.display_price;
+// vendor/picnic-web/src/lib/product/map-product-tile.ts
+var DEFAULT_MAX_COUNT2 = 99;
+var PROMO_LABEL_TYPES = /* @__PURE__ */ new Set(["PROMO", "PROMOBOX_PROMO"]);
+var PROMO_BACKGROUND_TOKEN = "YELLOW2";
+var PROMO_TEXT_TOKEN = "GREY5";
+var PROMO_BACKGROUND_FALLBACK = "#fbd92b";
+var PROMO_TEXT_FALLBACK = "#333333";
+function mapProductTile(tile, tokens = {}) {
+  if (!tile.imageId) return null;
+  const promoText = tile.labels.find(
+    (label) => label.type && PROMO_LABEL_TYPES.has(label.type)
+  )?.text;
   return {
-    id: su.id,
-    name: textInfo.displayName ?? su.name,
-    namePrefix: textInfo.namePrefix,
-    subtitle: textInfo.subtitle,
-    subtitleColor: textInfo.subtitleColor,
-    subtitleLeadingIcon: textInfo.subtitleLeadingIcon,
-    subtitleTrailingIcon: textInfo.subtitleTrailingIcon,
-    brand: textInfo.brand,
-    highlight: textInfo.highlight,
-    flagIconKey: textInfo.flagIconKey,
-    flagFallbackImageId: textInfo.flagFallbackImageId,
-    imageId: su.image_id,
-    displayPrice: su.display_price,
-    originalPrice: hasDiscount ? originalPrice : null,
-    displayPriceColor: extractDisplayPriceColor2(stackChildren, su.display_price),
-    unitQuantity: su.unit_quantity,
-    maxCount: su.max_count,
-    priceRanges: parsePriceRangesFromRaw(su.price_ranges),
-    badges,
-    promoBadge: promotion?.badge ?? null,
-    promoPlacement: promotion?.placement ?? null,
-    isUnavailable,
-    unavailableReason: reason
+    id: tile.id,
+    name: tile.name,
+    namePrefix: tile.namePrefix,
+    // The quality cue ("Op basis van doperwten") is the line above the name,
+    // the brand ("Johma") the line below it.
+    subtitle: tile.qualityCue,
+    subtitleColor: null,
+    subtitleLeadingIcon: null,
+    subtitleTrailingIcon: null,
+    brand: tile.brand,
+    highlight: null,
+    flagIconKey: null,
+    flagFallbackImageId: null,
+    imageId: tile.imageId,
+    displayPrice: tile.displayPrice,
+    originalPrice: tile.originalPrice,
+    displayPriceColor: null,
+    unitQuantity: tile.unitQuantity,
+    maxCount: DEFAULT_MAX_COUNT2,
+    priceRanges: mapPriceRanges(tile.priceRanges),
+    badges: [],
+    promoBadge: promoText ? buildPromoBadge(promoText, tokens) : null,
+    promoPlacement: promoText ? "image" : null,
+    isUnavailable: tile.isUnavailable,
+    unavailableReason: null
   };
 }
-function extractSectionTitle2(headerNode) {
-  const markdowns = collectMarkdowns(headerNode);
-  const cleaned = markdowns.map((md) => stripColorTags(md)).filter(Boolean);
-  return cleaned.join(" / ");
+function mapProductTiles(value, tokens = {}) {
+  return (Array.isArray(value) ? value : []).flatMap((tile) => {
+    const product = isProductTile(tile) ? mapProductTile(tile, tokens) : null;
+    return product ? [product] : [];
+  });
 }
-function extractProductsFromWrappers2(wrappers, seenIds) {
-  const products = [];
-  for (const wrapper of wrappers) {
-    const containers = findSellingUnitContainers(wrapper);
-    for (const container of containers) {
-      const product = containerToProduct(container);
-      if (!product || seenIds.has(product.id)) continue;
-      seenIds.add(product.id);
-      products.push(product);
+function mapProductSections(sections, tokens = {}) {
+  const products = /* @__PURE__ */ new Map();
+  const mapped = [];
+  for (const section of sections) {
+    const sectionProducts = mapProductTiles(section.products, tokens);
+    for (const product of sectionProducts) {
+      if (!products.has(product.id)) products.set(product.id, product);
+    }
+    if (sectionProducts.length > 0) {
+      mapped.push({ title: section.title ?? "", products: sectionProducts });
     }
   }
-  return products;
+  return { products: [...products.values()], sections: mapped };
 }
-var HEADER_PREFIX = "client-side-filtering-section-header-wrapper-";
-var WRAPPER_PREFIX = "client-side-filtering-section-wrapper-";
-var VISUAL_SECTIONS_ID = "structured-selling-unit-search-result-visual-sections";
-function parseFusionSearchSections(rawPage) {
-  const seenIds = /* @__PURE__ */ new Set();
-  const sections = [];
-  const resultNode = findNodeByIdSubstring(rawPage, "structured-selling-unit-search-result");
-  if (!resultNode) {
-    return parseContentPageSections(rawPage);
-  }
-  const resultChildren = resultNode.children;
-  if (!resultChildren) return parseContentPageSections(rawPage);
-  for (let i = 0; i < resultChildren.length; i++) {
-    const child = resultChildren[i];
-    const childId = child.id ?? "";
-    if (childId.startsWith(HEADER_PREFIX)) {
-      const sectionKey = childId.slice(HEADER_PREFIX.length);
-      const title = extractSectionTitle2(child);
-      const wrappers = [];
-      for (let j = i + 1; j < resultChildren.length; j++) {
-        const sibling = resultChildren[j];
-        const nextId = sibling.id ?? "";
-        if (nextId.startsWith(WRAPPER_PREFIX + sectionKey)) {
-          wrappers.push(sibling);
-        } else if (nextId.startsWith(HEADER_PREFIX) || nextId === VISUAL_SECTIONS_ID || nextId.includes(VISUAL_SECTIONS_ID)) {
-          break;
-        } else {
-          const nested = findNodeByIdSubstring(sibling, WRAPPER_PREFIX + sectionKey);
-          if (nested) wrappers.push(nested);
-        }
-      }
-      const products2 = extractProductsFromWrappers2(wrappers, seenIds);
-      if (products2.length > 0) {
-        sections.push({ title, products: products2 });
-      }
-    }
-    if (childId === VISUAL_SECTIONS_ID || childId.includes(VISUAL_SECTIONS_ID)) {
-      const vsChildren = child.children;
-      if (vsChildren) {
-        parseSectionsFromChildren(vsChildren, sections, seenIds);
-      }
-    }
-  }
-  const products = sections.flatMap((s) => s.products);
-  if (products.length === 0) {
-    const flat = extractProductsFromWrappers2([resultNode], /* @__PURE__ */ new Set());
-    return { sections: [], products: flat };
-  }
-  return { sections, products };
+function mapSearchSections(results) {
+  return mapProductSections(results?.sections ?? []);
 }
-function isWrapperForSection(id, sectionKey) {
-  const prefix = WRAPPER_PREFIX + sectionKey;
-  return id === prefix || id.startsWith(prefix + "__");
+function mapPromotionsSections(promotions2) {
+  return promotions2.sections.map((section) => ({
+    title: section.title,
+    products: mapProductTiles(section.products),
+    groups: section.groups
+  })).filter((section) => section.products.length > 0 || section.groups.length > 0);
 }
-function collectWrappers(children, start, sectionKey) {
-  let j = start;
-  while (j < children.length) {
-    const nextId = children[j].id ?? "";
-    if (!isWrapperForSection(nextId, sectionKey)) break;
-    j++;
-  }
-  return j;
+function mapFavoritesAisles(favorites) {
+  return favorites.aisles.map((aisle) => ({
+    id: aisle.id,
+    title: aisle.title,
+    products: mapProductTiles(aisle.products),
+    complete: aisle.complete
+  }));
 }
-function parseSectionsFromChildren(children, sections, seenIds) {
-  let i = 0;
-  while (i < children.length) {
-    const child = children[i];
-    const childId = child.id ?? "";
-    if (childId.startsWith(HEADER_PREFIX)) {
-      const sectionKey = childId.slice(HEADER_PREFIX.length);
-      const title = extractSectionTitle2(child);
-      const j = collectWrappers(children, i + 1, sectionKey);
-      const products = extractProductsFromWrappers2(children.slice(i + 1, j), seenIds);
-      if (products.length > 0) {
-        sections.push({ title, products });
-      }
-      i = j;
-    } else if (childId.startsWith(WRAPPER_PREFIX)) {
-      const sectionKey = childId.slice(WRAPPER_PREFIX.length).replace(/__\d+$/, "");
-      const j = collectWrappers(children, i, sectionKey);
-      const products = extractProductsFromWrappers2(children.slice(i, j), seenIds);
-      if (products.length > 0) {
-        sections.push({ title: sectionKey, products });
-      }
-      i = j;
-    } else {
-      i++;
-    }
-  }
+function isProductTile(value) {
+  return typeof value === "object" && value !== null && typeof value.id === "string" && Array.isArray(value.labels);
 }
-var CATEGORY_ARTICLES_PREFIX = "category-tree-page-articles-section";
-var CATEGORY_SUB_HEADER_PREFIX = "vertical-article-tiles-sub-header-";
-function parseCategoryPageSections(rawPage) {
-  const articleSections = findAllByIdPrefix2(rawPage, CATEGORY_ARTICLES_PREFIX);
-  if (articleSections.length === 0) {
-    return parseFusionSearchSections(rawPage);
-  }
-  const seenIds = /* @__PURE__ */ new Set();
-  const sections = [];
-  for (const section of articleSections) {
-    const headerNodes = findAllByIdPrefix2(section, CATEGORY_SUB_HEADER_PREFIX);
-    let title = "";
-    for (const h of headerNodes) {
-      title = extractSectionTitle2(h);
-      if (title) break;
-    }
-    if (!title) continue;
-    const products2 = extractProductsFromWrappers2([section], seenIds);
-    if (products2.length > 0) {
-      sections.push({ title, products: products2 });
-    }
-  }
-  const products = sections.flatMap((s) => s.products);
-  return { sections, products };
+function mapPriceRanges(ranges) {
+  if (!ranges || ranges.length === 0) return null;
+  return ranges.map((range) => ({ quantity: range.from_quantity, pricePerUnit: range.price }));
 }
-function findAllByIdPrefix2(obj, prefix, results = []) {
-  if (typeof obj !== "object" || obj === null) return results;
-  if (Array.isArray(obj)) {
-    for (const item of obj) findAllByIdPrefix2(item, prefix, results);
-    return results;
-  }
-  const record = obj;
-  if (typeof record.id === "string" && record.id.startsWith(prefix)) {
-    results.push(record);
-    return results;
-  }
-  for (const value of Object.values(record)) {
-    findAllByIdPrefix2(value, prefix, results);
-  }
-  return results;
-}
-
-// vendor/picnic-web/src/lib/category/parse-categories.ts
-var CATEGORY_ITEM_PREFIX = "core-list-item-category-";
-function extractCategoryFromPmlItem(item, itemId) {
-  const id = itemId.slice(CATEGORY_ITEM_PREFIX.length);
-  if (!id) return null;
-  const pml = item.pml;
-  if (typeof pml !== "object" || pml === null) return null;
-  const component = pml.component;
-  if (typeof component !== "object" || component === null) return null;
-  const componentRecord = component;
-  const name = componentRecord.accessibilityLabel;
-  if (typeof name !== "string" || name === "") return null;
-  const onPress = componentRecord.onPress;
-  let deepLinkTarget = "";
-  if (typeof onPress === "object" && onPress !== null) {
-    const target = onPress.target;
-    if (typeof target === "string") {
-      deepLinkTarget = target;
-    }
-  }
-  const imageId = findFirstImageId(componentRecord);
-  if (!imageId) return null;
-  return { id, name, imageId, deepLinkTarget };
-}
-function findFirstImageId(component) {
-  const sources = collectPropertyValues(component, "source");
-  for (const source of sources) {
-    if (typeof source !== "object" || source === null) continue;
-    const sourceId = source.id;
-    if (typeof sourceId === "string" && sourceId !== "") {
-      return sourceId;
-    }
-  }
-  return null;
-}
-
-// vendor/picnic-web/src/lib/category/parse-subcategories.ts
-var L1_CATEGORY_LIST_BLOCK_ID = "L1-category-page-list";
-function parseSubcategoryPage(rawPage) {
-  const listBlock = findNodeByIdSubstring(rawPage, L1_CATEGORY_LIST_BLOCK_ID);
-  if (!listBlock) return [];
-  const children = listBlock.children;
-  if (!Array.isArray(children)) return [];
-  const subcategories = [];
-  for (const child of children) {
-    if (typeof child !== "object" || child === null) continue;
-    const record = child;
-    if (record.type !== "PML") continue;
-    const itemId = record.id;
-    if (typeof itemId !== "string") continue;
-    if (!itemId.startsWith(CATEGORY_ITEM_PREFIX)) continue;
-    const category = extractCategoryFromPmlItem(record, itemId);
-    if (category) subcategories.push(category);
-  }
-  return subcategories;
-}
-function asRecord(value) {
-  return typeof value === "object" && value !== null ? value : null;
-}
-function extractPageTitle(rawPage) {
-  const page = asRecord(rawPage);
-  if (!page) return null;
-  const header = asRecord(asRecord(page.layout)?.header) ?? asRecord(page.header);
-  if (!header) return null;
-  const title = header.title;
-  return typeof title === "string" ? title : null;
+function buildPromoBadge(text3, tokens) {
+  return {
+    text: text3,
+    variant: "promo",
+    backgroundColor: tokens[PROMO_BACKGROUND_TOKEN] ?? PROMO_BACKGROUND_FALLBACK,
+    textColor: tokens[PROMO_TEXT_TOKEN] ?? PROMO_TEXT_FALLBACK
+  };
 }
 
 // vendor/picnic-web/src/app/api/categories/[categoryId]/products/route.ts
-var L2_PAGE_PREFIX = "L2-category-page-root?category_id=";
 async function GET6(request, { params }) {
   const { categoryId } = await params;
   const token = readAuthToken(request);
@@ -10628,10 +8743,9 @@ async function GET6(request, { params }) {
   const countryCode = readCountryCode(request);
   try {
     const client = buildPicnicClient(token, countryCode);
-    const rawPage = await client.app.getPage(`${L2_PAGE_PREFIX}${categoryId}`);
-    const title = extractPageTitle(rawPage);
-    const { sections, products } = parseCategoryPageSections(rawPage);
-    return NextResponse.json({ title, products, sections });
+    const page = categoryId.startsWith(PROMOTIONS_PREFIX) ? await client.catalog.getCategoryPromotions(categoryId.slice(PROMOTIONS_PREFIX.length)) : await client.catalog.getCategoryProducts(categoryId);
+    const { sections, products } = mapSearchSections(page.results);
+    return NextResponse.json({ title: page.title || null, products, sections });
   } catch (error2) {
     if (isApiAuthError(error2)) {
       return NextResponse.json(
@@ -10655,7 +8769,6 @@ var route_exports15 = {};
 __export(route_exports15, {
   GET: () => GET7
 });
-var L1_PAGE_PREFIX = "L1-category-page-root?category_id=";
 async function GET7(request, { params }) {
   const { categoryId } = await params;
   const token = readAuthToken(request);
@@ -10668,10 +8781,11 @@ async function GET7(request, { params }) {
   const countryCode = readCountryCode(request);
   try {
     const client = buildPicnicClient(token, countryCode);
-    const rawPage = await client.app.getPage(`${L1_PAGE_PREFIX}${categoryId}`);
-    const title = extractPageTitle(rawPage) ?? categoryId;
-    const subcategories = parseSubcategoryPage(rawPage);
-    return NextResponse.json({ title, subcategories });
+    const page = await client.catalog.getSubcategories(categoryId);
+    return NextResponse.json({
+      title: page.title || categoryId,
+      subcategories: mapSubcategories(page)
+    });
   } catch (error2) {
     if (isApiAuthError(error2)) {
       return NextResponse.json(
@@ -10696,325 +8810,115 @@ __export(route_exports16, {
   GET: () => GET8
 });
 
-// vendor/picnic-web/src/lib/recipe/parse-cookbook.ts
-var RECIPE_ID_RE = /^[0-9a-f]{24}$/;
-function findRecipeCardNodes(obj, results = []) {
-  if (typeof obj !== "object" || obj === null) return results;
-  if (Array.isArray(obj)) {
-    for (const item of obj) findRecipeCardNodes(item, results);
-    return results;
-  }
-  const record = obj;
-  if (record.type === "BLOCK" || record.type === "PML") {
-    const analytics = record.analytics;
-    for (const ctx of analytics?.contexts ?? []) {
-      if (typeof ctx !== "object" || ctx === null) continue;
-      const data = ctx.data;
-      if (data && typeof data.recipe_id === "string" && RECIPE_ID_RE.test(data.recipe_id)) {
-        results.push(record);
-        return results;
-      }
-    }
-    if (typeof record.id === "string" && record.id.includes("recipe")) {
-      const lastSegment = record.id.split("-").at(-1) ?? "";
-      if (RECIPE_ID_RE.test(lastSegment)) {
-        results.push(record);
-        return results;
-      }
-    }
-  }
-  for (const value of Object.values(record)) {
-    findRecipeCardNodes(value, results);
-  }
-  return results;
+// vendor/picnic-web/src/lib/core/constants.ts
+var MEAL_PLAN_MAX_CANDIDATES = 40;
+var RECIPE_PAGE_CONCURRENCY = 5;
+var MEAL_PLAN_RECIPE_CONCURRENCY = 3;
+
+// vendor/picnic-web/src/lib/core/page-cache.ts
+import { createHash as createHash2 } from "node:crypto";
+var cache = /* @__PURE__ */ new Map();
+var PAGE_CACHE_TTL_MS = 10 * 60 * 1e3;
+var MAX_ENTRIES = 500;
+function scopedCacheKey(client, path) {
+  const scoped = client;
+  const token = scoped.authKey ?? "";
+  const scope = createHash2("sha256").update(token).digest("hex").slice(0, 16);
+  return `${scoped.countryCode ?? ""}:${scope}:${path}`;
 }
-function extractImageId2(obj) {
-  if (typeof obj !== "object" || obj === null) return null;
-  if (Array.isArray(obj)) {
-    for (const item of obj) {
-      const id = extractImageId2(item);
-      if (id) return id;
-    }
-    return null;
+function evictIfFull() {
+  if (cache.size < MAX_ENTRIES) return;
+  const now = Date.now();
+  for (const [key, entry] of cache) {
+    if (entry.expiresAt <= now) cache.delete(key);
   }
-  const record = obj;
-  if (record.type === "IMAGE") {
-    const source = record.source;
-    if (typeof source?.id === "string") return source.id;
-    const fallback = record.fallbackSource;
-    if (typeof fallback?.id === "string") return fallback.id;
+  while (cache.size >= MAX_ENTRIES) {
+    const oldest = cache.keys().next();
+    if (oldest.done) break;
+    cache.delete(oldest.value);
   }
-  for (const value of Object.values(record)) {
-    const id = extractImageId2(value);
-    if (id) return id;
-  }
-  return null;
 }
-function extractFromAnalytics(node) {
-  const analytics = node.analytics;
-  for (const ctx of analytics?.contexts ?? []) {
-    if (typeof ctx !== "object" || ctx === null) continue;
-    const data = ctx.data;
-    if (!data || typeof data.recipe_id !== "string") continue;
-    if (!RECIPE_ID_RE.test(data.recipe_id)) continue;
-    const name = typeof data.name === "string" ? data.name : typeof data.recipe_name === "string" ? data.recipe_name : "";
-    const cookingTimeMinutes = typeof data.cooking_time_minutes === "number" ? data.cooking_time_minutes : null;
-    return { recipeId: data.recipe_id, name, cookingTimeMinutes };
-  }
-  return null;
+function cachedCall(client, name, call, ttlMs = PAGE_CACHE_TTL_MS) {
+  const key = scopedCacheKey(client, name);
+  const hit = cache.get(key);
+  if (hit && hit.expiresAt > Date.now()) return hit.promise;
+  const promise = call();
+  evictIfFull();
+  cache.set(key, { promise, expiresAt: Date.now() + ttlMs });
+  promise.catch(() => {
+    if (cache.get(key)?.promise === promise) cache.delete(key);
+  });
+  return promise;
 }
-function parseCookbookPage(rawPage) {
-  const cardNodes = findRecipeCardNodes(rawPage);
+
+// vendor/picnic-web/src/lib/recipe/fetch-recipe-lists.ts
+var SAVED_CATEGORY_ID = "__saved__";
+var CATEGORY_KEY_RE = /^category:[\w-]{1,80}$|^group:[^/?#]{1,80}$/;
+var categoryKey = (link) => `${link.type}:${link.id}`;
+function mapRecipe(recipe) {
+  return {
+    id: recipe.id,
+    name: recipe.name,
+    imageId: recipe.imageId,
+    cookingTimeMinutes: recipe.cookingTimeMinutes
+  };
+}
+function uniqueRecipes(recipes) {
   const seen = /* @__PURE__ */ new Set();
-  const recipes = [];
-  for (const node of cardNodes) {
-    const fromAnalytics = extractFromAnalytics(node);
-    let recipeId = fromAnalytics?.recipeId ?? "";
-    let name = fromAnalytics?.name ?? "";
-    const cookingTimeMinutes = fromAnalytics?.cookingTimeMinutes ?? null;
-    if (!recipeId) {
-      const lastSegment = (node.id ?? "").split("-").at(-1) ?? "";
-      if (RECIPE_ID_RE.test(lastSegment)) recipeId = lastSegment;
-    }
-    if (!recipeId || seen.has(recipeId)) continue;
-    seen.add(recipeId);
-    if (!name) {
-      name = collectMarkdowns(node).map(cleanMarkdown).find((m) => m.length > 3) ?? "";
-    }
-    if (!name) continue;
-    const imageId = extractImageId2(node);
-    recipes.push({ id: recipeId, name, imageId, cookingTimeMinutes });
-  }
-  return recipes;
+  return recipes.flatMap((recipe) => {
+    if (seen.has(recipe.id)) return [];
+    seen.add(recipe.id);
+    return [mapRecipe(recipe)];
+  });
 }
-
-// vendor/picnic-web/src/lib/recipe/fetch-saved-recipes.ts
-var SAVED_PAGE_ID = "saved-deep-dive-page-content";
-async function fetchSavedRecipes(client) {
-  const rawPage = await client.sendRequest(
-    "GET",
-    `/pages/${SAVED_PAGE_ID}`,
-    null,
-    true
+async function fetchRecipeOverview(client) {
+  const overview = await cachedCall(
+    client,
+    "recipes:overview",
+    () => client.recipe.getRecipeOverview()
   );
-  return parseCookbookPage(rawPage);
+  const links = overview.categorySections.flatMap((section) => section.categories);
+  const seen = /* @__PURE__ */ new Set();
+  return {
+    recipes: uniqueRecipes(overview.sections.flatMap((section) => section.recipes)),
+    categories: links.flatMap((link) => {
+      const id = categoryKey(link);
+      if (seen.has(id)) return [];
+      seen.add(id);
+      return [{ id, name: link.name }];
+    })
+  };
 }
-
-// vendor/picnic-web/src/lib/recipe/recipe-categories.ts
-var DE_CATEGORIES = [
-  { id: "recipe-cattree-25min", name: "Blitzrezepte" },
-  { id: "recipe-cattree-onepot", name: "One Pot" },
-  { id: "recipe-cattree-pasta", name: "Pasta" },
-  { id: "recipe-cattree-stuffedpasta", name: "Gefüllte Pasta" },
-  { id: "recipe-cattree-lasagne", name: "Lasagne" },
-  { id: "recipe-cattree-gnocchi", name: "Gnocchi" },
-  { id: "recipe-cattree-noodles", name: "Nudeln" },
-  { id: "recipe-cattree-schupfnudeln", name: "Schupfnudeln" },
-  { id: "recipe-cattree-maultaschen", name: "Maultaschen" },
-  { id: "recipe-cattree-spaetzle", name: "Spätzle" },
-  { id: "recipe-cattree-asia-reis", name: "Asia & Reis" },
-  { id: "recipe-cattree-risotto", name: "Risotto" },
-  { id: "recipe-cattree-couscous", name: "Couscous" },
-  { id: "recipe-cattree-bulgur", name: "Bulgur" },
-  { id: "recipe-cattree-knoedel", name: "Knödel" },
-  { id: "recipe-cattree-kartoffel", name: "Kartoffel" },
-  { id: "recipe-cattree-suppen", name: "Suppen" },
-  { id: "recipe-cattree-eintopf", name: "Eintopf" },
-  { id: "recipe-cattree-curry2", name: "Curry" },
-  { id: "recipe-cattree-l2-salad", name: "Salate" },
-  { id: "recipe-cattree-bowls", name: "Bowls" },
-  { id: "recipe-cattree-wraps", name: "Wraps" },
-  { id: "recipe-cattree-pita2", name: "Pita" },
-  { id: "recipe-cattree-l2-burger", name: "Burger" },
-  { id: "recipe-cattree-quiche", name: "Quiche" },
-  { id: "recipe-cattree-traybake", name: "Traybake" },
-  { id: "recipe-cattree-auflaufe", name: "Aufläufe" },
-  { id: "recipe-cattree-l2-pizza", name: "Pizza" },
-  { id: "recipe-cattree-vegetarisch", name: "Vegetarisch" },
-  { id: "recipe-cattree-vegan", name: "Vegan" },
-  { id: "recipe-cattree-highinveg", name: "Viel Gemüse" },
-  { id: "recipe-cattree-brunch", name: "Brunch" },
-  { id: "recipe-cattree-aperitif", name: "Aperitif" },
-  { id: "recipe-cattree-dessert", name: "Dessert" },
-  { id: "recipe-cattree-abendbrot", name: "Abendbrot" },
-  { id: "recipe-cattree-bbq", name: "BBQ" },
-  { id: "recipe-cattree-l2-party", name: "Party" },
-  { id: "recipe-cattree-basic", name: "Basics" },
-  { id: "recipe-cattree-baking", name: "Backen" },
-  { id: "recipe-cattree-snacks", name: "Snacks" },
-  { id: "recipe-cattree-getraenke", name: "Getränke" },
-  { id: "recipe-cattree-airfryer", name: "Airfryer" },
-  { id: "recipe-cattree-budget", name: "Budget" },
-  { id: "recipe-cattree-jamieoliver", name: "Jamie Oliver" },
-  { id: "recipe-cattree-season", name: "Saisonal" },
-  { id: "recipe-cattree-l2-kids", name: "Für Kinder" }
-];
-var NL_CATEGORIES = [
-  {
-    id: "meals-category-page-content?category_id=c24af7dc-f056-4067-8953-6a8f85410bf8",
-    name: "Onder de 20 minuten"
-  },
-  {
-    id: "meals-category-page-content?category_id=8efb8aab-c728-4df0-a427-ef3e18727dd1",
-    name: "Weinig snijwerk"
-  },
-  {
-    id: "meals-category-page-content?category_id=0524acc5-8f37-4f2e-b85a-d58b6f24b528",
-    name: "Eenpansgerechten"
-  },
-  {
-    id: "meals-category-page-content?category_id=ba089fa4-23c1-4361-b5a1-b24be2e013b6",
-    name: "Pasta"
-  },
-  {
-    id: "meals-category-page-content?category_id=d420d519-0c36-4109-86a8-e46cb5723f6e",
-    name: "Ravioli & tortellini"
-  },
-  {
-    id: "meals-category-page-content?category_id=9f238cf6-355d-4c96-bd66-36a1bed2ca4e",
-    name: "Lasagne"
-  },
-  {
-    id: "meals-category-page-content?category_id=14a589b9-57d8-4c36-bbea-2e095879cafa",
-    name: "Noedels"
-  },
-  {
-    id: "meals-category-page-content?category_id=8c6641c8-3b40-4d02-ae1c-cffc74533403",
-    name: "Rijst"
-  },
-  {
-    id: "meals-category-page-content?category_id=3bc87ef2-97ae-4ced-a67d-ba1db99e835c",
-    name: "Risotto"
-  },
-  {
-    id: "meals-category-page-content?category_id=aaf728c0-faf4-4d2b-81be-381cf0bbf81f",
-    name: "Couscous, bulgur & quinoa"
-  },
-  {
-    id: "meals-category-page-content?category_id=32e341cb-b9dd-4fd7-bbb4-a374a279f973",
-    name: "Stamppot"
-  },
-  {
-    id: "meals-category-page-content?category_id=745a4764-9670-4973-aa56-435ab4eca1ec",
-    name: "Aardappelen"
-  },
-  {
-    id: "meals-category-page-content?category_id=b29cbecb-6ddf-4ee0-a35e-d069ffd3c157",
-    name: "Wraps & taco's"
-  },
-  {
-    id: "meals-category-page-content?category_id=88f94486-b6d3-46f5-860e-0a1e1067f31d",
-    name: "Pita & platbrood"
-  },
-  {
-    id: "meals-category-page-content?category_id=16ee3d05-7e6a-40bc-b00a-1825514e51cf",
-    name: "Pizza"
-  },
-  {
-    id: "meals-category-page-content?category_id=5989ff24-36c9-43b3-83b1-57676ea2ca6c",
-    name: "Burgers"
-  },
-  {
-    id: "meals-category-page-content?category_id=2701028e-a90c-4198-ad91-a2f66e201b1b",
-    name: "Ovenschotels"
-  },
-  {
-    id: "meals-category-page-content?category_id=a5401880-0ad7-458b-aa5f-eac84da20865",
-    name: "Traybakes"
-  },
-  {
-    id: "meals-category-page-content?category_id=77eca1e7-1f83-43ad-a184-25da3532f065",
-    name: "Plaattaart & flammkuchen"
-  },
-  {
-    id: "meals-category-page-content?category_id=95512d80-583a-4d7b-907c-6899dd08d941",
-    name: "Quiche"
-  },
-  {
-    id: "meals-category-page-content?category_id=fcf06318-8f10-494b-8655-d283b3fbad18",
-    name: "Airfryer"
-  },
-  {
-    id: "meals-category-page-content?category_id=392d64fb-9452-4b24-9d82-36eda598382a",
-    name: "Soep"
-  },
-  {
-    id: "meals-category-page-content?category_id=5c45153e-c5aa-4402-b186-0ae09ee69fc5",
-    name: "Vega"
-  },
-  {
-    id: "meals-category-page-content?category_id=c6c05c56-49e6-4121-8803-ec3845384d36",
-    name: "Vegan"
-  },
-  {
-    id: "meals-category-page-content?category_id=60ac9475-3d4c-49c0-bf72-65cfecdfcfec",
-    name: "Veel groente"
-  },
-  {
-    id: "meals-category-page-content?category_id=5ef7b94b-15ba-4428-964b-181ee15feb0c",
-    name: "Koolhydraatarm"
-  },
-  {
-    id: "meals-category-page-content?category_id=c771f79e-65c7-4c25-873f-f45d738b2d4f",
-    name: "Caloriearm"
-  },
-  {
-    id: "meals-category-page-content?category_id=e0842ef6-770b-4324-ba51-eb8ca5368c38",
-    name: "Zwangerproof"
-  },
-  {
-    id: "meals-category-page-content?category_id=a8ce9cb8-61ba-44ab-bb7a-429e835659af",
-    name: "Ontbijt"
-  },
-  {
-    id: "meals-category-page-content?category_id=16c7d514-9f19-4568-b673-4513db894215",
-    name: "Brunch & lunch"
-  },
-  {
-    id: "meals-category-page-content?category_id=c92f50ef-2704-4585-9a50-40778a25ddef",
-    name: "Drankjes"
-  },
-  {
-    id: "meals-category-page-content?category_id=13bd904b-b39b-470b-aa71-3c91a9f3d1cc",
-    name: "BBQ"
-  },
-  {
-    id: "meals-category-page-content?category_id=bea9f93c-35e4-46f1-8ab4-19943074268a",
-    name: "Budget"
-  },
-  {
-    id: "meals-category-page-content?category_id=98733940-cdfe-4009-951a-89878911763e",
-    name: "Koken met het seizoen"
-  },
-  {
-    id: "meals-category-page-content?category_id=fc6a8ef1-8410-4f20-8137-332ddc8bb749",
-    name: "Basisrecepten"
-  },
-  {
-    id: "meals-category-page-content?category_id=33fa5851-be5d-40ba-92a4-35a382cbe9b8",
-    name: "Verspakketten"
-  },
-  {
-    id: "meals-category-page-content?category_id=3aa8ebe4-d0b5-4cad-b638-dcbd1d3ab8c4",
-    name: "Jamie Oliver"
-  },
-  {
-    id: "meals-category-page-content?category_id=f54dd9a3-9009-4832-b326-ecda25cd8834",
-    name: "Eef Kookt Zo"
-  },
-  {
-    id: "meals-category-page-content?category_id=f4b5b9e4-bb06-4078-a44f-2814b0c12030",
-    name: "24Kitchen"
-  }
-];
-function getRecipeCategories(countryCode) {
-  if (countryCode === "DE") return DE_CATEGORIES;
-  if (countryCode === "NL") return NL_CATEGORIES;
-  return [];
+async function fetchSavedRecipes(client) {
+  return (await client.recipe.getSavedRecipes()).map(mapRecipe);
+}
+function fetchCategory(client, categoryId) {
+  return cachedCall(
+    client,
+    `recipes:category:${categoryId}`,
+    () => client.recipe.getRecipeCategory(categoryId).then((category) => category.recipes)
+  );
+}
+async function fetchCategoryRecipes(client, key, concurrency = RECIPE_PAGE_CONCURRENCY) {
+  const separator = key.indexOf(":");
+  const type = key.slice(0, separator);
+  const id = key.slice(separator + 1);
+  if (type === "category") return uniqueRecipes(await fetchCategory(client, id));
+  const group = await cachedCall(
+    client,
+    `recipes:group:${id}`,
+    () => client.recipe.getRecipeCategoryGroup(id)
+  );
+  const categories = group.categories.filter((link) => link.type === "category");
+  const lists = await mapWithConcurrency(
+    categories,
+    (link) => fetchCategory(client, link.id),
+    concurrency
+  );
+  return uniqueRecipes(lists.flat());
 }
 
 // vendor/picnic-web/src/app/api/cookbook/route.ts
-var CATEGORY_ID_RE = /^recipe-cattree-[\w-]+$|^meals-category-page-content\?category_id=[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 async function GET8(request) {
   const token = readAuthToken(request);
   if (!token) {
@@ -11027,22 +8931,18 @@ async function GET8(request) {
   const categoryId = request.nextUrl.searchParams.get("category");
   try {
     const client = buildPicnicClient(token, countryCode);
-    if (categoryId === "__saved__") {
-      const recipes2 = await fetchSavedRecipes(client);
-      return NextResponse.json({ categories: [], recipes: recipes2 });
+    if (categoryId === SAVED_CATEGORY_ID) {
+      const recipes = await fetchSavedRecipes(client);
+      return NextResponse.json({ categories: [], recipes });
     }
     if (categoryId) {
-      if (!CATEGORY_ID_RE.test(categoryId)) {
+      if (!CATEGORY_KEY_RE.test(categoryId)) {
         return NextResponse.json({ error: "Invalid category ID" }, { status: 400 });
       }
-      const rawPage2 = await fetchCachedPage(client, `/pages/${categoryId}`);
-      const recipes2 = parseCookbookPage(rawPage2);
-      return NextResponse.json({ categories: [], recipes: recipes2 });
+      const recipes = await fetchCategoryRecipes(client, categoryId);
+      return NextResponse.json({ categories: [], recipes });
     }
-    const rawPage = await client.recipe.getRecipesPage();
-    const recipes = parseCookbookPage(rawPage);
-    const categories = getRecipeCategories(countryCode);
-    return NextResponse.json({ categories, recipes });
+    return NextResponse.json(await fetchRecipeOverview(client));
   } catch (error2) {
     if (isApiAuthError(error2)) {
       return NextResponse.json(
@@ -11067,14 +8967,31 @@ __export(route_exports17, {
 import crypto from "node:crypto";
 var cache2 = /* @__PURE__ */ new Map();
 var CACHE_TTL_MS = 60 * 60 * 1e3;
-async function fetchCount(client, categoryId) {
+async function count(name, recipes) {
   try {
-    const rawPage = await fetchCachedPage(client, `/pages/${categoryId}`);
-    return parseCookbookPage(rawPage).length;
+    return (await recipes()).length;
   } catch (err) {
-    console.error(`[cookbook/counts] Failed to fetch count for "${categoryId}":`, err);
+    console.error(`[cookbook/counts] Failed to fetch count for "${name}":`, err);
     return 0;
   }
+}
+async function fetchCounts(client) {
+  const overview = await fetchRecipeOverview(client);
+  const [savedCount, ...categoryCounts] = await mapWithConcurrency(
+    [SAVED_CATEGORY_ID, ...overview.categories.map((category) => category.id)],
+    (id) => count(
+      id,
+      () => id === SAVED_CATEGORY_ID ? fetchSavedRecipes(client) : fetchCategoryRecipes(client, id, 1)
+    ),
+    RECIPE_PAGE_CONCURRENCY
+  );
+  return {
+    __featured__: overview.recipes.length,
+    [SAVED_CATEGORY_ID]: savedCount,
+    ...Object.fromEntries(
+      overview.categories.map((category, i) => [category.id, categoryCounts[i]])
+    )
+  };
 }
 async function GET9(request) {
   const token = readAuthToken(request);
@@ -11082,27 +8999,16 @@ async function GET9(request) {
     return NextResponse.json({ error: "Authentication required" }, { status: 401 });
   }
   const countryCode = readCountryCode(request);
-  const cacheKey2 = `${countryCode}:${crypto.createHash("sha256").update(token).digest("hex").slice(0, 16)}`;
-  const cached = cache2.get(cacheKey2);
+  const cacheKey = `${countryCode}:${crypto.createHash("sha256").update(token).digest("hex").slice(0, 16)}`;
+  const cached = cache2.get(cacheKey);
   if (cached && cached.expiresAt > Date.now()) {
     return NextResponse.json(cached.counts);
   }
   try {
-    const client = buildPicnicClient(token, countryCode);
-    const categories = getRecipeCategories(countryCode);
-    const [featuredCount, savedCount, ...categoryEntries] = await Promise.all([
-      fetchCount(client, "meals-page-root"),
-      fetchCount(client, "saved-deep-dive-page-content"),
-      ...categories.map(async (cat) => [cat.id, await fetchCount(client, cat.id)])
-    ]);
-    const counts = {
-      __featured__: featuredCount,
-      __saved__: savedCount,
-      ...Object.fromEntries(categoryEntries)
-    };
+    const counts = await fetchCounts(buildPicnicClient(token, countryCode));
     const total = Object.values(counts).reduce((sum, n) => sum + n, 0);
     if (total > 0) {
-      cache2.set(cacheKey2, { counts, expiresAt: Date.now() + CACHE_TTL_MS });
+      cache2.set(cacheKey, { counts, expiresAt: Date.now() + CACHE_TTL_MS });
     }
     return NextResponse.json(counts);
   } catch (error2) {
@@ -11118,6 +9024,7 @@ var route_exports18 = {};
 __export(route_exports18, {
   GET: () => GET10
 });
+var COOKING_TIME_PATTERN = /^(\d+)\s*min/;
 async function GET10(request) {
   const token = readAuthToken(request);
   if (!token) {
@@ -11133,14 +9040,16 @@ async function GET10(request) {
   const countryCode = readCountryCode(request);
   try {
     const client = buildPicnicClient(token, countryCode);
-    const path = `/pages/search-page-results?search_term=${encodeURIComponent(q)}&page_context=MEALS&is_recipe=true`;
-    const rawPage = await client.sendRequest(
-      "GET",
-      path,
-      null,
-      true
-    );
-    const recipes = parseCookbookPage(rawPage);
+    const results = await client.catalog.getSearchResults(q, { context: "MEALS" });
+    const recipes = results.recipes.map((recipe) => {
+      const minutes = recipe.tags.map((tag) => COOKING_TIME_PATTERN.exec(tag)?.[1]).find(Boolean);
+      return {
+        id: recipe.id,
+        name: recipe.name,
+        imageId: recipe.imageId,
+        cookingTimeMinutes: minutes ? Number(minutes) : null
+      };
+    });
     return NextResponse.json({ categories: [], recipes });
   } catch (error2) {
     if (isApiAuthError(error2)) {
@@ -11158,42 +9067,10 @@ async function GET10(request) {
   }
 }
 
-// vendor/picnic-web/src/app/api/debug-category-page/[categoryId]/route.ts
+// vendor/picnic-web/src/app/api/deliveries/route.ts
 var route_exports19 = {};
 __export(route_exports19, {
   GET: () => GET11
-});
-var L2_PAGE_PREFIX2 = "L2-category-page-root?category_id=";
-async function GET11(request, { params }) {
-  const { categoryId } = await params;
-  const token = readAuthToken(request);
-  if (!token) {
-    return NextResponse.json({ error: "No auth token" }, { status: 401 });
-  }
-  const countryCode = readCountryCode(request);
-  const client = buildPicnicClient(token, countryCode);
-  const rawPage = await client.app.getPage(`${L2_PAGE_PREFIX2}${categoryId}`);
-  return NextResponse.json(rawPage);
-}
-
-// vendor/picnic-web/src/app/api/debug-cookbook/route.ts
-var route_exports20 = {};
-__export(route_exports20, {
-  GET: () => GET12
-});
-async function GET12(request) {
-  const token = readAuthToken(request);
-  if (!token) return NextResponse.json({ error: "No auth token" }, { status: 401 });
-  const countryCode = readCountryCode(request);
-  const client = buildPicnicClient(token, countryCode);
-  const rawPage = await client.recipe.getRecipesPage();
-  return NextResponse.json(rawPage);
-}
-
-// vendor/picnic-web/src/app/api/deliveries/route.ts
-var route_exports21 = {};
-__export(route_exports21, {
-  GET: () => GET13
 });
 
 // vendor/picnic-web/src/lib/delivery/to-delivery-list-items.ts
@@ -11210,7 +9087,7 @@ function toDeliveryListItems(summaries, countryCode) {
 
 // vendor/picnic-web/src/app/api/deliveries/route.ts
 var VALID_STATUSES = /* @__PURE__ */ new Set(["CURRENT", "COMPLETED", "CANCELLED"]);
-async function GET13(request) {
+async function GET11(request) {
   const token = readAuthToken(request);
   if (!token) {
     return NextResponse.json(
@@ -11243,144 +9120,76 @@ async function GET13(request) {
 }
 
 // vendor/picnic-web/src/app/api/deliveries/[deliveryId]/route.ts
-var route_exports22 = {};
-__export(route_exports22, {
-  GET: () => GET14
+var route_exports20 = {};
+__export(route_exports20, {
+  GET: () => GET12
 });
 
-// vendor/picnic-web/src/lib/delivery/parse-delivery-detail.ts
-function mapDepositBreakdown2(raw) {
-  return asArray(raw).filter(isObject2).map((entry) => {
-    const value = asNumber(entry["value"]);
-    const count = asNumber(entry["count"]);
-    return {
-      type: asString(entry["type"]),
-      value,
-      count,
-      total: value * count
-    };
-  });
-}
-function mapFees(raw) {
-  return asArray(raw).filter(isObject2).map((f) => ({
-    type: asString(f["type"]),
-    name: asString(f["name"]),
-    amount: asNumber(f["amount"])
-  })).filter((f) => f.amount !== 0);
-}
-function mapPayment(raw) {
-  if (!isObject2(raw)) return null;
-  const paymentType = asString(raw["payment_type"]);
-  const redactedIban = asString(raw["redacted_iban"]);
-  if (!paymentType && !redactedIban) return null;
+// vendor/picnic-web/src/lib/delivery/map-delivery.ts
+function mapDelivery(delivery, countryCode) {
   return {
-    paymentType,
-    redactedIban,
-    bankId: asString(raw["bank_id"])
+    id: delivery.id,
+    status: delivery.status,
+    creationTime: delivery.creationTime,
+    windowStart: delivery.windowStart,
+    windowEnd: delivery.windowEnd,
+    deliveryWindowText: formatDeliveryWindowText(
+      delivery.windowStart,
+      delivery.windowEnd,
+      countryCode
+    ),
+    orders: delivery.orders.map((order) => ({
+      id: order.id,
+      items: order.items.map(mapCartLine),
+      totalPrice: order.totalPrice,
+      checkoutTotalPrice: order.checkoutTotalPrice,
+      totalSavings: order.promotionSavings,
+      totalDeposit: order.depositTotal,
+      membershipSavings: order.membershipSavings,
+      cancellable: order.cancellable,
+      status: order.status,
+      creationTime: order.creationTime,
+      fees: order.fees,
+      depositBreakdown: order.deposits,
+      payment: order.payment && {
+        paymentType: order.payment.paymentType ?? "",
+        redactedIban: order.payment.redactedIban ?? "",
+        bankId: order.payment.bankId ?? ""
+      }
+    })),
+    returnedContainers: delivery.returnedContainers,
+    totalPrice: delivery.totalPrice,
+    totalCount: delivery.totalCount,
+    totalDiscount: delivery.discount,
+    depositTotal: delivery.depositTotal,
+    depositBreakdown: delivery.deposits,
+    membershipSavings: delivery.membershipSavings,
+    promoSavings: delivery.promotionSavings,
+    fees: delivery.fees,
+    cancellable: delivery.cancellable
   };
 }
-function mapOrder(raw) {
-  if (!isObject2(raw)) return null;
-  const id = asString(raw["id"]);
-  if (!id) return null;
-  const overridesMap = isObject2(raw["decorator_overrides"]) ? raw["decorator_overrides"] : {};
-  const rawItems = applyDecoratorOverrides(asArray(raw["items"]), overridesMap);
-  const items = rawItems.map(mapOrderLineToCartItem).filter((item) => item !== null);
-  const depositBreakdown = mapDepositBreakdown2(raw["deposit_breakdown"]);
-  const depositTotal = depositBreakdown.reduce((sum, entry) => sum + entry.total, 0);
+function mapDeliveryTracking(tracking, countryCode) {
   return {
-    id,
-    items,
-    totalPrice: asNumber(raw["total_price"]),
-    checkoutTotalPrice: asNumber(raw["checkout_total_price"]),
-    totalSavings: asNumber(raw["total_savings"]),
-    totalDeposit: asNumber(raw["total_deposit"]) || depositTotal,
-    membershipSavings: asNumber(raw["membership_savings"]),
-    cancellable: raw["cancellable"] === true,
-    status: asString(raw["status"]),
-    creationTime: asString(raw["creation_time"]),
-    fees: mapFees(raw["fees"]),
-    depositBreakdown,
-    payment: mapPayment(raw["transaction_info"])
-  };
-}
-function mapReturnedContainers(raw) {
-  return asArray(raw).filter(isObject2).map((entry) => ({
-    type: asString(entry["type"]),
-    name: asString(entry["localized_name"]) || asString(entry["type"]),
-    quantity: asNumber(entry["quantity"]),
-    price: asNumber(entry["price"])
-  }));
-}
-function parseDeliveryDetail(rawData, countryCode) {
-  if (!isObject2(rawData)) {
-    return emptyDeliveryDetail(countryCode);
-  }
-  const id = asString(rawData["delivery_id"]) || asString(rawData["id"]);
-  const slot2 = isObject2(rawData["slot"]) ? rawData["slot"] : null;
-  const deliveryTime = isObject2(rawData["delivery_time"]) ? rawData["delivery_time"] : null;
-  const windowStart = asString(slot2?.["window_start"]) || asString(deliveryTime?.["start"]) || null;
-  const windowEnd = asString(slot2?.["window_end"]) || asString(deliveryTime?.["end"]) || null;
-  const orders = asArray(rawData["orders"]).map(mapOrder).filter((order) => order !== null);
-  const allItems = orders.flatMap((order) => order.items);
-  const totalPrice = orders.reduce((sum, order) => sum + order.checkoutTotalPrice, 0);
-  const totalCount = allItems.reduce((sum, item) => sum + item.quantity, 0);
-  let totalDiscount = 0;
-  for (const item of allItems) {
-    if (item.originalPrice !== null && item.originalPrice > item.displayPrice) {
-      totalDiscount += (item.originalPrice - item.displayPrice) * item.quantity;
-    }
-  }
-  const depositBreakdown = orders.flatMap((order) => order.depositBreakdown);
-  const depositTotal = depositBreakdown.reduce((sum, entry) => sum + entry.total, 0);
-  const membershipSavings = orders.reduce((sum, order) => sum + order.membershipSavings, 0);
-  const promoSavings = orders.reduce((sum, order) => sum + order.totalSavings, 0);
-  const fees = orders.flatMap((order) => order.fees);
-  const cancellable = orders.some((order) => order.cancellable);
-  return {
-    id,
-    status: asString(rawData["status"]),
-    creationTime: asString(rawData["creation_time"]),
-    windowStart,
-    windowEnd,
-    deliveryWindowText: formatDeliveryWindowText(windowStart, windowEnd, countryCode),
-    orders,
-    returnedContainers: mapReturnedContainers(rawData["returned_containers"]),
-    totalPrice,
-    totalCount,
-    totalDiscount,
-    depositTotal,
-    depositBreakdown,
-    membershipSavings,
-    promoSavings,
-    fees,
-    cancellable
-  };
-}
-function emptyDeliveryDetail(countryCode) {
-  return {
-    id: "",
-    status: "COMPLETED",
-    creationTime: "",
-    windowStart: null,
-    windowEnd: null,
-    deliveryWindowText: formatDeliveryWindowText(null, null, countryCode),
-    orders: [],
-    returnedContainers: [],
-    totalPrice: 0,
-    totalCount: 0,
-    totalDiscount: 0,
-    depositTotal: 0,
-    depositBreakdown: [],
-    membershipSavings: 0,
-    promoSavings: 0,
-    fees: [],
-    cancellable: false
+    routeVersion: tracking.routeVersion,
+    scenarioInProgress: tracking.inProgress,
+    queryInterval: tracking.queryInterval,
+    eta: tracking.eta,
+    etaWindowStart: tracking.etaWindowStart,
+    etaWindowEnd: tracking.etaWindowEnd,
+    etaText: formatEtaText(tracking.eta, countryCode),
+    currentPosition: tracking.currentPosition,
+    route: tracking.route.points,
+    driverName: tracking.route.driverName,
+    driverPhotoUrl: tracking.route.driverPhotoUrl,
+    vehicleName: tracking.route.vehicleName,
+    vehicleImageDataUrl: tracking.route.vehicleImageDataUrl,
+    destination: tracking.route.destination
   };
 }
 
 // vendor/picnic-web/src/app/api/deliveries/[deliveryId]/route.ts
-async function GET14(request, { params }) {
+async function GET12(request, { params }) {
   const token = readAuthToken(request);
   if (!token) {
     return NextResponse.json(
@@ -11395,8 +9204,7 @@ async function GET14(request, { params }) {
   }
   try {
     const client = buildPicnicClient(token, countryCode);
-    const rawDelivery = await client.delivery.getDelivery(deliveryId);
-    const delivery = parseDeliveryDetail(rawDelivery, countryCode);
+    const delivery = mapDelivery(await client.delivery.getDelivery(deliveryId), countryCode);
     if (!delivery.id) {
       return NextResponse.json({ error: "Delivery not found" }, { status: 404 });
     }
@@ -11418,8 +9226,8 @@ async function GET14(request, { params }) {
 }
 
 // vendor/picnic-web/src/app/api/deliveries/[deliveryId]/cancel/route.ts
-var route_exports23 = {};
-__export(route_exports23, {
+var route_exports21 = {};
+__export(route_exports21, {
   POST: () => POST11
 });
 async function POST11(request, { params }) {
@@ -11455,8 +9263,8 @@ async function POST11(request, { params }) {
 }
 
 // vendor/picnic-web/src/app/api/deliveries/[deliveryId]/invoice/route.ts
-var route_exports24 = {};
-__export(route_exports24, {
+var route_exports22 = {};
+__export(route_exports22, {
   POST: () => POST12
 });
 async function POST12(request, { params }) {
@@ -11492,11 +9300,11 @@ async function POST12(request, { params }) {
 }
 
 // vendor/picnic-web/src/app/api/deliveries/[deliveryId]/position/route.ts
-var route_exports25 = {};
-__export(route_exports25, {
-  GET: () => GET15
+var route_exports23 = {};
+__export(route_exports23, {
+  GET: () => GET13
 });
-async function GET15(request, { params }) {
+async function GET13(request, { params }) {
   const token = readAuthToken(request);
   if (!token) {
     return NextResponse.json(
@@ -11529,8 +9337,8 @@ async function GET15(request, { params }) {
 }
 
 // vendor/picnic-web/src/app/api/deliveries/[deliveryId]/rating/route.ts
-var route_exports26 = {};
-__export(route_exports26, {
+var route_exports24 = {};
+__export(route_exports24, {
   POST: () => POST13
 });
 async function POST13(request, { params }) {
@@ -11579,12 +9387,14 @@ async function POST13(request, { params }) {
   }
 }
 
-// vendor/picnic-web/src/app/api/deliveries/[deliveryId]/scenario/route.ts
-var route_exports27 = {};
-__export(route_exports27, {
-  GET: () => GET16
+// vendor/picnic-web/src/app/api/deliveries/[deliveryId]/tracking/route.ts
+var route_exports25 = {};
+__export(route_exports25, {
+  GET: () => GET14
 });
-async function GET16(request, { params }) {
+var MAX_KNOWN_ROUTES = 200;
+var knownRoutes = /* @__PURE__ */ new Map();
+async function GET14(request, { params }) {
   const token = readAuthToken(request);
   if (!token) {
     return NextResponse.json(
@@ -11597,9 +9407,17 @@ async function GET16(request, { params }) {
     return NextResponse.json({ error: "Delivery not found" }, { status: 404 });
   }
   try {
-    const client = buildPicnicClient(token, readCountryCode(request));
-    const scenario = await client.delivery.getDeliveryScenario(deliveryId);
-    return NextResponse.json(scenario);
+    const countryCode = readCountryCode(request);
+    const client = buildPicnicClient(token, countryCode);
+    const routeKey = scopedCacheKey(client, `delivery-route:${deliveryId}`);
+    const result = await client.delivery.getDeliveryTracking(deliveryId, knownRoutes.get(routeKey));
+    if (knownRoutes.size >= MAX_KNOWN_ROUTES) knownRoutes.clear();
+    knownRoutes.set(routeKey, result.route);
+    const tracking = mapDeliveryTracking(result, countryCode);
+    const knownVersion = request.nextUrl.searchParams.get("routeVersion");
+    return NextResponse.json(
+      knownVersion === String(tracking.routeVersion) ? { ...tracking, route: [], vehicleImageDataUrl: null } : tracking
+    );
   } catch (error2) {
     if (isApiAuthError(error2)) {
       return NextResponse.json(
@@ -11608,9 +9426,78 @@ async function GET16(request, { params }) {
       );
     }
     const message = error2 instanceof Error ? error2.message : "Unknown error occurred";
-    console.error(`[/api/deliveries/${deliveryId}/scenario] Failed:`, message);
+    console.error(`[/api/deliveries/${deliveryId}/tracking] Failed:`, message);
     return NextResponse.json(
-      { error: "Failed to load delivery scenario. Please try again later." },
+      { error: "Failed to load delivery tracking. Please try again later." },
+      { status: 502 }
+    );
+  }
+}
+
+// vendor/picnic-web/src/app/api/favorites/route.ts
+var route_exports26 = {};
+__export(route_exports26, {
+  GET: () => GET15
+});
+async function GET15(request) {
+  const token = readAuthToken(request);
+  if (!token) {
+    return NextResponse.json(
+      { error: "Authentication required", code: "TOKEN_EXPIRED" },
+      { status: 401 }
+    );
+  }
+  const countryCode = readCountryCode(request);
+  try {
+    const client = buildPicnicClient(token, countryCode);
+    const favorites = await client.catalog.getFavorites();
+    return NextResponse.json({ aisles: mapFavoritesAisles(favorites) });
+  } catch (error2) {
+    if (isApiAuthError(error2)) {
+      return NextResponse.json(
+        { error: "Your token has expired", code: "TOKEN_EXPIRED" },
+        { status: 401 }
+      );
+    }
+    const message = error2 instanceof Error ? error2.message : "Unknown error occurred";
+    console.error("[/api/favorites] Failed to load favorites:", message);
+    return NextResponse.json(
+      { error: "Failed to load favorites. Please try again later." },
+      { status: 502 }
+    );
+  }
+}
+
+// vendor/picnic-web/src/app/api/favorites/[aisleId]/route.ts
+var route_exports27 = {};
+__export(route_exports27, {
+  GET: () => GET16
+});
+async function GET16(request, { params }) {
+  const token = readAuthToken(request);
+  if (!token) {
+    return NextResponse.json(
+      { error: "Authentication required", code: "TOKEN_EXPIRED" },
+      { status: 401 }
+    );
+  }
+  const countryCode = readCountryCode(request);
+  const { aisleId } = await params;
+  try {
+    const client = buildPicnicClient(token, countryCode);
+    const tiles = await client.catalog.getFavoritesInAisle(aisleId);
+    return NextResponse.json({ products: mapProductTiles(tiles) });
+  } catch (error2) {
+    if (isApiAuthError(error2)) {
+      return NextResponse.json(
+        { error: "Your token has expired", code: "TOKEN_EXPIRED" },
+        { status: 401 }
+      );
+    }
+    const message = error2 instanceof Error ? error2.message : "Unknown error occurred";
+    console.error(`[/api/favorites/${aisleId}] Failed to load the aisle:`, message);
+    return NextResponse.json(
+      { error: "Failed to load favorites. Please try again later." },
       { status: 502 }
     );
   }
@@ -11660,26 +9547,26 @@ function findPieceCount(text3) {
   if (!text3 || looksLikePrice(text3)) return null;
   const match = /(\d+)\s*(stk|st[üu]ck|stuks|stuk|st)\b\.?/i.exec(text3);
   if (!match) return null;
-  const count = parseInt(match[1], 10);
-  return count > 0 ? count : null;
+  const count2 = parseInt(match[1], 10);
+  return count2 > 0 ? count2 : null;
 }
-function packageFraction(recipeQuantityText, recipePackageSize, unitQuantity = null) {
+function packageFraction(recipeQuantityText, unitQuantity) {
   const needed = parseNeeded(recipeQuantityText);
   if (!needed || !(needed.value > 0)) return null;
   if (CONTAINER_UNITS.test(needed.unit)) return needed.value;
   if (PIECE_UNITS.test(needed.unit)) {
-    const perPack = findPieceCount(recipePackageSize) ?? findPieceCount(unitQuantity);
+    const perPack = findPieceCount(unitQuantity);
     return perPack ? needed.value / perPack : null;
   }
   const spoonKey = needed.unit.toLowerCase().replace(/\.$/, "");
   if (SPOON_ML[spoonKey] !== void 0) {
-    const packSize = normalize2(findMeasure(recipePackageSize)) ?? normalize2(findMeasure(unitQuantity));
+    const packSize = normalize2(findMeasure(unitQuantity));
     if (!packSize || !(packSize.value > 0)) return null;
     return packSize.base === "ml" ? needed.value * SPOON_ML[spoonKey] / packSize.value : needed.value * SPOON_MAX_G[spoonKey] / packSize.value;
   }
   const neededBase = normalize2(needed);
   if (!neededBase) return null;
-  const packBase = normalize2(findMeasure(recipePackageSize)) ?? normalize2(findMeasure(unitQuantity));
+  const packBase = normalize2(findMeasure(unitQuantity));
   if (!packBase || neededBase.base !== packBase.base || !(packBase.value > 0)) return null;
   return neededBase.value / packBase.value;
 }
@@ -11694,7 +9581,7 @@ function buildIngredientGroups(recipes) {
       const key = ing.id;
       if (seenInRecipe.has(key)) continue;
       seenInRecipe.add(key);
-      const need = packageFraction(ing.recipeQuantityText, ing.recipePackageSize, ing.unitQuantity) ?? ing.quantity;
+      const need = packageFraction(ing.recipeQuantityText, ing.unitQuantity) ?? ing.quantity;
       const individual = Math.max(1, Math.ceil(need));
       const existing = groups.get(key);
       if (existing) {
@@ -11851,13 +9738,21 @@ function findBestCombinations(candidates, slots2, fixed, topK) {
   return Array.from(seen.values()).sort((a, b) => b.packagesSaved - a.packagesSaved || a.totalPriceCents - b.totalPriceCents).slice(0, topK);
 }
 
+// vendor/picnic-web/src/lib/recipe/fetch-recipe-detail.ts
+function fetchRecipeDetail(client, id, portions) {
+  return cachedCall(
+    client,
+    `recipe:${id}:${portions ?? ""}`,
+    () => client.recipe.getRecipe(id, { portions, resolveIngredientNames: true }).then(mapRecipeDetails)
+  );
+}
+
 // vendor/picnic-web/src/app/api/meal-plan/search/route.ts
-var RECIPE_ID_RE2 = /^[0-9a-f]{24}$/;
+var RECIPE_ID_RE = /^[0-9a-f]{24}$/;
 var TOP_K = 5;
 async function fetchLightweight(client, id, portions) {
   try {
-    const rawPage = await fetchRecipePage(client, id, portions);
-    return parseRecipeDetail(rawPage, id);
+    return await fetchRecipeDetail(client, id, portions);
   } catch (error2) {
     if (isApiAuthError(error2) || isUpstreamBlockError(error2)) throw error2;
     return null;
@@ -11881,8 +9776,8 @@ async function POST14(request) {
     return NextResponse.json({ error: "Invalid request body" }, { status: 400 });
   }
   const typedBody = body;
-  const candidateIds = Array.isArray(typedBody.candidateIds) ? typedBody.candidateIds.filter((id) => RECIPE_ID_RE2.test(id)).slice(0, MEAL_PLAN_MAX_CANDIDATES) : [];
-  const fixedIds = Array.isArray(typedBody.fixedIds) ? typedBody.fixedIds.filter((id) => RECIPE_ID_RE2.test(id)) : [];
+  const candidateIds = Array.isArray(typedBody.candidateIds) ? typedBody.candidateIds.filter((id) => RECIPE_ID_RE.test(id)).slice(0, MEAL_PLAN_MAX_CANDIDATES) : [];
+  const fixedIds = Array.isArray(typedBody.fixedIds) ? typedBody.fixedIds.filter((id) => RECIPE_ID_RE.test(id)) : [];
   const slots2 = Number.isInteger(typedBody.slots) ? typedBody.slots : 0;
   const people = Number.isInteger(typedBody.people) ? typedBody.people : 0;
   if (slots2 < 1) {
@@ -11936,7 +9831,7 @@ var route_exports29 = {};
 __export(route_exports29, {
   POST: () => POST15
 });
-var RECIPE_ID_RE3 = /^[0-9a-f]{24}$/;
+var RECIPE_ID_RE2 = /^[0-9a-f]{24}$/;
 var MAX_RECIPES = 30;
 async function POST15(request) {
   const token = readAuthToken(request);
@@ -11956,7 +9851,7 @@ async function POST15(request) {
     return NextResponse.json({ error: "Invalid request body" }, { status: 400 });
   }
   const typedBody = body;
-  const recipeIds = Array.isArray(typedBody.recipeIds) ? typedBody.recipeIds.filter((id) => RECIPE_ID_RE3.test(id)).slice(0, MAX_RECIPES) : [];
+  const recipeIds = Array.isArray(typedBody.recipeIds) ? typedBody.recipeIds.filter((id) => RECIPE_ID_RE2.test(id)).slice(0, MAX_RECIPES) : [];
   const people = Number.isInteger(typedBody.people) ? typedBody.people : 0;
   if (recipeIds.length === 0) {
     return NextResponse.json({ error: "recipeIds must not be empty" }, { status: 400 });
@@ -12025,94 +9920,609 @@ __export(route_exports30, {
   GET: () => GET17
 });
 
-// vendor/picnic-web/src/lib/rsc/parse-rsc-page.ts
-var ROOT_ROW_ID = "0";
-var REFERENCE_PATTERN = /^\$L?([0-9a-f]+)$/;
-var PATH_REFERENCE_PATTERN = /^\$([0-9a-f]+):(.+)$/;
-var MODULE_NAME_PATTERN = /([^/]+)\.[jt]sx?$/;
-var WRAPPER_COMPONENTS = /* @__PURE__ */ new Set([
-  "pages-provider-hydrator",
-  "page-hydrator",
-  "IconRegistry",
-  "icon-registry"
-]);
-var MAX_REFERENCE_DEPTH = 20;
-function parseRscPage(pageId, page) {
-  let tokens = {};
-  let nextId = 0;
-  const resolveModuleName = (type) => {
-    const moduleId = REFERENCE_PATTERN.exec(type)?.[1];
-    const moduleRef = moduleId ? page.modules[moduleId] : null;
-    const path = Array.isArray(moduleRef) ? moduleRef[0] : null;
-    return typeof path === "string" ? MODULE_NAME_PATTERN.exec(path)?.[1] ?? null : null;
-  };
-  const convert = (value, nodes2, depth) => {
-    if (typeof value === "string") {
-      if (value === "$undefined") return void 0;
-      if (depth > MAX_REFERENCE_DEPTH) return void 0;
-      const rowId = REFERENCE_PATTERN.exec(value)?.[1];
-      if (rowId && rowId in page.rows) return convert(page.rows[rowId], nodes2, depth + 1);
-      const pathRef = PATH_REFERENCE_PATTERN.exec(value);
-      if (pathRef && pathRef[1] in page.rows) {
-        return convert(resolvePath(page.rows, pathRef[1], pathRef[2]), nodes2, depth + 1);
-      }
-      return value;
-    }
-    if (typeof value !== "object" || value === null) return value;
-    if (Array.isArray(value)) {
-      if (value[0] === "$" && typeof value[1] === "string") {
-        nodes2.push(...convertElement(value, depth));
-        return void 0;
-      }
-      const items = value.map((item) => convert(item, nodes2, depth)).filter((item) => item !== void 0);
-      return items.length === 0 && value.length > 0 ? void 0 : items;
-    }
-    const record = value;
-    if (typeof record.tokenRegistry === "object" && record.tokenRegistry !== null) {
-      tokens = {
-        ...readStrings(record.tokenRegistry),
-        ...readStrings(record.legacyColors ?? {})
-      };
-    }
-    const result = {};
-    for (const [key, item] of Object.entries(record)) {
-      const converted = convert(item, nodes2, depth);
-      if (converted !== void 0) result[key] = converted;
-    }
-    return result;
-  };
-  const convertElement = (element, depth) => {
-    const component = resolveModuleName(element[1]);
-    const children = [];
-    const props = convert(element[3] ?? {}, children, depth) ?? {};
-    if (!component || WRAPPER_COMPONENTS.has(component)) return children;
-    return [{ id: `${component}-${nextId++}`, component, props, children }];
-  };
-  const nodes = [];
-  convert(page.rows[ROOT_ROW_ID], nodes, 0);
-  return { pageId, tokens, nodes };
+// vendor/picnic-web/src/lib/pml/pml-helpers.ts
+function stripColorTags(md) {
+  return md.replace(/#\([^)]+\)/g, "").trim();
 }
-function resolvePath(rows, rowId, path) {
-  let current = rows[rowId];
-  for (const segment of path.split(":")) {
-    const rowRef = typeof current === "string" ? REFERENCE_PATTERN.exec(current)?.[1] : null;
-    if (rowRef && rowRef in rows) current = rows[rowRef];
-    if (Array.isArray(current)) {
-      current = current[0] === "$" && segment === "props" ? current[3] : current[Number(segment)];
-    } else if (typeof current === "object" && current !== null) {
-      current = current[segment];
-    } else {
-      return void 0;
+function cleanMarkdown(md) {
+  return stripColorTags(md).replace(/\*\*/g, "").replace(/__/g, "").trim();
+}
+function extractInnerColor(md) {
+  const colorRegex = /#\(([^)]+)\)/g;
+  const colors = [];
+  let match;
+  while ((match = colorRegex.exec(md)) !== null) {
+    colors.push(match[1]);
+  }
+  if (colors.length === 0) return null;
+  const DEFAULT_COLORS = /* @__PURE__ */ new Set(["#333333", "#5b534e", "#787570"]);
+  for (const color of colors) {
+    if (!DEFAULT_COLORS.has(color.toLowerCase())) {
+      return color;
     }
   }
-  return current;
+  return null;
 }
-function readStrings(record) {
-  const result = {};
-  for (const [key, value] of Object.entries(record)) {
-    if (typeof value === "string") result[key] = value;
+function findSellingUnitContainers(obj) {
+  const results = [];
+  if (typeof obj !== "object" || obj === null) return results;
+  if (Array.isArray(obj)) {
+    for (const item of obj) {
+      results.push(...findSellingUnitContainers(item));
+    }
+    return results;
+  }
+  const record = obj;
+  if (record.type === "PML" && typeof record.id === "string" && record.id.includes("selling-unit") && record.id.includes("tile")) {
+    results.push(record);
+  }
+  for (const value of Object.values(record)) {
+    results.push(...findSellingUnitContainers(value));
+  }
+  return results;
+}
+function collectMarkdowns(node) {
+  const results = [];
+  if (typeof node !== "object" || node === null) return results;
+  if (Array.isArray(node)) {
+    for (const item of node) {
+      results.push(...collectMarkdowns(item));
+    }
+    return results;
+  }
+  const record = node;
+  if (typeof record.markdown === "string") {
+    results.push(record.markdown);
+  }
+  for (const value of Object.values(record)) {
+    if (typeof value === "object" && value !== null) {
+      results.push(...collectMarkdowns(value));
+    }
+  }
+  return results;
+}
+function findNodeById(obj, id) {
+  if (typeof obj !== "object" || obj === null) return null;
+  if (Array.isArray(obj)) {
+    for (const item of obj) {
+      const result = findNodeById(item, id);
+      if (result) return result;
+    }
+    return null;
+  }
+  const record = obj;
+  if (record.id === id) return record;
+  for (const value of Object.values(record)) {
+    const result = findNodeById(value, id);
+    if (result) return result;
+  }
+  return null;
+}
+function findNodeByIdPrefix(obj, prefix) {
+  if (typeof obj !== "object" || obj === null) return null;
+  if (Array.isArray(obj)) {
+    for (const item of obj) {
+      const result = findNodeByIdPrefix(item, prefix);
+      if (result) return result;
+    }
+    return null;
+  }
+  const record = obj;
+  if (typeof record.id === "string" && record.id.startsWith(prefix)) {
+    return record;
+  }
+  for (const value of Object.values(record)) {
+    const result = findNodeByIdPrefix(value, prefix);
+    if (result) return result;
+  }
+  return null;
+}
+function collectPropertyValues(node, key) {
+  const results = [];
+  if (typeof node !== "object" || node === null) return results;
+  if (Array.isArray(node)) {
+    for (const item of node) {
+      results.push(...collectPropertyValues(item, key));
+    }
+    return results;
+  }
+  const record = node;
+  if (key in record) {
+    results.push(record[key]);
+  }
+  for (const [k, value] of Object.entries(record)) {
+    if (k !== key && typeof value === "object" && value !== null) {
+      results.push(...collectPropertyValues(value, key));
+    }
+  }
+  return results;
+}
+function findIconNodes(node) {
+  const results = [];
+  if (typeof node !== "object" || node === null) return results;
+  if (Array.isArray(node)) {
+    for (const item of node) {
+      results.push(...findIconNodes(item));
+    }
+    return results;
+  }
+  const record = node;
+  if (record.type === "ICON" && typeof record.iconKey === "string") {
+    const fallback = record.fallback;
+    results.push({
+      iconKey: record.iconKey,
+      fallbackId: fallback?.id ?? null,
+      color: typeof record.color === "string" ? record.color : null
+    });
+  }
+  for (const value of Object.values(record)) {
+    if (typeof value === "object" && value !== null) {
+      results.push(...findIconNodes(value));
+    }
+  }
+  return results;
+}
+function extractPageTitle(rawPage) {
+  const page = asRecord(rawPage);
+  if (!page) return null;
+  const header = asRecord(asRecord(page.layout)?.header) ?? asRecord(page.header);
+  if (!header) return null;
+  const title = header.title;
+  return typeof title === "string" ? title : null;
+}
+function asRecord(value) {
+  return typeof value === "object" && value !== null ? value : null;
+}
+
+// vendor/picnic-web/src/lib/pml/pml-product-helpers.ts
+function collectLabels(node) {
+  const results = [];
+  if (typeof node !== "object" || node === null) return results;
+  if (Array.isArray(node)) {
+    for (const item of node) {
+      results.push(...collectLabels(item));
+    }
+    return results;
+  }
+  const record = node;
+  if (record.type === "CONTAINER" && typeof record.backgroundColor === "string" && typeof record.borderRadius === "number") {
+    const markdowns = collectMarkdowns(record);
+    if (markdowns.length > 0) {
+      const textColors = collectPropertyValues(record, "textAttributes").filter((a) => typeof a === "object" && a !== null).map((a) => a.color).filter((c) => typeof c === "string");
+      results.push({
+        text: stripColorTags(markdowns[0]),
+        textColor: textColors[0] ?? "#333333",
+        backgroundColor: record.backgroundColor
+      });
+      return results;
+    }
+  }
+  for (const value of Object.values(record)) {
+    if (typeof value === "object" && value !== null) {
+      results.push(...collectLabels(value));
+    }
+  }
+  return results;
+}
+
+// vendor/picnic-web/src/lib/product/extract-card-data.ts
+function extractPromotionLabel(contexts) {
+  if (!contexts) return null;
+  for (const ctx of contexts) {
+    if (ctx.schema?.includes("promotion")) {
+      const label = ctx.data?.promotion_label;
+      if (typeof label === "string" && label.trim() !== "") {
+        return label.trim();
+      }
+    }
+  }
+  return null;
+}
+function extractPromotionBadge(contexts, pml, stackChildren) {
+  const label = extractPromotionLabel(contexts);
+  if (!label) return null;
+  const matches = (l) => cleanMarkdown(l.text) === label;
+  const inline = collectLabels(stackChildren).find(matches);
+  const colored = inline ?? collectLabels(pml).find(matches);
+  return {
+    badge: {
+      text: label,
+      variant: "promo",
+      backgroundColor: colored?.backgroundColor,
+      textColor: colored?.textColor
+    },
+    placement: inline ? "inline" : "image"
+  };
+}
+function findTextStackChildren(pml) {
+  if (!pml) return null;
+  const component = pml.component;
+  if (!component) return null;
+  const topChildren = component.children;
+  if (!topChildren || topChildren.length < 2) return null;
+  function findVerticalStack(node, depth) {
+    if (depth > 5 || typeof node !== "object" || node === null) return null;
+    if (Array.isArray(node)) {
+      for (const item of node) {
+        const r = findVerticalStack(item, depth + 1);
+        if (r) return r;
+      }
+      return null;
+    }
+    const record = node;
+    if (record.type === "STACK" && record.axis === "VERTICAL" && typeof record.spacing === "number" && Array.isArray(record.children)) {
+      return record;
+    }
+    for (const value of Object.values(record)) {
+      const r = findVerticalStack(value, depth + 1);
+      if (r) return r;
+    }
+    return null;
+  }
+  const textArea = topChildren[1];
+  const stack = findVerticalStack(textArea, 0);
+  return stack?.children ?? null;
+}
+var SIZE_LABELS = /* @__PURE__ */ new Set(["Klein", "XL", "Groot"]);
+function splitFlankingIcons(row) {
+  const tokens = [];
+  const walk = (node) => {
+    if (Array.isArray(node)) {
+      for (const item of node) walk(item);
+      return;
+    }
+    if (typeof node !== "object" || node === null) return;
+    const record = node;
+    if (record.type === "ICON" && typeof record.iconKey === "string") {
+      const fallback = record.fallback;
+      if (fallback?.id) {
+        tokens.push({
+          kind: "icon",
+          icon: {
+            imageId: fallback.id,
+            color: typeof record.color === "string" ? record.color : null
+          }
+        });
+      }
+      return;
+    }
+    if (typeof record.markdown === "string" && cleanMarkdown(record.markdown) !== "") {
+      tokens.push({ kind: "text" });
+    }
+    for (const value of Object.values(record)) walk(value);
+  };
+  walk(row);
+  const firstTextIdx = tokens.findIndex((t) => t.kind === "text");
+  if (firstTextIdx === -1) {
+    const firstIcon = tokens.find(
+      (t) => t.kind === "icon"
+    );
+    return { leading: firstIcon?.icon ?? null, trailing: null };
+  }
+  const lastTextIdx = tokens.map((t) => t.kind).lastIndexOf("text");
+  let leading = null;
+  let trailing = null;
+  for (let i = 0; i < tokens.length; i++) {
+    const t = tokens[i];
+    if (t.kind !== "icon") continue;
+    if (i < firstTextIdx && !leading) leading = t.icon;
+    else if (i > lastTextIdx && !trailing) trailing = t.icon;
+  }
+  return { leading, trailing };
+}
+function extractTextStackInfo(stackChildren, suName, unitQuantity) {
+  const result = {
+    subtitle: null,
+    subtitleColor: null,
+    subtitleLeadingIcon: null,
+    subtitleTrailingIcon: null,
+    displayName: null,
+    namePrefix: null,
+    brand: null,
+    highlight: null,
+    flagIconKey: null,
+    flagFallbackImageId: null,
+    extraLabel: null
+  };
+  if (!stackChildren || stackChildren.length < 3) return result;
+  let nameRowIdx = -1;
+  for (let i = 0; i < stackChildren.length; i++) {
+    const json2 = JSON.stringify(stackChildren[i]);
+    if (json2.includes("PicnicSymbols")) {
+      nameRowIdx = i;
+      break;
+    }
+  }
+  if (nameRowIdx === -1) {
+    nameRowIdx = stackChildren.length >= 5 ? 1 : 0;
+  }
+  if (nameRowIdx > 0) {
+    const subtitleRow = stackChildren[0];
+    const markdowns = collectMarkdowns(subtitleRow);
+    const text3 = markdowns.map((m) => cleanMarkdown(m)).filter(Boolean).join(" ");
+    if (text3) {
+      result.subtitle = text3;
+      for (const md of markdowns) {
+        const color = extractInnerColor(md);
+        if (color) {
+          result.subtitleColor = color;
+          break;
+        }
+      }
+      const { leading, trailing } = splitFlankingIcons(subtitleRow);
+      result.subtitleLeadingIcon = leading;
+      result.subtitleTrailingIcon = trailing;
+    }
+  }
+  const nameRow = stackChildren[nameRowIdx];
+  const nameMarkdowns = collectMarkdowns(nameRow);
+  for (const md of nameMarkdowns) {
+    if (cleanMarkdown(md) === ">" || cleanMarkdown(md) === "") continue;
+    const stripped = stripColorTags(md);
+    const boldMatch = stripped.match(/\*\*([^*]+)\*\*\s+(.*)/);
+    if (boldMatch) {
+      result.namePrefix = boldMatch[1].trim();
+      const remaining = boldMatch[2].replace(/\s+$/, "").replace(/\u00a0/g, "").trim();
+      if (remaining) result.displayName = remaining;
+    } else {
+      const clean = cleanMarkdown(md);
+      if (clean && clean !== ">") {
+        result.displayName = clean;
+      }
+    }
+  }
+  const brandRowIdx = nameRowIdx + 1;
+  if (brandRowIdx < stackChildren.length - 2) {
+    const brandRow = stackChildren[brandRowIdx];
+    const icons = findIconNodes(brandRow);
+    for (const icon of icons) {
+      if (icon.iconKey.startsWith("flag")) {
+        result.flagIconKey = icon.iconKey;
+        result.flagFallbackImageId = icon.fallbackId;
+        break;
+      }
+    }
+    const markdowns = collectMarkdowns(brandRow);
+    for (const md of markdowns) {
+      const clean = cleanMarkdown(md);
+      if (!clean || clean === ">" || clean === "·") continue;
+      const highlightColor = extractInnerColor(md);
+      if (highlightColor) {
+        result.highlight = { text: clean, color: highlightColor };
+      } else if (!/^\d+[.,]\d{2}$/.test(clean) && !clean.startsWith("€")) {
+        result.brand = clean;
+      }
+    }
+  }
+  const lastChild = stackChildren[stackChildren.length - 1];
+  const lastMarkdowns = collectMarkdowns(lastChild);
+  const cleanTexts = lastMarkdowns.map((m) => cleanMarkdown(m)).filter((t) => t !== "" && t !== ">");
+  const UNIT_PATTERNS = /gram|liter|stuks|kilo|\bml\b|\bcl\b|\bkg\b/i;
+  for (const text3 of cleanTexts) {
+    if (text3 === unitQuantity || UNIT_PATTERNS.test(text3)) continue;
+    if (SIZE_LABELS.has(text3)) {
+      result.extraLabel = { text: text3, variant: "size" };
+    } else if (text3.startsWith("€") || text3.includes("/l") || text3.includes("/kg")) {
+      result.extraLabel = { text: text3, variant: "unit-price" };
+    } else {
+      result.extraLabel = { text: text3, variant: "info" };
+    }
+    break;
   }
   return result;
+}
+function extractUnavailabilityFromPml(pml) {
+  if (!pml) return { isUnavailable: false, reason: null };
+  const component = pml.component;
+  if (!component) return { isUnavailable: false, reason: null };
+  const topChildren = component.children;
+  if (!topChildren) return { isUnavailable: false, reason: null };
+  for (const child of topChildren) {
+    const a11yLabel = child.accessibilityLabel;
+    if (typeof a11yLabel === "string" && a11yLabel.includes(",")) {
+      const commaIdx = a11yLabel.indexOf(",");
+      const reason = a11yLabel.substring(commaIdx + 1).trim();
+      if (reason) {
+        return { isUnavailable: true, reason };
+      }
+    }
+  }
+  const allMarkdowns = collectMarkdowns(pml);
+  for (const md of allMarkdowns) {
+    const clean = cleanMarkdown(md);
+    if (clean === "Snel weer terug" || clean === "Tijdelijk niet leverbaar" || clean === "Niet meer leverbaar") {
+      return { isUnavailable: true, reason: clean };
+    }
+  }
+  return { isUnavailable: false, reason: null };
+}
+function extractOriginalPriceFromPml(stackChildren, displayPrice) {
+  if (!stackChildren) return null;
+  for (const child of stackChildren) {
+    const markdowns = collectMarkdowns(child);
+    const cleanTexts = markdowns.map((m) => cleanMarkdown(m)).filter((t) => t !== "" && t !== ">");
+    const prices = [];
+    for (const text3 of cleanTexts) {
+      const priceMatch = text3.match(/^(\d+[.,]\d{2})$/);
+      if (priceMatch) {
+        prices.push(Math.round(parseFloat(priceMatch[1].replace(",", ".")) * 100));
+      }
+    }
+    if (prices.length === 2) {
+      const original = Math.max(...prices);
+      if (original > displayPrice) {
+        return original;
+      }
+    }
+  }
+  return null;
+}
+var DEFAULT_PRICE_COLORS = /* @__PURE__ */ new Set(["#333333", "#5b534e", "#787570"]);
+function extractDisplayPriceColor(stackChildren, displayPrice) {
+  if (!stackChildren) return null;
+  let found = null;
+  const walk = (node) => {
+    if (found) return;
+    if (Array.isArray(node)) {
+      for (const item of node) walk(item);
+      return;
+    }
+    if (typeof node !== "object" || node === null) return;
+    const record = node;
+    const md = record.markdown;
+    if (typeof md === "string") {
+      const match = cleanMarkdown(md).match(/^€?\s*(\d+)[.,](\d{2})$/);
+      if (match) {
+        const cents = parseInt(match[1], 10) * 100 + parseInt(match[2], 10);
+        if (cents === displayPrice) {
+          const attrs = record.textAttributes;
+          const color = typeof attrs?.color === "string" ? attrs.color : null;
+          if (color && !DEFAULT_PRICE_COLORS.has(color.toLowerCase())) {
+            found = color;
+            return;
+          }
+        }
+      }
+    }
+    for (const value of Object.values(record)) walk(value);
+  };
+  walk(stackChildren);
+  return found;
+}
+
+// vendor/picnic-web/src/lib/product/parse-product-page.ts
+function parsePriceRangesFromRaw(raw) {
+  if (!raw || raw.length === 0) return null;
+  const thresholds = [];
+  for (const entry of raw) {
+    if (typeof entry === "object" && entry !== null && "price" in entry && typeof entry.price === "number" && "from_quantity" in entry && typeof entry.from_quantity === "number") {
+      const e = entry;
+      thresholds.push({ quantity: e.from_quantity, pricePerUnit: e.price });
+    }
+  }
+  if (thresholds.length === 0) return null;
+  thresholds.sort((a, b) => a.quantity - b.quantity);
+  return thresholds;
+}
+function containerToProduct(container) {
+  const su = container.content?.sellingUnit;
+  if (!su) return null;
+  const pml = container.pml?.component ? container.pml : void 0;
+  const contexts = container.analytics?.contexts;
+  const stackChildren = findTextStackChildren(pml);
+  const promotion = extractPromotionBadge(contexts, pml, stackChildren);
+  const textInfo = extractTextStackInfo(stackChildren, su.name, su.unit_quantity);
+  const { isUnavailable, reason } = extractUnavailabilityFromPml(pml);
+  const originalPrice = extractOriginalPriceFromPml(stackChildren, su.display_price);
+  const badges = [];
+  if (textInfo.extraLabel) {
+    badges.push(textInfo.extraLabel);
+  }
+  const hasDiscount = originalPrice !== null && originalPrice > su.display_price;
+  return {
+    id: su.id,
+    name: textInfo.displayName ?? su.name,
+    namePrefix: textInfo.namePrefix,
+    subtitle: textInfo.subtitle,
+    subtitleColor: textInfo.subtitleColor,
+    subtitleLeadingIcon: textInfo.subtitleLeadingIcon,
+    subtitleTrailingIcon: textInfo.subtitleTrailingIcon,
+    brand: textInfo.brand,
+    highlight: textInfo.highlight,
+    flagIconKey: textInfo.flagIconKey,
+    flagFallbackImageId: textInfo.flagFallbackImageId,
+    imageId: su.image_id,
+    displayPrice: su.display_price,
+    originalPrice: hasDiscount ? originalPrice : null,
+    displayPriceColor: extractDisplayPriceColor(stackChildren, su.display_price),
+    unitQuantity: su.unit_quantity,
+    maxCount: su.max_count,
+    priceRanges: parsePriceRangesFromRaw(su.price_ranges),
+    badges,
+    promoBadge: promotion?.badge ?? null,
+    promoPlacement: promotion?.placement ?? null,
+    isUnavailable,
+    unavailableReason: reason
+  };
+}
+function extractSectionTitle(headerNode) {
+  const markdowns = collectMarkdowns(headerNode);
+  const cleaned = markdowns.map((md) => stripColorTags(md)).filter(Boolean);
+  return cleaned.join(" / ");
+}
+function extractProductsFromWrappers(wrappers, seenIds) {
+  const products = [];
+  for (const wrapper of wrappers) {
+    const containers = findSellingUnitContainers(wrapper);
+    for (const container of containers) {
+      const product = containerToProduct(container);
+      if (!product || seenIds.has(product.id)) continue;
+      seenIds.add(product.id);
+      products.push(product);
+    }
+  }
+  return products;
+}
+function findAllByIdPrefix(obj, prefix, results = []) {
+  if (typeof obj !== "object" || obj === null) return results;
+  if (Array.isArray(obj)) {
+    for (const item of obj) findAllByIdPrefix(item, prefix, results);
+    return results;
+  }
+  const record = obj;
+  if (typeof record.id === "string" && record.id.startsWith(prefix)) {
+    results.push(record);
+    return results;
+  }
+  for (const value of Object.values(record)) {
+    findAllByIdPrefix(value, prefix, results);
+  }
+  return results;
+}
+var HORIZONTAL_SECTION_PREFIX = "core-horizontal-selling-unit-section-localized";
+var SUB_HEADER_PML_PREFIX = "horizontal-selling-unit-tiles-sub-header-pml";
+function parseHorizontalSellingSections(rawPage) {
+  const hSections = findAllByIdPrefix(rawPage, HORIZONTAL_SECTION_PREFIX);
+  if (hSections.length === 0) {
+    return fallbackFlatParse(rawPage);
+  }
+  const seenIds = /* @__PURE__ */ new Set();
+  const sections = [];
+  for (const section of hSections) {
+    const subHeader = findNodeByIdPrefix(section, SUB_HEADER_PML_PREFIX);
+    let title = "";
+    if (subHeader) {
+      title = extractSectionTitle(subHeader);
+    }
+    const products2 = extractProductsFromWrappers([section], seenIds);
+    if (products2.length === 0) continue;
+    if (!title) title = "Producten";
+    sections.push({ title, products: products2 });
+  }
+  const hasRealTitles = sections.some((s) => s.title !== "Producten");
+  if (!hasRealTitles) {
+    const allProducts = sections.flatMap((s) => s.products);
+    return { sections: [], products: allProducts };
+  }
+  const products = sections.flatMap((s) => s.products);
+  return { sections, products };
+}
+function fallbackFlatParse(rawPage) {
+  const containers = findSellingUnitContainers(rawPage);
+  const productMap = /* @__PURE__ */ new Map();
+  for (const container of containers) {
+    const product = containerToProduct(container);
+    if (!product) continue;
+    const existing = productMap.get(product.id);
+    if (!existing || product.badges.length > existing.badges.length || product.namePrefix || product.subtitle || product.brand) {
+      productMap.set(product.id, product);
+    }
+  }
+  const products = Array.from(productMap.values());
+  return { sections: [], products };
+}
+function parseProductPage(rawPage) {
+  return parseHorizontalSellingSections(rawPage);
 }
 
 // vendor/picnic-web/src/app/api/pages/products/route.ts
@@ -12131,16 +10541,12 @@ async function GET17(request) {
   const countryCode = readCountryCode(request);
   try {
     const client = buildPicnicClient(token, countryCode);
-    let rawPage;
-    try {
-      rawPage = await client.app.getPage(pageId);
-    } catch (error2) {
-      if (!isUnexpectedPageFormatError(error2)) throw error2;
-      const rscPage = parseRscPage(pageId, await client.app.getRscPage(pageId));
-      return NextResponse.json({ title: null, products: [], sections: [], rscPage });
+    const page = await client.app.getPage(pageId);
+    if (page.format === "rsc") {
+      return NextResponse.json({ title: null, products: [], sections: [], rscPage: page.content });
     }
-    const title = extractPageTitle(rawPage);
-    const { sections, products } = parseCategoryPageSections(rawPage);
+    const title = extractPageTitle(page.page);
+    const { sections, products } = parseProductPage(page.page);
     return NextResponse.json({ title, products, sections });
   } catch (error2) {
     if (isApiAuthError(error2)) {
@@ -12339,7 +10745,7 @@ async function GET18(request) {
   }
   try {
     const client = buildPicnicClient(token, readCountryCode(request));
-    const rawPage = await client.app.getPage(PARCELS_PAGE_ID);
+    const rawPage = await getFusionPage(client, PARCELS_PAGE_ID);
     return NextResponse.json(parseParcelsPage(rawPage));
   } catch (error2) {
     if (isApiAuthError(error2)) {
@@ -12374,7 +10780,8 @@ async function GET19(request, { params }) {
   const { parcelId } = await params;
   try {
     const client = buildPicnicClient(token, readCountryCode(request));
-    const rawPage = await client.app.getPage(
+    const rawPage = await getFusionPage(
+      client,
       `${PARCEL_TRACKING_PAGE_ID}?parcel_id=${encodeURIComponent(parcelId)}`
     );
     return NextResponse.json(parseParcelDetailPage(rawPage));
@@ -12399,6 +10806,53 @@ var route_exports33 = {};
 __export(route_exports33, {
   GET: () => GET20
 });
+
+// vendor/picnic-web/src/lib/product/map-product-details.ts
+function mapProductDetails(product) {
+  return {
+    id: product.id,
+    name: product.name,
+    brand: product.brand ?? "",
+    quantityBadges: product.quantityBadges,
+    unitQuantity: product.unitQuantity,
+    unitPrice: product.unitPrice,
+    tags: product.tags,
+    displayPrice: product.displayPrice,
+    originalPrice: product.originalPrice,
+    displayPriceColor: product.displayPriceColor,
+    maxCount: product.maxCount,
+    imageIds: product.imageIds,
+    // The price section shows the promotion, so the labels leave it out.
+    labels: product.labels.filter((label) => label.text !== product.promotion?.label),
+    description: product.description,
+    highlights: product.highlightItems,
+    allergens: {
+      confirmed: product.allergenGroups.contains,
+      mayContain: product.allergenGroups.mayContain
+    },
+    infoSections: product.infoSections,
+    promotion: product.promotion,
+    bundles: (product.priceRanges ?? []).map((tier) => ({
+      id: product.id,
+      quantity: tier.from_quantity,
+      pricePerUnit: tier.price,
+      imageId: product.imageIds[0] ?? "",
+      maxCount: product.maxCount
+    })),
+    similarProducts: product.similarProducts.map((similar) => ({
+      id: similar.id,
+      name: similar.name,
+      imageId: similar.imageId,
+      displayPrice: similar.displayPrice,
+      unitQuantity: similar.unitQuantity,
+      maxCount: similar.maxCount,
+      ...similar.deposit !== void 0 ? { deposit: similar.deposit } : {}
+    })),
+    nutritionRows: product.nutritionRows
+  };
+}
+
+// vendor/picnic-web/src/app/api/product/[id]/route.ts
 async function GET20(request, { params }) {
   const token = readAuthToken(request);
   if (!token) {
@@ -12414,18 +10868,12 @@ async function GET20(request, { params }) {
   }
   try {
     const client = buildPicnicClient(token, countryCode);
-    const rawPage = await client.sendRequest(
-      "GET",
-      `/pages/product-details-page-root?id=${encodeURIComponent(productId)}`,
-      null,
-      true
-    );
-    const productDetail2 = parseProductDetailPage(rawPage, productId);
-    if (!productDetail2.name) {
+    const product = await client.catalog.getProduct(productId);
+    return NextResponse.json(mapProductDetails(product));
+  } catch (error2) {
+    if (isProductNotFoundError(error2)) {
       return NextResponse.json({ error: "Product not found" }, { status: 404 });
     }
-    return NextResponse.json(productDetail2);
-  } catch (error2) {
     if (isApiAuthError(error2)) {
       return NextResponse.json(
         { error: "Your token has expired", code: "TOKEN_EXPIRED" },
@@ -12441,19 +10889,88 @@ async function GET20(request, { params }) {
   }
 }
 
-// vendor/picnic-web/src/app/api/recipe/[id]/route.ts
+// vendor/picnic-web/src/app/api/promotions/route.ts
 var route_exports34 = {};
 __export(route_exports34, {
   GET: () => GET21
 });
-var RECIPE_ID_RE4 = /^[0-9a-f]{24}$/;
-async function GET21(request, { params }) {
+async function GET21(request) {
+  const token = readAuthToken(request);
+  if (!token) {
+    return NextResponse.json(
+      { error: "Authentication required", code: "TOKEN_EXPIRED" },
+      { status: 401 }
+    );
+  }
+  const countryCode = readCountryCode(request);
+  try {
+    const client = buildPicnicClient(token, countryCode);
+    const promotions2 = await client.catalog.getPromotions();
+    return NextResponse.json({ sections: mapPromotionsSections(promotions2) });
+  } catch (error2) {
+    if (isApiAuthError(error2)) {
+      return NextResponse.json(
+        { error: "Your token has expired", code: "TOKEN_EXPIRED" },
+        { status: 401 }
+      );
+    }
+    const message = error2 instanceof Error ? error2.message : "Unknown error occurred";
+    console.error("[/api/promotions] Failed to load promotions:", message);
+    return NextResponse.json(
+      { error: "Failed to load promotions. Please try again later." },
+      { status: 502 }
+    );
+  }
+}
+
+// vendor/picnic-web/src/app/api/promotions/[groupId]/route.ts
+var route_exports35 = {};
+__export(route_exports35, {
+  GET: () => GET22
+});
+async function GET22(request, { params }) {
+  const token = readAuthToken(request);
+  if (!token) {
+    return NextResponse.json(
+      { error: "Authentication required", code: "TOKEN_EXPIRED" },
+      { status: 401 }
+    );
+  }
+  const countryCode = readCountryCode(request);
+  const { groupId } = await params;
+  try {
+    const client = buildPicnicClient(token, countryCode);
+    const group = await client.catalog.getPromotionGroup(groupId);
+    return NextResponse.json({ name: group.name, products: mapProductTiles(group.products) });
+  } catch (error2) {
+    if (isApiAuthError(error2)) {
+      return NextResponse.json(
+        { error: "Your token has expired", code: "TOKEN_EXPIRED" },
+        { status: 401 }
+      );
+    }
+    const message = error2 instanceof Error ? error2.message : "Unknown error occurred";
+    console.error(`[/api/promotions/${groupId}] Failed to load the promotion group:`, message);
+    return NextResponse.json(
+      { error: "Failed to load the promotion. Please try again later." },
+      { status: 502 }
+    );
+  }
+}
+
+// vendor/picnic-web/src/app/api/recipe/[id]/route.ts
+var route_exports36 = {};
+__export(route_exports36, {
+  GET: () => GET23
+});
+var RECIPE_ID_RE3 = /^[0-9a-f]{24}$/;
+async function GET23(request, { params }) {
   const token = readAuthToken(request);
   if (!token) {
     return NextResponse.json({ error: "Authentication required" }, { status: 401 });
   }
   const { id } = await params;
-  if (!RECIPE_ID_RE4.test(id)) {
+  if (!RECIPE_ID_RE3.test(id)) {
     return NextResponse.json({ error: "Invalid recipe ID" }, { status: 400 });
   }
   try {
@@ -12476,18 +10993,18 @@ async function GET21(request, { params }) {
 }
 
 // vendor/picnic-web/src/app/api/recipe/[id]/add-to-cart/route.ts
-var route_exports35 = {};
-__export(route_exports35, {
+var route_exports37 = {};
+__export(route_exports37, {
   POST: () => POST16
 });
-var RECIPE_ID_RE5 = /^[0-9a-f]{24}$/;
+var RECIPE_ID_RE4 = /^[0-9a-f]{24}$/;
 async function POST16(request, { params }) {
   const token = readAuthToken(request);
   if (!token) {
     return NextResponse.json({ error: "Authentication required" }, { status: 401 });
   }
   const { id } = await params;
-  if (!RECIPE_ID_RE5.test(id)) {
+  if (!RECIPE_ID_RE4.test(id)) {
     return NextResponse.json({ error: "Invalid recipe ID" }, { status: 400 });
   }
   let body;
@@ -12501,32 +11018,22 @@ async function POST16(request, { params }) {
     const countryCode = readCountryCode(request);
     const client = buildPicnicClient(token, countryCode);
     if (Array.isArray(body.selectedIngredients)) {
-      const rawClient = client;
       for (const item of body.selectedIngredients) {
         if (item.count <= 0) continue;
-        await rawClient.sendRequest(
-          "POST",
-          "/cart/add_product",
+        await client.cart.addProductToCart(item.id, item.count, [
+          { type: "MEAL_PLAN", day_relative_to_slot: 999, number_of_servings: portions },
           {
-            product_id: item.id,
-            count: item.count,
-            selling_unit_contexts: [
-              { type: "MEAL_PLAN", day_relative_to_slot: 999, number_of_servings: portions },
-              {
-                type: "SELLING_GROUP",
-                selling_group_id: id,
-                selling_group_creator_type: "PIM",
-                selling_group_component_id: item.ingredientId ?? null,
-                selling_group_component_type: "CORE",
-                selling_group_component_swap_type: null
-              }
-            ]
-          },
-          true
-        );
+            type: "SELLING_GROUP",
+            selling_group_id: id,
+            selling_group_creator_type: "PIM",
+            selling_group_component_id: item.ingredientId ?? null,
+            selling_group_component_type: "CORE",
+            selling_group_component_swap_type: null
+          }
+        ]);
       }
     } else {
-      await client.recipe.assignSellingGroupToBasket(id, 0, portions);
+      await client.recipe.addRecipeToCart(id, { dayOffset: 0, portions });
     }
     return NextResponse.json({ success: true });
   } catch (error2) {
@@ -12538,9 +11045,9 @@ async function POST16(request, { params }) {
 }
 
 // vendor/picnic-web/src/app/api/recipe/[id]/ingredient/[ingredientId]/route.ts
-var route_exports36 = {};
-__export(route_exports36, {
-  GET: () => GET22,
+var route_exports38 = {};
+__export(route_exports38, {
+  GET: () => GET24,
   POST: () => POST17
 });
 
@@ -12579,7 +11086,7 @@ function extractProductImageId(node) {
   }
   return null;
 }
-function extractPromotion2(node) {
+function extractPromotion(node) {
   const carriers = collectNodes(
     node,
     (n) => typeof n.analytics === "object" && n.analytics !== null
@@ -12601,7 +11108,7 @@ function toCents(text3) {
 }
 function parseTile(node, sellingUnitId) {
   const lines = collectMarkdowns(node).map((md) => cleanMarkdown(md).trim()).filter(Boolean);
-  const promotion = extractPromotion2(node);
+  const promotion = extractPromotion(node);
   const promotionLabel = promotion?.promotion_label ?? null;
   const chevronIndex = lines.indexOf(">");
   const brand = chevronIndex >= 0 ? lines[chevronIndex + 1] ?? null : null;
@@ -12663,19 +11170,17 @@ function parseIngredientEdit(rawPage, ingredientId) {
 }
 
 // vendor/picnic-web/src/app/api/recipe/[id]/ingredient/[ingredientId]/route.ts
-var RECIPE_ID_RE6 = /^[0-9a-f]{24}$/;
+var RECIPE_ID_RE5 = /^[0-9a-f]{24}$/;
 var INGREDIENT_ID_RE = /^[0-9a-f]{8}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{12}$/;
 function clampPortions(value) {
   return value !== null && Number.isFinite(value) && value > 0 ? Math.floor(value) : 1;
 }
-async function fetchEditPage(client, recipeId, ingredientId, portions) {
-  return client.sendRequest(
-    "GET",
-    `/pages/selling-group-component-edit-page?ingredient_id=${encodeURIComponent(
+function fetchEditPage(client, recipeId, ingredientId, portions) {
+  return getFusionPage(
+    client,
+    `selling-group-component-edit-page?ingredient_id=${encodeURIComponent(
       ingredientId
-    )}&selling_group_id=${encodeURIComponent(recipeId)}&portions=${portions}`,
-    null,
-    true
+    )}&selling_group_id=${encodeURIComponent(recipeId)}&portions=${portions}`
   );
 }
 function validate(request, id, ingredientId) {
@@ -12683,14 +11188,14 @@ function validate(request, id, ingredientId) {
   if (!token) {
     return { error: NextResponse.json({ error: "Authentication required" }, { status: 401 }) };
   }
-  if (!RECIPE_ID_RE6.test(id) || !INGREDIENT_ID_RE.test(ingredientId)) {
+  if (!RECIPE_ID_RE5.test(id) || !INGREDIENT_ID_RE.test(ingredientId)) {
     return {
       error: NextResponse.json({ error: "Invalid recipe or ingredient ID" }, { status: 400 })
     };
   }
   return { token };
 }
-async function GET22(request, { params }) {
+async function GET24(request, { params }) {
   const { id, ingredientId } = await params;
   const checked = validate(request, id, ingredientId);
   if ("error" in checked) return checked.error;
@@ -12698,12 +11203,7 @@ async function GET22(request, { params }) {
     const client = buildPicnicClient(checked.token, readCountryCode(request));
     const portionsParam = request.nextUrl.searchParams.get("portions");
     const portions = clampPortions(portionsParam ? parseInt(portionsParam, 10) : null);
-    const rawPage = await fetchEditPage(
-      client,
-      id,
-      ingredientId,
-      portions
-    );
+    const rawPage = await fetchEditPage(client, id, ingredientId, portions);
     return NextResponse.json(parseIngredientEdit(rawPage, ingredientId));
   } catch (error2) {
     if (isApiAuthError(error2)) {
@@ -12736,22 +11236,14 @@ async function POST17(request, { params }) {
   }
   const portions = clampPortions(body.portions);
   const selected = {};
-  for (const [sellingUnitId, count] of Object.entries(body.quantities)) {
-    if (typeof count === "number" && count > 0) selected[sellingUnitId] = Math.floor(count);
+  for (const [sellingUnitId, count2] of Object.entries(body.quantities)) {
+    if (typeof count2 === "number" && count2 > 0) selected[sellingUnitId] = Math.floor(count2);
   }
   const selectedIds = Object.keys(selected);
   try {
-    const client = buildPicnicClient(
-      checked.token,
-      readCountryCode(request)
-    );
+    const client = buildPicnicClient(checked.token, readCountryCode(request));
     if (selectedIds.length === 0) {
-      await client.sendRequest(
-        "POST",
-        "/pages/task/delete-selling-group-component",
-        { payload: { selling_group_component_id: ingredientId, selling_group_id: id } },
-        true
-      );
+      await client.recipe.removeRecipeIngredient(id, ingredientId);
       return NextResponse.json({ success: true });
     }
     const parsed = parseIngredientEdit(
@@ -12764,38 +11256,20 @@ async function POST17(request, { params }) {
     if (selectedIds.every((sid) => originalIds.includes(sid)) && originalIds.length > 1) {
       for (const originalId of originalIds) quantityById[originalId] = 0;
     }
-    for (const [sellingUnitId, count] of Object.entries(selected)) {
-      quantityById[sellingUnitId] = count;
+    for (const [sellingUnitId, count2] of Object.entries(selected)) {
+      quantityById[sellingUnitId] = count2;
     }
-    const saveResult = await client.sendRequest(
-      "POST",
-      "/pages/task/save-selling-group-edit-task",
-      {
-        payload: {
-          requested_sellable_portions: String(portions),
-          selling_group_component_id: ingredientId,
-          selling_group_id: id,
-          selling_unit_quantity_by_id: quantityById,
-          swapType
-        }
-      },
-      true
-    );
+    const saveResult = await client.recipe.updateRecipeIngredient(id, ingredientId, {
+      quantities: quantityById,
+      portions,
+      swapType
+    });
     if (saveResult?.shouldUpdateCart) {
-      await client.sendRequest(
-        "POST",
-        "/pages/task/assign-sellable-component-to-day",
-        {
-          payload: {
-            component_swap_type: swapType,
-            portions: String(portions),
-            required_amount_by_selling_unit_id: selected,
-            selected_component_id: ingredientId,
-            selling_group_id: id
-          }
-        },
-        true
-      );
+      await client.recipe.updateRecipeIngredientInCart(id, ingredientId, {
+        quantities: selected,
+        portions,
+        swapType
+      });
     }
     return NextResponse.json({ success: true });
   } catch (error2) {
@@ -12807,11 +11281,11 @@ async function POST17(request, { params }) {
 }
 
 // vendor/picnic-web/src/app/api/recipe/[id]/save/route.ts
-var route_exports37 = {};
-__export(route_exports37, {
+var route_exports39 = {};
+__export(route_exports39, {
   POST: () => POST18
 });
-var RECIPE_ID_RE7 = /^[0-9a-f]{24}$/;
+var RECIPE_ID_RE6 = /^[0-9a-f]{24}$/;
 async function POST18(request, { params }) {
   const token = readAuthToken(request);
   if (!token) {
@@ -12821,7 +11295,7 @@ async function POST18(request, { params }) {
     );
   }
   const { id } = await params;
-  if (!RECIPE_ID_RE7.test(id)) {
+  if (!RECIPE_ID_RE6.test(id)) {
     return NextResponse.json({ error: "Invalid recipe ID" }, { status: 400 });
   }
   let body;
@@ -12855,11 +11329,11 @@ async function POST18(request, { params }) {
 }
 
 // vendor/picnic-web/src/app/api/recipe/saved/route.ts
-var route_exports38 = {};
-__export(route_exports38, {
-  GET: () => GET23
+var route_exports40 = {};
+__export(route_exports40, {
+  GET: () => GET25
 });
-async function GET23(request) {
+async function GET25(request) {
   const token = readAuthToken(request);
   if (!token) {
     return NextResponse.json(
@@ -12885,11 +11359,11 @@ async function GET23(request) {
 }
 
 // vendor/picnic-web/src/app/api/rsc-pages/route.ts
-var route_exports39 = {};
-__export(route_exports39, {
-  GET: () => GET24
+var route_exports41 = {};
+__export(route_exports41, {
+  GET: () => GET26
 });
-async function GET24(request) {
+async function GET26(request) {
   const token = readAuthToken(request);
   if (!token) {
     return NextResponse.json(
@@ -12904,8 +11378,7 @@ async function GET24(request) {
   const countryCode = readCountryCode(request);
   try {
     const client = buildPicnicClient(token, countryCode);
-    const page = await client.app.getRscPage(pageId);
-    return NextResponse.json(parseRscPage(pageId, page));
+    return NextResponse.json(await getRscPageContent(client, pageId));
   } catch (error2) {
     if (isApiAuthError(error2)) {
       return NextResponse.json(
@@ -12923,11 +11396,11 @@ async function GET24(request) {
 }
 
 // vendor/picnic-web/src/app/api/search/route.ts
-var route_exports40 = {};
-__export(route_exports40, {
-  GET: () => GET25
+var route_exports42 = {};
+__export(route_exports42, {
+  GET: () => GET27
 });
-async function GET25(request) {
+async function GET27(request) {
   const token = readAuthToken(request);
   if (!token) {
     return NextResponse.json(
@@ -12942,13 +11415,8 @@ async function GET25(request) {
   }
   try {
     const client = buildPicnicClient(token, countryCode);
-    const rawPage = await client.sendRequest(
-      "GET",
-      `/pages/search-page-results?search_term=${encodeURIComponent(query)}`,
-      null,
-      true
-    );
-    const { products, sections } = parseFusionSearchSections(rawPage);
+    const results = await client.catalog.getSearchResults(query);
+    const { products, sections } = mapSearchSections(results.products);
     return NextResponse.json({ products, sections, query });
   } catch (error2) {
     if (isApiAuthError(error2)) {
@@ -12967,11 +11435,11 @@ async function GET25(request) {
 }
 
 // vendor/picnic-web/src/app/api/suggestions/route.ts
-var route_exports41 = {};
-__export(route_exports41, {
-  GET: () => GET26
+var route_exports43 = {};
+__export(route_exports43, {
+  GET: () => GET28
 });
-async function GET26(request) {
+async function GET28(request) {
   const token = readAuthToken(request);
   if (!token) {
     return NextResponse.json(
@@ -13009,48 +11477,28 @@ async function GET26(request) {
 }
 
 // vendor/picnic-web/src/app/api/user/profile/route.ts
-var route_exports42 = {};
-__export(route_exports42, {
-  GET: () => GET27
+var route_exports44 = {};
+__export(route_exports44, {
+  GET: () => GET29
 });
 
-// vendor/picnic-web/src/lib/user/parse-profile.ts
-var USER_INFO_COMPONENT = "user-info";
-var MENU_LIST_COMPONENT = "menu-list";
-function parseProfilePage(page) {
-  const user = findNode(page.nodes, USER_INFO_COMPONENT)?.props["user"];
-  const items = findNode(page.nodes, MENU_LIST_COMPONENT)?.props["items"];
-  const userData = isObject2(user) ? user : null;
-  const address = userData && isObject2(userData["preferredAddress"]) ? userData["preferredAddress"] : null;
-  const street = asString(address?.["street"]);
-  const houseNumber = asNumber(address?.["houseNumber"]);
-  const houseNumberExt = asString(address?.["houseNumberExtension"]);
-  const addressLine = street ? [street, houseNumber > 0 ? `${houseNumber}${houseNumberExt}` : ""].filter(Boolean).join(" ") : "";
-  const menu = (Array.isArray(items) ? items : []).flatMap((item) => {
-    if (!isObject2(item) || !asString(item["id"])) return [];
-    return [{ id: asString(item["id"]), deepLink: asString(item["deeplink"]) || null }];
-  });
+// vendor/picnic-web/src/lib/user/map-profile.ts
+function mapProfile(profile) {
+  const address = profile.address;
+  const houseNumber = address?.houseNumber && address.houseNumber > 0 ? `${address.houseNumber}${address.houseNumberExtension ?? ""}` : "";
+  const addressLine = address?.street ? [address.street, houseNumber].filter(Boolean).join(" ") : "";
   return {
     // The app shows first and last name as-is, e.g. "Jan & Anna ."
-    name: [asString(userData?.["firstName"]), asString(userData?.["lastName"])].filter(Boolean).join(" ").trim(),
+    name: [profile.firstName, profile.lastName].filter(Boolean).join(" ").trim(),
     addressLine,
-    avatarUrl: asString(userData?.["avatarUrl"]) || null,
-    hasMembership: userData?.["hasMembership"] === true,
-    menu
+    avatarUrl: profile.avatarUrl,
+    hasMembership: profile.hasMembership,
+    menu: profile.menu.map((entry) => ({ id: entry.id, deepLink: entry.deeplink }))
   };
-}
-function findNode(nodes, component) {
-  for (const node of nodes) {
-    if (node.component === component) return node;
-    const found = findNode(node.children, component);
-    if (found) return found;
-  }
-  return null;
 }
 
 // vendor/picnic-web/src/app/api/user/profile/route.ts
-var PROFILE_PAGE_ID = "profile-root";
-async function GET27(request) {
+async function GET29(request) {
   const token = readAuthToken(request);
   if (!token) {
     return NextResponse.json(
@@ -13060,8 +11508,7 @@ async function GET27(request) {
   }
   try {
     const client = buildPicnicClient(token, readCountryCode(request));
-    const page = await client.app.getRscPage(PROFILE_PAGE_ID);
-    return NextResponse.json(parseProfilePage(parseRscPage(PROFILE_PAGE_ID, page)));
+    return NextResponse.json(mapProfile(await client.user.getProfile()));
   } catch (error2) {
     if (isApiAuthError(error2)) {
       return NextResponse.json(
@@ -13098,30 +11545,32 @@ var VENDORED_ROUTES = [
   { path: "cookbook", methods: ["GET"], module: route_exports16 },
   { path: "cookbook/counts", methods: ["GET"], module: route_exports17 },
   { path: "cookbook/search", methods: ["GET"], module: route_exports18 },
-  { path: "debug-category-page/[categoryId]", methods: ["GET"], module: route_exports19 },
-  { path: "debug-cookbook", methods: ["GET"], module: route_exports20 },
-  { path: "deliveries", methods: ["GET"], module: route_exports21 },
-  { path: "deliveries/[deliveryId]", methods: ["GET"], module: route_exports22 },
-  { path: "deliveries/[deliveryId]/cancel", methods: ["POST"], module: route_exports23 },
-  { path: "deliveries/[deliveryId]/invoice", methods: ["POST"], module: route_exports24 },
-  { path: "deliveries/[deliveryId]/position", methods: ["GET"], module: route_exports25 },
-  { path: "deliveries/[deliveryId]/rating", methods: ["POST"], module: route_exports26 },
-  { path: "deliveries/[deliveryId]/scenario", methods: ["GET"], module: route_exports27 },
+  { path: "deliveries", methods: ["GET"], module: route_exports19 },
+  { path: "deliveries/[deliveryId]", methods: ["GET"], module: route_exports20 },
+  { path: "deliveries/[deliveryId]/cancel", methods: ["POST"], module: route_exports21 },
+  { path: "deliveries/[deliveryId]/invoice", methods: ["POST"], module: route_exports22 },
+  { path: "deliveries/[deliveryId]/position", methods: ["GET"], module: route_exports23 },
+  { path: "deliveries/[deliveryId]/rating", methods: ["POST"], module: route_exports24 },
+  { path: "deliveries/[deliveryId]/tracking", methods: ["GET"], module: route_exports25 },
+  { path: "favorites", methods: ["GET"], module: route_exports26 },
+  { path: "favorites/[aisleId]", methods: ["GET"], module: route_exports27 },
   { path: "meal-plan/search", methods: ["POST"], module: route_exports28 },
   { path: "meal-plan/shopping-list", methods: ["POST"], module: route_exports29 },
   { path: "pages/products", methods: ["GET"], module: route_exports30 },
   { path: "parcels", methods: ["GET"], module: route_exports31 },
   { path: "parcels/[parcelId]", methods: ["GET"], module: route_exports32 },
   { path: "product/[id]", methods: ["GET"], module: route_exports33 },
-  { path: "recipe/[id]", methods: ["GET"], module: route_exports34 },
-  { path: "recipe/[id]/add-to-cart", methods: ["POST"], module: route_exports35 },
-  { path: "recipe/[id]/ingredient/[ingredientId]", methods: ["GET", "POST"], module: route_exports36 },
-  { path: "recipe/[id]/save", methods: ["POST"], module: route_exports37 },
-  { path: "recipe/saved", methods: ["GET"], module: route_exports38 },
-  { path: "rsc-pages", methods: ["GET"], module: route_exports39 },
-  { path: "search", methods: ["GET"], module: route_exports40 },
-  { path: "suggestions", methods: ["GET"], module: route_exports41 },
-  { path: "user/profile", methods: ["GET"], module: route_exports42 }
+  { path: "promotions", methods: ["GET"], module: route_exports34 },
+  { path: "promotions/[groupId]", methods: ["GET"], module: route_exports35 },
+  { path: "recipe/[id]", methods: ["GET"], module: route_exports36 },
+  { path: "recipe/[id]/add-to-cart", methods: ["POST"], module: route_exports37 },
+  { path: "recipe/[id]/ingredient/[ingredientId]", methods: ["GET", "POST"], module: route_exports38 },
+  { path: "recipe/[id]/save", methods: ["POST"], module: route_exports39 },
+  { path: "recipe/saved", methods: ["GET"], module: route_exports40 },
+  { path: "rsc-pages", methods: ["GET"], module: route_exports41 },
+  { path: "search", methods: ["GET"], module: route_exports42 },
+  { path: "suggestions", methods: ["GET"], module: route_exports43 },
+  { path: "user/profile", methods: ["GET"], module: route_exports44 }
 ];
 
 // src/server/main.ts
@@ -13159,7 +11608,7 @@ function startDesk(env = process.env) {
     pictureCacheMb,
     allowedUsers,
     ingressOnly: env.INGRESS_ONLY === "1",
-    version: true ? "1.0.3" : "dev",
+    version: true ? "1.0.4" : "dev",
     routes: VENDORED_ROUTES,
     demo: demo ? demoShop() : void 0
   });

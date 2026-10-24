@@ -4,6 +4,35 @@ All notable changes to Picnic Desk. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the version
 numbers [Semantic Versioning](https://semver.org/).
 
+## [1.0.4]
+
+### Changed
+
+- Search, product pages, recipes, categories, the basket and order tracking
+  are now read from Picnic by picnic-api 5, which follows the current Picnic
+  app. Search asks Picnic the way the app does: Picnic now serves its search
+  page without the results, which the app fetches separately, so the old way
+  could come back empty. Results come in the app's sections.
+- Product pages show the size badge ("XL") and all of Picnic's tags, as the
+  app does, and the product's own "more for less" prices.
+- A recipe loads with one request to Picnic instead of one per ingredient,
+  so recipes open faster and set off Picnic's rate limit less often.
+- **Acties** in the categories opens Picnic's offers page, now with cards for
+  offers on several products ("2 voor €3,99"); a card opens its products.
+- A category's links open the app's own category pages, and a category shows
+  its own offers next to its subcategories.
+
+### Fixed
+
+- German "Kann enthalten" allergens no longer show as certain.
+- An order's discount is no longer counted twice for products ordered more
+  than once.
+
+### Removed
+
+- The suggested replacements under a sold-out product in the basket: Picnic
+  sends only placeholders there now.
+
 ## [1.0.3]
 
 ### Changed

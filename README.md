@@ -88,8 +88,8 @@ password `2fa` walks through the verification-code step with code `123456`.
 
 ## Licence
 
-AGPL-3.0, because it contains picnic-web (AGPL-3.0). picnic-api, React and
-jsonpath-plus are MIT; their licences ship in
+AGPL-3.0, because it contains picnic-web (AGPL-3.0). picnic-api and React
+are MIT; their licences ship in
 `picnic_desk/dist/THIRD_PARTY_LICENSES.txt`. The sample responses in
 `tests/fixtures/picnic` come from
 [python-picnic-api2](https://github.com/codesalatdev/python-picnic-api)

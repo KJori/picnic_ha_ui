@@ -64,7 +64,6 @@ await build({
 const BUNDLED = [
   ["picnic-web (vendor/picnic-web, by MRVDH)", "vendor/picnic-web/LICENSE"],
   ["picnic-api", "node_modules/picnic-api/LICENSE"],
-  ["jsonpath-plus (includes jsep)", "node_modules/jsonpath-plus/LICENSE"],
   ["react", "node_modules/react/LICENSE"],
   ["react-dom", "node_modules/react-dom/LICENSE"],
   ["scheduler", "node_modules/scheduler/LICENSE"],

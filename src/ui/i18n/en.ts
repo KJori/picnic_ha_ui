@@ -62,7 +62,6 @@ export const en: Translations = {
   emptyCartText: "Add products from the shelf, or search for something.",
   goToSearch: "Go to search",
   cartTitle: "Basket",
-  nothingForgotten: "Forgotten anything?",
   cartMutationError: "Something went wrong. Please try again.",
   cartLoadError: "Something went wrong. Please try again later.",
   cartOtherItems: "Other products",
@@ -202,6 +201,13 @@ export const en: Translations = {
 
   discoverTitle: "Discover",
   favoritesTitle: "Favourites",
+  favoritesLoadError: "Could not load the favourites.",
+  favoritesEmpty: "No favourites yet. Products you order show up here.",
+  favoritesShowAll: "Show all",
+
+  promotionsTitle: "Offers",
+  promotionsLoadError: "Could not load the offers.",
+  promotionsEmpty: "There are no offers right now.",
 
   recipeIngredients: "Ingredients",
   recipeSteps: "Method",

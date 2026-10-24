@@ -21,8 +21,7 @@ import { isApiAuthError } from "@/lib/core/api-error";
 import { mapWithConcurrency } from "@/lib/core/concurrency";
 import type { DeliveriesApiResponse, DeliveryDetailData } from "@/lib/core/delivery-types";
 import { buildPicnicClient } from "@/lib/core/picnic-client";
-import { fetchRecipePage } from "@/lib/recipe/fetch-recipe-detail";
-import { parseRecipeDetail } from "@/lib/recipe/parse-recipe-detail";
+import { mapRecipeDetails } from "@/lib/recipe/map-recipe-details";
 import type { DeliverySlotPickerData } from "@/lib/core/delivery-slot-types";
 import type {
   CartData,
@@ -548,12 +547,13 @@ export class DeskRoutes {
         if (result.status !== 200) return NextResponse.json({ error: "no price" }, { status: result.status });
         recipe = result.body as RecipeDetail;
       } else {
-        // Only the recipe page, as picnic-web's meal planner prices its
-        // candidates: the recipe route also fetches every ingredient's product
-        // page, which for a grid of cards would set off Picnic's rate limit.
+        // Only the recipe page: its ingredient tiles carry the prices. The
+        // recipe route may also fetch the product page of an ingredient
+        // without a name, which a price does not need and which, for a grid of
+        // cards, could set off Picnic's rate limit.
         try {
           const client = buildPicnicClient(this.desk.session.token!, this.desk.session.country);
-          recipe = parseRecipeDetail(await fetchRecipePage(client, id), id);
+          recipe = mapRecipeDetails(await client.recipe.getRecipe(id, { resolveIngredientNames: false }));
         } catch (err) {
           if (isApiAuthError(err)) return signedOut();
           return NextResponse.json({ error: "Picnic did not send the recipe." }, { status: 502 });
@@ -710,7 +710,7 @@ export class DeskRoutes {
     } else {
       try {
         const client = buildPicnicClient(this.desk.session.token!, this.desk.session.country);
-        content = await client.sendRequest("GET", `/pages/${page}`, null, true);
+        content = await client.sendRequest("GET", `/pages/${page}`, null, { includePicnicHeaders: true });
       } catch (err) {
         if (isApiAuthError(err)) return signedOut();
         return error(`Picnic answered: ${err instanceof Error ? err.message.slice(0, 300) : "unknown error"}`, 502);

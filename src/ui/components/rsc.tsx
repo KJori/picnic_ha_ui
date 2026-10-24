@@ -2,14 +2,14 @@
  * Pages Picnic serves as React Server Components, laid out for a desk.
  *
  * The category tree (category-tree-root) becomes a column of aisles on the
- * left of the shelf instead of the app's full-screen list. Other pages
- * (promotions) render their products on the shelf. What a row does when
+ * left of the shelf instead of the app's full-screen list. Other pages render
+ * their product sections (a category's, category-product-overview) or their
+ * rows (a category's subcategories) on the shelf. What a row does when
  * clicked is decided by picnic-web's own action resolver.
  */
 import { useMemo } from "react";
 
-import type { Product } from "@/lib/core/types";
-import { mapSellableTile } from "@/lib/rsc/map-sellable-tile";
+import { mapProductSections } from "@/lib/product/map-product-tile";
 import { readSlotActions, resolveIntents } from "@/lib/rsc/rsc-actions";
 import type { RscAction, RscNode, RscPageModel } from "@/lib/rsc/rsc-page-types";
 
@@ -17,7 +17,7 @@ import { href, navigate, type Route } from "../lib/router";
 import { useCart } from "../state/cart";
 import { useT } from "../state/session";
 import { Img, PicnicLabel } from "./common";
-import { ProductGrid } from "./products";
+import { ProductSections } from "./products";
 
 /** A theme token ("YELLOW2") or a literal colour; anything else is ignored. */
 function resolveColor(tokens: Record<string, string>, value: unknown): string | undefined {
@@ -36,7 +36,8 @@ function readRows(page: RscPageModel): Row[] {
   const rows: Row[] = [];
   const walk = (nodes: RscNode[]) => {
     for (const node of nodes) {
-      if (node.component === "vertical-list" && Array.isArray(node.props.items)) {
+      // A category's subcategories (category-list) are the same rows as the category tree.
+      if ((node.component === "vertical-list" || node.component === "category-list") && Array.isArray(node.props.items)) {
         for (const [index, raw] of (node.props.items as Record<string, unknown>[]).entries()) {
           const title = typeof raw.title === "string" ? raw.title : "";
           if (raw.type === "section-title" && title) rows.push({ kind: "title", title });
@@ -119,32 +120,39 @@ export function Aisles({ page, route }: { page: RscPageModel; route: Route }) {
   );
 }
 
+/** The module of a category's product sections, matched by path as picnic-web does: its name ("items") is too common. */
+const PRODUCT_SECTIONS_MODULE = "/sellable-overview/components/items.tsx";
+
+/** The product sections of the page, read as picnic-web's SellableOverviewItems reads them. */
+function readProducts(page: RscPageModel) {
+  const sections: { title: string | null; products: unknown }[] = [];
+  const walk = (nodes: RscNode[]) => {
+    for (const node of nodes) {
+      if (node.modulePath?.endsWith(PRODUCT_SECTIONS_MODULE) && Array.isArray(node.props.sections)) {
+        for (const value of node.props.sections) {
+          const section = (value ?? {}) as Record<string, unknown>;
+          const header = typeof section.headerName === "string" ? section.headerName : null;
+          sections.push({ title: section.shouldShowHeader ? header : null, products: section.items });
+        }
+      }
+      walk(node.children ?? []);
+    }
+  };
+  walk(page.nodes);
+  return mapProductSections(sections, page.tokens);
+}
+
 /** A page Picnic serves as RSC, on the shelf: its products, or its rows as aisles. */
 export function RscPageView({ page, route }: { page: RscPageModel; route: Route }) {
   const { t } = useT();
-  const products = useMemo(() => {
-    const found: Product[] = [];
-    const walk = (nodes: RscNode[]) => {
-      for (const node of nodes) {
-        if (node.component === "promo-deep-dive-content" && Array.isArray(node.props.sellableTiles)) {
-          for (const tile of node.props.sellableTiles) {
-            const product = mapSellableTile((tile ?? {}) as Record<string, unknown>, page.tokens);
-            if (product) found.push(product);
-          }
-        }
-        walk(node.children);
-      }
-    };
-    walk(page.nodes);
-    return found;
-  }, [page]);
+  const { products, sections } = useMemo(() => readProducts(page), [page]);
   if (products.length) {
     return (
       <>
         <p className="hint">
           {products.length} {products.length === 1 ? t.productSingular : t.productPlural}
         </p>
-        <ProductGrid products={products} />
+        <ProductSections products={products} sections={sections} />
       </>
     );
   }

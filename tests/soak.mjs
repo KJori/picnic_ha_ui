@@ -3,7 +3,7 @@
 // times stayed flat. Not part of `npm test` (it takes minutes):
 //
 //   node --expose-gc --import tsx --import ./tests/setup.ts tests/soak.mjs [rounds]
-import { FAKE_SAFE_FETCH, FakePicnic, fixture, json, runDesk, signIn } from "./helpers.ts";
+import { FAKE_SAFE_FETCH, FakePicnic, fakeAppSearch, json, runDesk, searchTile, signIn } from "./helpers.ts";
 import { installFetchTimeout } from "../src/server/fetch-timeout.ts";
 
 const ROUNDS = Number(process.argv[2] ?? 20);
@@ -14,12 +14,14 @@ const picnic = new FakePicnic().install();
 installFetchTimeout(2000);
 const desk = await runDesk({ pictureCacheMb: 1 });
 await signIn(desk, picnic);
-picnic.on("GET", /^\/pages\/search-page-results/, json(fixture("search_page_nl.json")));
+fakeAppSearch(picnic, "melk", [searchTile("s1", "Halfvolle melk", 119, "1 liter")]);
 picnic.on("GET", /^\/cart/, json({ type: "ORDER", id: "shopping_cart", items: [], total_count: 0, total_price: 0 }));
 picnic.on("POST", /^\/cart\/add_product/, json({ type: "ORDER", id: "shopping_cart", items: [], total_count: 0, total_price: 0 }));
 picnic.on("POST", "/deliveries/summary", json([]));
 picnic.on("GET", /\/static\/images\//, () => new Response(Buffer.concat([PNG, Buffer.alloc(2000)])));
-picnic.on("GET", /^\/pages\/recipe-details-page/, json({}));
+picnic.on("GET", /^\/pages\/selling-group-details-page/, (seen) =>
+  json({ body: { child: { recipe_id: seen.url.searchParams.get("selling_group_id"), recipe_name: "Soep", selling_units: [] } } })
+);
 picnic.on("GET", /^\/user$/, () => new Response("nope", { status: 503 }));
 
 const calls = [

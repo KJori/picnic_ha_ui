@@ -57,19 +57,6 @@ function Line({ item, editable }: { item: CartItem; editable: boolean }) {
         {item.isUnavailable && (
           <>
             <span className="gone">{item.unavailableExplanation ?? d.unavailable}</span>
-            {editable && item.replacements.length > 0 && (
-              <span className="instead">
-                {d.replacements}:{" "}
-                {item.replacements.slice(0, 3).map((r, i) => (
-                  <span key={r.id}>
-                    {i > 0 && ", "}
-                    <button type="button" className="quiet" onClick={() => open(r.id)}>
-                      {r.name}
-                    </button>
-                  </span>
-                ))}
-              </span>
-            )}
             {editable && (
               <button type="button" className="quiet" onClick={() => cart.remove(item.productId, item.quantity)}>
                 {d.removeLine}

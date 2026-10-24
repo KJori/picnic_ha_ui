@@ -11,7 +11,7 @@ import { after, afterEach, beforeEach, describe, test } from "node:test";
 
 import { fromGateway, pageBase } from "../src/server/app";
 import { installFetchTimeout } from "../src/server/fetch-timeout";
-import { FAKE_SAFE_FETCH, FakePicnic, fixture, json, runDesk, signIn, type Running } from "./helpers";
+import { FAKE_SAFE_FETCH, FakePicnic, fakeAppSearch, fixture, json, runDesk, searchTile, signIn, type Running } from "./helpers";
 
 let picnic: FakePicnic;
 let desk: Running;
@@ -255,7 +255,7 @@ describe("when Picnic says no", () => {
     picnic.on("GET", /^\/pages\/meals-page-root/, () => {
       throw new TypeError("boom");
     });
-    const response = await desk.get("/api/debug-cookbook");
+    const response = await desk.get("/api/cookbook");
     assert.equal(response.status, 502);
     assert.equal((await desk.get("/api/desk/state")).status, 200);
   });
@@ -341,9 +341,10 @@ describe("picnic-web's parsers on Picnic's real answers", () => {
       ...extra,
     });
     const nextDay = { ...slot("tomorrow", "11:00", "13:00"), window_start: "2026-07-17T11:00:00.000+02:00", window_end: "2026-07-17T13:00:00.000+02:00" };
+    // picnic-api reads the slots from the basket, as the app does.
     picnic.on(
       "GET",
-      "/cart/delivery_slots",
+      "/cart",
       json({
         delivery_slots: [slot("short", "12:00", "13:00"), slot("long", "12:00", "14:00", { selected: true }), slot("evening", "18:00", "20:00", { minimum_order_value: undefined }), nextDay],
         selected_slot: { slot_id: "long", state: "EXPLICIT" },
@@ -367,7 +368,7 @@ describe("picnic-web's parsers on Picnic's real answers", () => {
       isExplicitSelection: true,
     });
     // A slot Picnic picked by itself is not shown as the customer's choice.
-    picnic.on("GET", "/cart/delivery_slots", json({ delivery_slots: [slot("short", "12:00", "13:00")], selected_slot: { slot_id: "short", state: "IMPLICIT" } }));
+    picnic.on("GET", "/cart", json({ delivery_slots: [slot("short", "12:00", "13:00")], selected_slot: { slot_id: "short", state: "IMPLICIT" } }));
     assert.equal((await desk.get("/api/cart/delivery-slots")).body.selectedSlot.isExplicitSelection, false);
   });
 
@@ -413,14 +414,35 @@ describe("picnic-web's parsers on Picnic's real answers", () => {
     assert.deepEqual((await desk.get("/api/cart/footer")).body, { loyaltyPoints: null, recommendations: null });
   });
 
-  // This sample is older than picnic-web's search parser (Picnic has changed the
-  // page since); it shows the route copes with a page it cannot read.
-  test("search answers in picnic-web's shape", async () => {
+  // Search the way the app does it (picnic-api's catalog.getSearchResults):
+  // the RSC search page, the app's script that names its server action
+  // (from pages-prod), then the action, which returns the results.
+  test("search: the search page, its script and its action, as the app does it", async () => {
+    fakeAppSearch(picnic, "koffie", [searchTile("s1018620", "Aromatico filterkoffie", 799, "500 gram")]);
+    const result = await desk.get("/api/search?q=koffie");
+    assert.equal(result.status, 200, JSON.stringify(result.body));
+    assert.equal(result.body.query, "koffie");
+    assert.deepEqual(
+      result.body.products.map((p: { id: string; name: string; displayPrice: number; unitQuantity: string }) => [p.id, p.name, p.displayPrice, p.unitQuantity]),
+      [["s1018620", "Aromatico filterkoffie", 799, "500 gram"]]
+    );
+    assert.deepEqual(result.body.sections.map((s: { title: string }) => s.title), ["Filterkoffie"]);
+    // The script is public: it goes to pages-prod without the account's key.
+    const script = picnic.last("/store/results.1.script.bundle")!;
+    assert.equal(script.url.hostname, "pages-prod.nl.picnicinternational.com");
+    assert.equal(script.headers.get("x-picnic-auth"), null);
+    const action = picnic.last("/pages/action/")!;
+    assert.equal(JSON.parse(JSON.parse(action.body!).params)[0].searchId, "id-1");
+  });
+
+  // This sample is older than the app's RSC search page; the route says it
+  // could not search, and the session stays.
+  test("search on a page it cannot read answers 502, still signed in", async () => {
     picnic.on("GET", /^\/pages\/search-page-results\?search_term=koffie/, json(fixture("search_page_nl.json")));
     const result = await desk.get("/api/search?q=koffie");
-    assert.equal(result.status, 200);
-    assert.equal(result.body.query, "koffie");
-    assert.ok(Array.isArray(result.body.products) && Array.isArray(result.body.sections));
+    assert.equal(result.status, 502);
+    assert.equal(typeof result.body.error, "string");
+    assert.equal((await desk.get("/api/desk/state")).body.signedIn, true);
   });
 });
 
@@ -646,13 +668,15 @@ describe("the desk's own routes", () => {
     let most = 0;
     let pageCalls = 0;
     const id = (n: number) => `64a0000000000000000000${String(n).padStart(2, "0")}`;
-    picnic.on("GET", /^\/pages\/selling-group-details-page/, async () => {
+    picnic.on("GET", /^\/pages\/selling-group-details-page/, async (seen) => {
       pageCalls += 1;
       inFlight += 1;
       most = Math.max(most, inFlight);
       await new Promise((r) => setTimeout(r, 25));
       inFlight -= 1;
-      return json({ body: {} });
+      // The least of a recipe page picnic-api reads: the recipe's context.
+      const recipeId = seen.url.searchParams.get("selling_group_id");
+      return json({ body: { child: { recipe_id: recipeId, recipe_name: "Soep", selling_units: [] } } });
     });
     const answers = await Promise.all([1, 2, 3, 4, 5, 6].map((n) => desk.get(`/api/desk/recipe-price?id=${id(n)}`)));
     assert.deepEqual(answers.map((a) => a.status), [200, 200, 200, 200, 200, 200], JSON.stringify(answers.map((a) => a.body)));

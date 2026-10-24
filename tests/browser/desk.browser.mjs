@@ -183,6 +183,15 @@ describe("Picnic Desk in a browser", () => {
     await cell(page, "s1003").waitFor();
     await shot(page, "02-category");
 
+    // The offers ("Acties"): products, and a card for an offer on several products.
+    await page.locator(".aisles").getByRole("link", { name: /Acties/ }).click();
+    await page.getByRole("heading", { name: "Offers" }).waitFor();
+    await cell(page, "s1024").waitFor();
+    await page.locator(".aisle-shelf").getByRole("link", { name: /Koffie van Lavazza/ }).click();
+    await page.getByRole("heading", { name: "Koffie van Lavazza" }).waitFor();
+    await cell(page, "s1024").waitFor();
+    assert.equal(await page.locator(".views a[aria-current=page]").textContent(), "Categories");
+
     // Suggestions while typing.
     await page.locator("#q").fill("tof");
     await page.getByRole("option", { name: "tofu" }).click();
@@ -919,12 +928,13 @@ describe("Picnic Desk in a browser", () => {
     );
     const eta = Date.now() + 20 * 60_000;
     await page.route(/\/api\/deliveries\/today-order\/position$/, (route) =>
-      route.fulfill({ json: { version: 1, scenario_in_progress: true, query_interval: 15000, eta } })
+      // picnic-api's delivery position, as picnic-web's position route sends it.
+      route.fulfill({ json: { routeVersion: 1, inProgress: true, queryInterval: 15000, eta, etaWindowStart: null, etaWindowEnd: null, routeTime: Date.now() } })
     );
     let tomorrowAsked = 0;
     await page.route(/\/api\/deliveries\/tomorrow-order\/position$/, (route) => {
       tomorrowAsked++;
-      return route.fulfill({ json: { scenario_in_progress: false } });
+      return route.fulfill({ json: { routeVersion: 1, inProgress: false, queryInterval: 15000, eta: null, etaWindowStart: null, etaWindowEnd: null, routeTime: 0 } });
     });
     await page.reload();
     const bar = page.locator(".next-delivery-bar");

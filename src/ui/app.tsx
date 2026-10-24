@@ -166,7 +166,7 @@ function Tabs({ route }: { route: Route }) {
   const { t, d } = useT();
   const tabs: { to: string; label: string; match: string[] }[] = [
     { to: "/search", label: d.search, match: ["/search"] },
-    { to: "/categories", label: d.categories, match: ["/categories", "/pages"] },
+    { to: "/categories", label: d.categories, match: ["/categories", "/pages", "/promotions"] },
     { to: "/list", label: d.pasteList, match: ["/list"] },
     { to: "/history", label: d.boughtBefore, match: ["/history"] },
     { to: "/saved", label: d.starred, match: ["/saved"] },
@@ -196,6 +196,7 @@ function View({ route }: { route: Route }) {
       return <SearchView route={route} />;
     case "categories":
     case "pages":
+    case "promotions":
       return <CategoriesView route={route} />;
     case "list":
       return <ListView />;

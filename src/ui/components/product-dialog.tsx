@@ -122,7 +122,11 @@ function ProductView({ product }: { product: ProductDetail }) {
             </p>
           )}
           <p className="hint">
-            {[product.unitQuantity, product.unitPrice, product.categoryTag?.text].filter(Boolean).join(" · ")}
+            {product.quantityBadges.map((badge, i) => (
+              <PicnicLabel key={i} text={badge.text} fg={badge.textColor} bg={badge.backgroundColor} />
+            ))}
+            {product.quantityBadges.length > 0 && " "}
+            {[product.unitQuantity, product.unitPrice, ...product.tags.map((tag) => tag.text)].filter(Boolean).join(" · ")}
           </p>
           <div className="buy">
             <span className="pricing">
