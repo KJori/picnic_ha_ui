@@ -9,5 +9,5 @@ configuration:
     name: Platz für Bilder (MB)
     description: Wie viel Speicherplatz die aufbewahrten Produkt- und Rezeptbilder belegen dürfen. Ist er voll, machen die am längsten nicht gezeigten Platz.
   allowed_users:
-    name: Weitere Benutzer
-    description: Home Assistant-Benutzernamen (keine Anzeigenamen), die dein Picnic-Konto hier außer der angemeldeten Person benutzen dürfen.
+    name: Benutzer
+    description: Die Home Assistant-Benutzernamen (keine Anzeigenamen), die Picnic hier verwenden dürfen; sonst niemand, auch keine Administratoren. Leer heißt nur die Person, die sich bei Picnic angemeldet hat.

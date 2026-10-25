@@ -30,27 +30,37 @@ On the Configuration tab:
   names and texts are always Picnic's own.
 - `picture_cache_mb`: how much room the product and recipe pictures may take
   (500 MB unless you change it, from 50 to 10000).
-- `allowed_users`: Home Assistant user names that may use your Picnic account
-  besides you, e.g. a partner's. See "Who can use it".
+- `allowed_users`: the Home Assistant user names that may use Picnic here,
+  e.g. yours and a partner's. Nobody else can, administrators included. See
+  "Who can use it".
 
 ## Who can use it
 
-The Picnic account belongs to the Home Assistant user who signed in to it
-here. Other Home Assistant users who open the app see "Not your Picnic
-account": nothing of your basket, orders, name or address, and they cannot
-sign you out or connect their own account over yours. To share it, add their
-Home Assistant user name (not the display name) to `allowed_users`. After you
-sign out, the next person to sign in owns it.
+The app shows in every Home Assistant user's sidebar, so accounts that are
+not administrators can use it too. The app itself decides who may:
+
+- **With `allowed_users`**: only the Home Assistant user names listed there
+  (not display names; capitals do not matter). They share one Picnic account:
+  any of them can sign in, shop and sign out. Everyone else, administrators
+  included, sees "No access to Picnic" with their own user name, which you
+  can then add. So if you keep an administrator account only for managing
+  Home Assistant, leave it off the list and list the accounts you shop with.
+  Name yourself too: someone who signed in to Picnic but is not on the list
+  cannot use it either.
+- **Without it** (an empty list): the Picnic account belongs to the Home
+  Assistant user who signed in to it here. Other users see "Not your Picnic
+  account": nothing of your basket, orders, name or address, and they cannot
+  sign you out or connect their own account over yours. After you sign out,
+  the next person to sign in owns it, whichever Home Assistant user that is.
+
+Users who should not see the entry at all can hide it from their own sidebar
+(their profile, **Change the order and hide items from the sidebar**).
 
 Home Assistant tells the app who is using it. If it does not (older
-versions), or if you signed in before version 1.0, anyone who can open the app
-can use the account; **Check what works with Picnic** says so under "Who may
-use it". Signing out and in again ties the account to you.
-
-Only Home Assistant administrators see the app in the sidebar. Until a recent
-Home Assistant Supervisor change, that hid the entry but did not stop other
-users from opening the app by its address, which is why the app checks for
-itself.
+versions), the list lets nobody in, and without a list anyone who can open the
+app can use the account, as they can if you signed in before version 1.0;
+**Check what works with Picnic** says who may use it. Signing out and in again
+ties the account to you.
 
 ## Using it
 

@@ -85,13 +85,47 @@ describe("the Picnic account belongs to whoever connected it", () => {
     assert.equal(JSON.parse(readFileSync(join(desk.dataDir, "auth.json"), "utf8")).token, "anna-token", "still Anna's");
   });
 
-  test("users named in allowed_users may use it too; names are not case-sensitive", async () => {
-    await startAsHomeAssistant(["Bob"]);
-    await as(ANNA, "/api/auth/login", { method: "POST", body: { token: "anna-token", countryCode: "NL" } });
+  test("with allowed_users, only the users it names may use it, signing in included; names are not case-sensitive", async () => {
+    await startAsHomeAssistant(["Bob", " carol "]);
+    const carol = { "x-remote-user-id": "c3", "x-remote-user-name": "Carol" };
+    // Anna (say, the administrator) is not on the list: she cannot even sign in.
+    const refused = await as(ANNA, "/api/auth/login", { method: "POST", body: { token: "anna-token", countryCode: "NL" } });
+    assert.equal(refused.status, 403);
+    assert.equal(refused.body.code, "NOT_YOUR_ACCOUNT");
+    const annaState = (await as(ANNA, "/api/desk/state")).body;
+    assert.deepEqual([annaState.notYours, annaState.refusedBy, annaState.you], [true, "list", "anna"], "she is told why, and her user name");
+
+    // Bob, a listed account that need not be an administrator, signs in; Carol shares it.
+    assert.equal((await as(BOB, "/api/auth/login", { method: "POST", body: { token: "bob-token", countryCode: "NL" } })).status, 200);
     assert.equal((await as(BOB, "/api/cart")).status, 200);
-    assert.equal((await as(BOB, "/api/desk/state")).body.notYours, false);
-    const carol = { "x-remote-user-id": "c3", "x-remote-user-name": "carol" };
-    assert.equal((await as(carol, "/api/cart")).status, 403);
+    assert.equal((await as(carol, "/api/cart")).status, 200);
+    const carolState = (await as(carol, "/api/desk/state")).body;
+    assert.deepEqual([carolState.notYours, carolState.signedIn, carolState.you], [false, true, null]);
+    for (const [method, path] of [["GET", "/api/cart"], ["GET", "/api/desk/selfcheck"], ["POST", "/api/auth/logout"]] as const) {
+      assert.equal((await as(ANNA, path, { method, body: method === "POST" ? {} : undefined })).status, 403, `${method} ${path}`);
+    }
+    assert.equal((await as(ANNA, "/api/desk/state")).body.signedIn, false, "nothing about the account is told");
+    assert.equal(JSON.parse(readFileSync(join(desk.dataDir, "auth.json"), "utf8")).token, "bob-token");
+    // A request Home Assistant names no user for gets nothing either.
+    assert.equal((await as({}, "/api/cart")).status, 403);
+  });
+
+  test("with allowed_users, someone who signed in earlier but is not on the list is refused", async () => {
+    await startAsHomeAssistant();
+    await as(ANNA, "/api/auth/login", { method: "POST", body: { token: "anna-token", countryCode: "NL" } });
+    const restarted = await runDesk({ ingressOnly: true, gateway: "127.0.0.1", dataDir: desk.dataDir, allowedUsers: ["bob"] });
+    const first = desk;
+    desk = restarted;
+    assert.equal((await as(ANNA, "/api/cart")).status, 403, "the list decides, not who signed in");
+    assert.equal((await as(BOB, "/api/cart")).status, 200);
+    await first.close();
+  });
+
+  test("without allowed_users, a refused user is told someone else signed in", async () => {
+    await startAsHomeAssistant();
+    await as(ANNA, "/api/auth/login", { method: "POST", body: { token: "anna-token", countryCode: "NL" } });
+    const state = (await as(BOB, "/api/desk/state")).body;
+    assert.deepEqual([state.notYours, state.refusedBy, state.you], [true, "owner", "bob"]);
   });
 
   test("signing out frees the account for the next person, and the rule survives a restart", async () => {

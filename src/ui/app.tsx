@@ -42,8 +42,9 @@ function Gate() {
     return (
       <main className="door">
         <div className="signin" role="alert">
-          <h1>{d.notYoursTitle}</h1>
-          <p>{d.notYoursText}</p>
+          <h1>{state.refusedBy === "list" ? d.noAccessTitle : d.notYoursTitle}</h1>
+          <p>{state.refusedBy === "list" ? d.noAccessText : d.notYoursText}</p>
+          {state.you && <p className="hint">{d.yourUserName.replace("{name}", state.you)}</p>}
         </div>
       </main>
     );

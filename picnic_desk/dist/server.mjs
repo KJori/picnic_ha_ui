@@ -4830,6 +4830,8 @@ var DeskRoutes = class {
     if (!this.desk.mayUse(user)) {
       return {
         notYours: true,
+        refusedBy: this.desk.listDecides ? "list" : "owner",
+        you: user?.name || null,
         signedIn: false,
         expired: false,
         awaitingCode: false,
@@ -4842,6 +4844,8 @@ var DeskRoutes = class {
     }
     return {
       notYours: false,
+      refusedBy: null,
+      you: null,
       signedIn: session.signedIn && !this.desk.expired,
       expired: session.signedIn && this.desk.expired,
       awaitingCode: session.partialToken() !== null,
@@ -5143,14 +5147,14 @@ var DeskRoutes = class {
     });
     await run("access", "Who may use it", async () => {
       const owner = this.desk.session.owner;
-      const others = (this.desk.options.allowedUsers ?? []).filter((name) => name.trim());
       if (!this.desk.options.ingressOnly) return "anyone who can reach the app (not running under Home Assistant)";
+      if (this.desk.listDecides) return `only ${this.desk.allowedUsers.join(", ")} (allowed_users)`;
       if (!owner) {
         throw new Error(
-          "anyone in Home Assistant: this sign-in is not tied to a Home Assistant user. Sign out and in again to tie it to you."
+          "anyone in Home Assistant: this sign-in is not tied to a Home Assistant user. Sign out and in again to tie it to you, or name who may use it under allowed_users."
         );
       }
-      return `${owner.displayName || owner.name}${others.length ? ` and ${others.join(", ")}` : " only"}`;
+      return `${owner.displayName || owner.name} only (who signed in; allowed_users is empty)`;
     });
     await run("search", "Search", async () => {
       const word = SELF_CHECK_WORD[this.desk.session.country];
@@ -5762,18 +5766,32 @@ var Desk = class {
     const name = one("x-remote-user-name");
     return { id, name, displayName: one("x-remote-user-display-name") || name };
   }
+  /** The user names in `allowed_users`, in lower case. */
+  get allowedUsers() {
+    return (this.options.allowedUsers ?? []).map((name) => name.trim().toLowerCase()).filter(Boolean);
+  }
   /**
-   * The Picnic account belongs to the Home Assistant user who signed in to it
-   * here, and to the users named in the app's `allowed_users` option.
-   * Signing in is open to everyone; a session from before this rule, or a
-   * request Home Assistant did not name a user for, is not restricted.
+   * Whether `allowed_users` alone decides who may use the app. Under Home
+   * Assistant, a list that names anyone does: the app shows in every user's
+   * sidebar (non-admin accounts can only open it that way), so only the
+   * listed users may use it, signing in included, and nobody else, an
+   * administrator or the person who signed in neither.
+   */
+  get listDecides() {
+    return Boolean(this.options.ingressOnly) && this.allowedUsers.length > 0;
+  }
+  /**
+   * With `allowed_users` set, only the users it names (see `listDecides`).
+   * Without it, the Picnic account belongs to the Home Assistant user who
+   * signed in to it here; signing in is open to everyone, and a session from
+   * before this rule, or a request Home Assistant did not name a user for, is
+   * not restricted.
    */
   mayUse(user) {
+    if (this.listDecides) return user !== null && user.name !== "" && this.allowedUsers.includes(user.name.toLowerCase());
     const owner = this.session.owner;
     if (!this.session.signedIn || !owner || !user) return true;
-    if (user.id === owner.id) return true;
-    const allowed = (this.options.allowedUsers ?? []).map((name) => name.trim().toLowerCase()).filter(Boolean);
-    return user.name !== "" && allowed.includes(user.name.toLowerCase());
+    return user.id === owner.id;
   }
   /** Answer one API request; also used inside the app (self-check, bought before). */
   async dispatch(request, segments, user = null) {
@@ -11608,7 +11626,7 @@ function startDesk(env = process.env) {
     pictureCacheMb,
     allowedUsers,
     ingressOnly: env.INGRESS_ONLY === "1",
-    version: true ? "1.0.4" : "dev",
+    version: true ? "1.0.5" : "dev",
     routes: VENDORED_ROUTES,
     demo: demo ? demoShop() : void 0
   });

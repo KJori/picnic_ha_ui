@@ -196,8 +196,11 @@ const desk = {
   checkNames: { account: "Account", access: "Who may use it", search: "Search", product: "Product page", pictures: "Pictures", basket: "Basket", slots: "Delivery times", categories: "Categories", recipes: "Recipes", deliveries: "Orders" },
   loading: "Loading",
   routeMap: "The van's route",
+  noAccessTitle: "No access to Picnic",
+  noAccessText: "This Home Assistant user may not use Picnic here. An administrator can give you access by adding your Home Assistant user name under allowed_users in the app's configuration.",
+  yourUserName: "Your user name: {name}",
   notYoursTitle: "Not your Picnic account",
-  notYoursText: "Another Home Assistant user connected their Picnic account here. They can let you use it by adding your Home Assistant user name under allowed_users in the app's configuration.",
+  notYoursText: "Another Home Assistant user connected their Picnic account here. To share it, an administrator lists the Home Assistant user names that may use it, theirs and yours, under allowed_users in the app's configuration.",
   signOutFailed: "Signing out did not work. Please try again.",
 };
 
@@ -376,8 +379,11 @@ const nl: DeskStrings = {
   checkNames: { account: "Account", access: "Wie het mag gebruiken", search: "Zoeken", product: "Productpagina", pictures: "Afbeeldingen", basket: "Mandje", slots: "Bezorgmomenten", categories: "Categorieën", recipes: "Recepten", deliveries: "Bestellingen" },
   loading: "Laden",
   routeMap: "Route van de bus",
+  noAccessTitle: "Geen toegang tot Picnic",
+  noAccessText: "Deze Home Assistant-gebruiker mag Picnic hier niet gebruiken. Een beheerder kan je toegang geven door jouw Home Assistant-gebruikersnaam toe te voegen onder allowed_users in de configuratie van de app.",
+  yourUserName: "Jouw gebruikersnaam: {name}",
   notYoursTitle: "Niet jouw Picnic-account",
-  notYoursText: "Een andere Home Assistant-gebruiker heeft hier zijn Picnic-account gekoppeld. Die kan je toegang geven door jouw Home Assistant-gebruikersnaam toe te voegen onder allowed_users in de configuratie van de app.",
+  notYoursText: "Een andere Home Assistant-gebruiker heeft hier zijn Picnic-account gekoppeld. Om het te delen zet een beheerder de Home Assistant-gebruikersnamen die het mogen gebruiken, die van hen en de jouwe, onder allowed_users in de configuratie van de app.",
   signOutFailed: "Uitloggen lukte niet. Probeer het opnieuw.",
 };
 
@@ -554,8 +560,11 @@ const de: DeskStrings = {
   checkNames: { account: "Konto", access: "Wer es benutzen darf", search: "Suche", product: "Produktseite", pictures: "Bilder", basket: "Warenkorb", slots: "Lieferzeiten", categories: "Kategorien", recipes: "Rezepte", deliveries: "Bestellungen" },
   loading: "Wird geladen",
   routeMap: "Route des Lieferwagens",
+  noAccessTitle: "Kein Zugang zu Picnic",
+  noAccessText: "Dieser Home Assistant-Benutzer darf Picnic hier nicht verwenden. Ein Administrator kann dir Zugang geben, indem er deinen Home Assistant-Benutzernamen unter allowed_users in der Konfiguration der App einträgt.",
+  yourUserName: "Dein Benutzername: {name}",
   notYoursTitle: "Nicht dein Picnic-Konto",
-  notYoursText: "Ein anderer Home Assistant-Benutzer hat hier sein Picnic-Konto verbunden. Er kann dir Zugang geben, indem er deinen Home Assistant-Benutzernamen unter allowed_users in der Konfiguration der App einträgt.",
+  notYoursText: "Ein anderer Home Assistant-Benutzer hat hier sein Picnic-Konto verbunden. Zum Teilen trägt ein Administrator die Home Assistant-Benutzernamen, die es verwenden dürfen, seinen und deinen, unter allowed_users in der Konfiguration der App ein.",
   signOutFailed: "Abmelden hat nicht geklappt. Bitte versuche es noch einmal.",
 };
 
@@ -732,8 +741,11 @@ const fr: DeskStrings = {
   checkNames: { account: "Compte", access: "Qui peut l'utiliser", search: "Recherche", product: "Page produit", pictures: "Images", basket: "Panier", slots: "Créneaux de livraison", categories: "Catégories", recipes: "Recettes", deliveries: "Commandes" },
   loading: "Chargement",
   routeMap: "Itinéraire de la camionnette",
+  noAccessTitle: "Pas d'accès à Picnic",
+  noAccessText: "Cet utilisateur de Home Assistant ne peut pas utiliser Picnic ici. Un administrateur peut vous donner accès en ajoutant votre nom d'utilisateur Home Assistant sous allowed_users dans la configuration de l'app.",
+  yourUserName: "Votre nom d'utilisateur : {name}",
   notYoursTitle: "Ce n'est pas votre compte Picnic",
-  notYoursText: "Un autre utilisateur de Home Assistant a connecté son compte Picnic ici. Il peut vous y donner accès en ajoutant votre nom d'utilisateur Home Assistant sous allowed_users dans la configuration de l'app.",
+  notYoursText: "Un autre utilisateur de Home Assistant a connecté son compte Picnic ici. Pour le partager, un administrateur indique les noms d'utilisateur Home Assistant qui peuvent l'utiliser, le sien et le vôtre, sous allowed_users dans la configuration de l'app.",
   signOutFailed: "La déconnexion n'a pas fonctionné. Veuillez réessayer.",
 };
 
