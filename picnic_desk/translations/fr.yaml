@@ -9,5 +9,5 @@ configuration:
     name: Place pour les images (Mo)
     description: L'espace disque que peuvent occuper les images de produits et de recettes conservées. Une fois plein, les moins récemment affichées laissent la place.
   allowed_users:
-    name: Autres utilisateurs
-    description: Noms d'utilisateur Home Assistant (pas les noms affichés) qui peuvent utiliser votre compte Picnic ici, en plus de la personne qui s'y est connectée.
+    name: Utilisateurs
+    description: Les noms d'utilisateur Home Assistant (pas les noms affichés) qui peuvent utiliser Picnic ici ; personne d'autre, administrateurs compris. Vide signifie seulement la personne connectée à Picnic.

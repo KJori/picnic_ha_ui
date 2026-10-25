@@ -9,5 +9,5 @@ configuration:
     name: Ruimte voor afbeeldingen (MB)
     description: Hoeveel schijfruimte de bewaarde product- en receptafbeeldingen mogen innemen. Als het vol is, maken de langst niet getoonde plaats.
   allowed_users:
-    name: Andere gebruikers
-    description: Home Assistant-gebruikersnamen (geen weergavenamen) die je Picnic-account hier ook mogen gebruiken, naast degene die erop is ingelogd.
+    name: Gebruikers
+    description: De Home Assistant-gebruikersnamen (geen weergavenamen) die Picnic hier mogen gebruiken; niemand anders kan dat, ook beheerders niet. Leeg betekent alleen degene die op Picnic is ingelogd.

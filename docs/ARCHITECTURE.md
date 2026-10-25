@@ -92,10 +92,13 @@ one already shown, and fetches the basket again after a failure.
 
 - Who: only Home Assistant's ingress gateway may connect. Ingress names the
   Home Assistant user (`X-Remote-User-Id`, `-Name`, `-Display-Name`); those
-  headers are trusted only under the gateway rule. The user who signs in to
-  Picnic is recorded as the owner in `auth.json`; other users get 403
-  `NOT_YOUR_ACCOUNT` on every API route except `desk/state`, unless named in
-  `allowed_users` (`Desk.mayUse`).
+  headers are trusted only under the gateway rule. The panel is in every
+  user's sidebar (`panel_admin: false`), so non-admin accounts can open it;
+  `Desk.mayUse` decides. With `allowed_users` set, only the users it names
+  may use the app, signing in included; without it, the user who signs in to
+  Picnic is recorded as the owner in `auth.json` and is the only one. Anyone
+  else gets 403 `NOT_YOUR_ACCOUNT` on every API route except `desk/state`,
+  which says only why (`refusedBy`) and their own user name.
 - Changes: non-GET requests need the page's `X-Desk-Base` header (forcing a
   CORS preflight that is never granted) and are refused when the browser
   says they come from another site (`Sec-Fetch-Site`).

@@ -261,18 +261,34 @@ export class Desk {
     return { id, name, displayName: one("x-remote-user-display-name") || name };
   }
 
+  /** The user names in `allowed_users`, in lower case. */
+  get allowedUsers(): string[] {
+    return (this.options.allowedUsers ?? []).map((name) => name.trim().toLowerCase()).filter(Boolean);
+  }
+
   /**
-   * The Picnic account belongs to the Home Assistant user who signed in to it
-   * here, and to the users named in the app's `allowed_users` option.
-   * Signing in is open to everyone; a session from before this rule, or a
-   * request Home Assistant did not name a user for, is not restricted.
+   * Whether `allowed_users` alone decides who may use the app. Under Home
+   * Assistant, a list that names anyone does: the app shows in every user's
+   * sidebar (non-admin accounts can only open it that way), so only the
+   * listed users may use it, signing in included, and nobody else, an
+   * administrator or the person who signed in neither.
+   */
+  get listDecides(): boolean {
+    return Boolean(this.options.ingressOnly) && this.allowedUsers.length > 0;
+  }
+
+  /**
+   * With `allowed_users` set, only the users it names (see `listDecides`).
+   * Without it, the Picnic account belongs to the Home Assistant user who
+   * signed in to it here; signing in is open to everyone, and a session from
+   * before this rule, or a request Home Assistant did not name a user for, is
+   * not restricted.
    */
   mayUse(user: HaUser | null): boolean {
+    if (this.listDecides) return user !== null && user.name !== "" && this.allowedUsers.includes(user.name.toLowerCase());
     const owner = this.session.owner;
     if (!this.session.signedIn || !owner || !user) return true;
-    if (user.id === owner.id) return true;
-    const allowed = (this.options.allowedUsers ?? []).map((name) => name.trim().toLowerCase()).filter(Boolean);
-    return user.name !== "" && allowed.includes(user.name.toLowerCase());
+    return user.id === owner.id;
   }
 
   /** Answer one API request; also used inside the app (self-check, bought before). */

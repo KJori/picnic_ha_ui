@@ -4,6 +4,23 @@ All notable changes to Picnic Desk. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the version
 numbers [Semantic Versioning](https://semver.org/).
 
+## [1.0.5]
+
+### Changed
+
+- Home Assistant accounts that are not administrators can now use Picnic
+  Desk: the app shows in every user's sidebar, and `allowed_users` says who
+  may use it. With names in `allowed_users`, only those users can open it,
+  sign in, shop and sign out, and nobody else, administrators included. So an
+  administrator account you only use to manage Home Assistant can stay out.
+- **If you already use `allowed_users`, add your own user name to it too**:
+  signing in to Picnic no longer gives access by itself when the list has
+  names. Someone who is refused sees "No access to Picnic" and their user
+  name, so you know what to add.
+- With an empty `allowed_users`, nothing changes: whoever signs in to Picnic
+  is the only one who can use it. That can now be any Home Assistant user,
+  not only an administrator.
+
 ## [1.0.4]
 
 ### Changed

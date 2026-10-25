@@ -66,5 +66,6 @@ test("the app asks Home Assistant for nothing it does not need", () => {
     assert.ok(!config.includes(risky), risky);
   }
   assert.match(config, /^ingress: true$/m);
-  assert.match(config, /^panel_admin: true$/m);
+  // In every user's sidebar, so non-admin accounts named in allowed_users can open it; the app checks who may use it.
+  assert.match(config, /^panel_admin: false$/m);
 });

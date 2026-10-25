@@ -9,5 +9,5 @@ configuration:
     name: Room for pictures (MB)
     description: How much disk space the kept product and recipe pictures may take. The ones shown longest ago make room when it is full.
   allowed_users:
-    name: Other users
-    description: Home Assistant user names (not display names) that may use your Picnic account here, besides the person who signed in to it.
+    name: Users
+    description: The Home Assistant user names (not display names) that may use Picnic here; nobody else can, administrators included. Empty means only the person who signed in to Picnic.

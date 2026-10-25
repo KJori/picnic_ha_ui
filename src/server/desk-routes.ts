@@ -49,6 +49,10 @@ import { isObject } from "./store";
 export type DeskState = {
   /** Home Assistant let this person in, but the Picnic account here is someone else's. */
   notYours: boolean;
+  /** Why not, when `notYours`: "list" when they are not in allowed_users, "owner" when someone else signed in. */
+  refusedBy: "list" | "owner" | null;
+  /** This person's Home Assistant user name, to tell the administrator; only sent when they are refused. */
+  you: string | null;
   signedIn: boolean;
   expired: boolean;
   awaitingCode: boolean;
@@ -281,6 +285,8 @@ export class DeskRoutes {
       // Nothing about the account for someone it does not belong to.
       return {
         notYours: true,
+        refusedBy: this.desk.listDecides ? "list" : "owner",
+        you: user?.name || null,
         signedIn: false,
         expired: false,
         awaitingCode: false,
@@ -293,6 +299,8 @@ export class DeskRoutes {
     }
     return {
       notYours: false,
+      refusedBy: null,
+      you: null,
       signedIn: session.signedIn && !this.desk.expired,
       expired: session.signedIn && this.desk.expired,
       awaitingCode: session.partialToken() !== null,
@@ -627,14 +635,14 @@ export class DeskRoutes {
     });
     await run("access", "Who may use it", async () => {
       const owner = this.desk.session.owner;
-      const others = (this.desk.options.allowedUsers ?? []).filter((name) => name.trim());
       if (!this.desk.options.ingressOnly) return "anyone who can reach the app (not running under Home Assistant)";
+      if (this.desk.listDecides) return `only ${this.desk.allowedUsers.join(", ")} (allowed_users)`;
       if (!owner) {
         throw new Error(
-          "anyone in Home Assistant: this sign-in is not tied to a Home Assistant user. Sign out and in again to tie it to you."
+          "anyone in Home Assistant: this sign-in is not tied to a Home Assistant user. Sign out and in again to tie it to you, or name who may use it under allowed_users."
         );
       }
-      return `${owner.displayName || owner.name}${others.length ? ` and ${others.join(", ")}` : " only"}`;
+      return `${owner.displayName || owner.name} only (who signed in; allowed_users is empty)`;
     });
     await run("search", "Search", async () => {
       const word = SELF_CHECK_WORD[this.desk.session.country];

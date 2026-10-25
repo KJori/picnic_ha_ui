@@ -984,6 +984,26 @@ describe("Picnic Desk in a browser", () => {
     await page.context().close();
   });
 
+  test("someone not in allowed_users sees why, with their own user name, and nothing else", async () => {
+    const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+    const page = await context.newPage();
+    // Under Home Assistant the server answers this for a user the list leaves out.
+    await page.route("**/api/desk/state", async (route) => {
+      const answer = await route.fetch();
+      const state = await answer.json();
+      await route.fulfill({
+        response: answer,
+        json: { ...state, notYours: true, refusedBy: "list", you: "beheer", signedIn: false, payment: null },
+      });
+    });
+    await page.goto(base);
+    await page.getByRole("heading", { name: "No access to Picnic" }).waitFor();
+    await page.getByText("Your user name: beheer").waitFor();
+    assert.equal(await page.locator(".views, .signin form, #q").count(), 0, "no shop and no sign-in");
+    await shot(page, "17-no-access");
+    await context.close();
+  });
+
   test("a page left open while the app was updated says so and offers a reload", async () => {
     const page = await openPage();
     await signIn(page);
