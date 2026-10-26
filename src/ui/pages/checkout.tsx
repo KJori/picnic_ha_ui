@@ -23,9 +23,10 @@ import type {
 } from "@/lib/core/checkout-types";
 
 import { SlotLine } from "../components/basket";
-import { refreshCurrentOrders } from "../state/current-orders";
+import { refreshCurrentOrders, useCurrentOrders } from "../state/current-orders";
 import { Confirm, Dialog, ErrorView, Price, Spinner, useDates, useLoad, useTitle, useToast } from "../components/common";
 import { api } from "../lib/api";
+import { orderAtSameTime } from "../lib/orders";
 import { paymentAddress } from "../lib/payment";
 import { href, navigate } from "../lib/router";
 import { cartModel, useCart } from "../state/cart";
@@ -89,6 +90,7 @@ export function CheckoutPage({ returning = false }: { returning?: boolean }) {
   const toast = useToast();
   useTitle(returning ? t.checkoutReturnTitle : t.checkoutPageTitle);
   const model = useCart();
+  const orders = useCurrentOrders();
   const dates = useDates();
   const [profile] = useLoad<PaymentProfileData | null>("payment-profile", async (signal) => {
     const result = await api<PaymentProfileData>("cart/checkout/payment-profile", { signal });
@@ -175,6 +177,8 @@ export function CheckoutPage({ returning = false }: { returning?: boolean }) {
   }
 
   const cart = model.cart;
+  // Added to an order already placed: Picnic asks no minimum for that.
+  const joins = orderAtSameTime(cart?.selectedSlot, orders);
   const preferred =
     profile.status === "ready" && profile.data
       ? (profile.data.storedOptions.find((o) => o.id === profile.data!.preferredPaymentOptionId) ?? profile.data.storedOptions[0])
@@ -193,11 +197,12 @@ export function CheckoutPage({ returning = false }: { returning?: boolean }) {
           <li className="step">
             <h3>{t.deliveriesWindowTitle}</h3>
             <SlotLine cart={cart} />
+            {joins?.windowStart && <p>{d.addsToOrder.replace("{window}", dates.window(joins.windowStart, joins.windowEnd, d.to))}</p>}
             {!cart.selectedSlot?.isExplicitSelection && <p className="hint">{d.chooseSlotFirst}</p>}
           </li>
           <li className="step">
             <h3>{d.checkOrder}</h3>
-            {!isMinimumOrderMet(cart.totalPrice, cart.minimumOrderValue) ? (
+            {!joins && !isMinimumOrderMet(cart.totalPrice, cart.minimumOrderValue) ? (
               <p className="gone">{t.checkoutMinimumNotMet}</p>
             ) : started ? (
               <p>

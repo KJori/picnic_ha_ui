@@ -453,3 +453,22 @@ test("today and tomorrow are counted in the shop's time zone", async () => {
   assert.equal(dayOffset("2026-10-26T09:00:00+01:00", now, zone), 9, "across the change to winter time");
   assert.equal(dayOffset("nonsense", now, zone), null);
 });
+
+test("a basket for the time of an order already placed is added to it, so no minimum applies", async () => {
+  const { orderAtSameTime } = await import("../src/ui/lib/orders");
+  const order = (id: string, status: string, start: string, end: string) => ({
+    id, status, creationTime: "2026-10-25T10:00:00Z", windowStart: start, windowEnd: end,
+    deliveryWindowText: "", orderCount: 1, totalPrice: 5000, itemCount: 10,
+  });
+  const orders = [
+    order("done", "COMPLETED", "2026-10-27T17:00:00.000+01:00", "2026-10-27T18:00:00.000+01:00"),
+    order("next", "CURRENT", "2026-10-27T17:00:00.000+01:00", "2026-10-27T18:00:00.000+01:00"),
+  ];
+  // The same moment written in another zone is the same time.
+  assert.equal(orderAtSameTime({ windowStart: "2026-10-27T16:00:00.000Z", windowEnd: "2026-10-27T17:00:00.000Z" }, orders)?.id, "next");
+  assert.equal(orderAtSameTime({ windowStart: "2026-10-27T18:00:00.000+01:00", windowEnd: "2026-10-27T19:00:00.000+01:00" }, orders), null);
+  assert.equal(orderAtSameTime({ windowStart: "2026-10-27T17:00:00.000+01:00", windowEnd: "2026-10-27T19:00:00.000+01:00" }, orders), null, "a longer window is another time");
+  assert.equal(orderAtSameTime(null, orders), null);
+  assert.equal(orderAtSameTime({ windowStart: "2026-10-27T17:00:00.000+01:00" }, null), null, "orders not known yet");
+  assert.equal(orderAtSameTime({ windowStart: "", windowEnd: "" }, orders), null);
+});

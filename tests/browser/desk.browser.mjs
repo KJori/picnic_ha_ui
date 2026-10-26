@@ -284,6 +284,53 @@ describe("Picnic Desk in a browser", () => {
     await page.context().close();
   });
 
+  test("adding to an order already placed: its time is marked, and no minimum order applies", async () => {
+    const page = await openPage();
+    await signIn(page);
+    await page.evaluate(() => fetch("api/cart", { method: "DELETE", headers: { "x-desk-base": location.href } }));
+    const slots = await page.evaluate(() => fetch("api/cart/delivery-slots").then((r) => r.json()));
+    const slot = slots.dayGroups.flatMap((day) => [...day.greenSlots, ...day.regularSlots]).find((s) => s.isAvailable);
+    // An order placed for that time (Picnic writes the same moment in its own zone).
+    const order = {
+      id: "placed-order", status: "CURRENT", creationTime: new Date().toISOString(),
+      windowStart: new Date(slot.windowStart).toISOString().replace("Z", "+00:00"), windowEnd: slot.windowEnd,
+      deliveryWindowText: "", orderCount: 1, totalPrice: 5430, itemCount: 12,
+    };
+    await page.route(/\/api\/deliveries\?status=CURRENT$/, (route) => route.fulfill({ json: { deliveries: [order] } }));
+    await page.reload();
+    await page.locator(".views").waitFor();
+
+    // One cheap product: below the minimum for a new order.
+    await page.locator("#q").fill("tofu");
+    await page.locator("#q").press("Enter");
+    await cell(page, "s1004").locator(".more").click();
+    await line(page, "s1004").waitFor();
+    const checkout = page.locator(".receipt").getByRole("button", { name: "Check out" });
+    assert.equal(await checkout.isDisabled(), true, "a new order needs the minimum");
+    await page.locator(".receipt .minimum").getByText(/Adding to an order you placed\?/).waitFor();
+
+    // The order's time is marked in the week; choosing it adds the basket to the order.
+    await page.locator(".receipt .slot-line button").click();
+    const sheet = page.getByRole("dialog");
+    const mine = sheet.locator(".slot").filter({ hasText: "your order" });
+    await mine.waitFor();
+    assert.equal(await mine.count(), 1);
+    await shot(page, "05b-slot-with-order");
+    await mine.click();
+    await sheet.waitFor({ state: "detached" });
+    await page.locator(".receipt .joins-order").getByText(/^Added to your order for .+: no minimum order\.$/).waitFor();
+    assert.equal(await page.locator(".receipt .minimum").count(), 0, "no minimum bar");
+    assert.equal(await checkout.isDisabled(), false);
+    await checkout.click();
+    await page.getByRole("button", { name: "Continue to payment" }).waitFor();
+    assert.equal(await page.getByText("Below the minimum order value.").count(), 0);
+
+    await page.unroute(/\/api\/deliveries\?status=CURRENT$/);
+    await page.evaluate(() => fetch("api/cart", { method: "DELETE", headers: { "x-desk-base": location.href } }));
+    clean(page);
+    await page.context().close();
+  });
+
   test("recipes: price on the card, portions, unticking, swapping, adding as a recipe", async () => {
     const page = await openPage();
     await signIn(page);

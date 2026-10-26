@@ -418,6 +418,8 @@ button { cursor: pointer; }
 .minimum .bar { height: .4rem; background: color-mix(in srgb, var(--paper-ink) 14%, transparent); }
 .minimum .bar i { display: block; height: 100%; width: 0; background: var(--paper-ink); transition: width .25s ease; }
 .minimum.met .bar i { background: #1f7a4d; }
+.joins-order { margin-top: .6rem; }
+.slot .your-order { display: block; font-weight: 400; }
 
 .receipt-foot { display: flex; justify-content: space-between; gap: 1rem; margin-top: .9rem; padding-top: .6rem; border-top: 1px dashed var(--paper-rule); font-family: var(--ui); font-size: .875rem; }
 .receipt-foot .who { margin-left: auto; text-align: right; }

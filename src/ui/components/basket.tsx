@@ -11,10 +11,12 @@ import type { CartData, CartFooterData, CartItem, CartRecipeGroup, DepositEntry,
 import { api } from "../lib/api";
 import { picnicInk } from "../lib/colour";
 import { byTime } from "../lib/format";
+import { orderAtSameTime } from "../lib/orders";
 import { href, navigate } from "../lib/router";
 import { cartModel, useCart } from "../state/cart";
 import { SaveListDialog } from "../pages/lists";
 import { forgetAccount, useProfileName } from "../state/account";
+import { useCurrentOrders } from "../state/current-orders";
 import { itemsFromBasket } from "../state/lists";
 import { useSession, useT } from "../state/session";
 import { Dialog, ErrorView, Loaded, Spinner, Stepper, useDates, useLoad, useMoney, useToast } from "./common";
@@ -159,6 +161,7 @@ function SlotPicker({ onClose, onChosen }: { onClose: () => void; onChosen: (car
   const [load, reload] = useLoad<DeliverySlotPickerData>("slots", (signal) => api("cart/delivery-slots", { signal }));
   const [choosing, setChoosing] = useState<string | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
+  const orders = useCurrentOrders();
 
   const choose = async (slot: DeliverySlotData) => {
     setChoosing(slot.slotId);
@@ -201,6 +204,7 @@ function SlotPicker({ onClose, onChosen }: { onClose: () => void; onChosen: (car
                       >
                         {dates.clock(slot.windowStart)}–{dates.clock(slot.windowEnd)}
                         {slot.isGreenChoice && <span aria-label={t.greenChoiceLabel}> 🌿</span>}
+                        {orderAtSameTime(slot, orders) && <small className="your-order">{d.yourOrderHere}</small>}
                         {choosing === slot.slotId && <span className="spinner small" aria-hidden="true" />}
                       </button>
                     ))}
@@ -293,8 +297,12 @@ export function Receipt() {
   const data = cart.cart;
   const count = cart.count;
   const total = data?.totalPrice ?? 0;
-  const minimum = data?.minimumOrderValue ?? null;
+  const orders = useCurrentOrders();
+  // Added to an order already placed: Picnic asks no minimum for that.
+  const joins = orderAtSameTime(data?.selectedSlot, orders);
+  const minimum = joins ? null : (data?.minimumOrderValue ?? null);
   const short = minimum ? minimum - total : 0;
+  const dates = useDates();
 
   return (
     <div className="receipt" aria-busy={cart.busy}>
@@ -328,7 +336,15 @@ export function Receipt() {
                     ? d.toGo.replace("{short}", money(short)).replace("{minimum}", money(minimum))
                     : d.aboveMinimum.replace("{minimum}", money(minimum))}
                 </p>
+                {short > 0 && orders?.some((o) => o.windowStart && Date.parse(o.windowStart) > Date.now()) && (
+                  <p className="hint">{d.addToOrderHint}</p>
+                )}
               </div>
+            )}
+            {joins && (
+              <p className="joins-order">
+                {d.addsToOrder.replace("{window}", dates.window(joins.windowStart!, joins.windowEnd, d.to))}
+              </p>
             )}
             <SlotLine cart={data} />
             {data.items.length > 0 && (
