@@ -124,6 +124,10 @@ basket as a till receipt on the right.
   Picnic in the background; if Picnic refuses one, the receipt is fetched
   again. Under the total: how far you are from the minimum order, the
   delivery time (**Change** opens the week), and **Check out**.
+- **Adding to an order you placed**: choose that order's delivery time (the
+  week marks it "your order"). The basket is then added to that order, as in
+  the Picnic app, and the minimum order does not apply: the receipt says
+  "Added to your order for …".
 - **Check out**: Picnic checks the basket (and may ask an age check), then
   **Pay at the bank** opens the bank in a new tab. The app watches the payment
   and confirms the order as soon as Picnic says it is paid, also when you close

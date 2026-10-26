@@ -4,6 +4,16 @@ All notable changes to Picnic Desk. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the version
 numbers [Semantic Versioning](https://semver.org/).
 
+## [1.0.6]
+
+### Fixed
+
+- Adding to an order you already placed works as in the Picnic app: with that
+  order's delivery time chosen, you can check out any amount, also below the
+  minimum order. The receipt says the basket is added to that order, and the
+  week of delivery times marks the time of your order. Before, the desk asked
+  for the minimum order anyway.
+
 ## [1.0.5]
 
 ### Changed
