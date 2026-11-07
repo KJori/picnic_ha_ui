@@ -305,6 +305,486 @@ var require_page_format_error = __commonJS({
   }
 });
 
+// node_modules/picnic-api/lib/pages/pml.js
+var require_pml = __commonJS({
+  "node_modules/picnic-api/lib/pages/pml.js"(exports) {
+    "use strict";
+    Object.defineProperty(exports, "__esModule", { value: true });
+    exports.findNodeByIdPrefix = exports.findNodeById = exports.isDefaultTextColor = void 0;
+    exports.stripColorTags = stripColorTags2;
+    exports.cleanMarkdown = cleanMarkdown2;
+    exports.extractHighlightColor = extractHighlightColor;
+    exports.walkNodes = walkNodes;
+    exports.findNode = findNode;
+    exports.ancestorsOf = ancestorsOf;
+    exports.collectPropertyValues = collectPropertyValues2;
+    exports.collectMarkdowns = collectMarkdowns2;
+    exports.childrenOf = childrenOf;
+    exports.collectPriceNodes = collectPriceNodes;
+    exports.collectBadges = collectBadges;
+    exports.collectNutritionRows = collectNutritionRows;
+    exports.accordionItems = accordionItems;
+    exports.findPmlComponent = findPmlComponent;
+    exports.analyticsContexts = analyticsContexts;
+    var DEFAULT_TEXT_COLORS = /* @__PURE__ */ new Set(["#333333", "#5b534e", "#787570"]);
+    var isNode = (value) => typeof value === "object" && value !== null && !Array.isArray(value);
+    function stripColorTags2(markdown) {
+      return markdown.replace(/#\([^)]+\)/g, "").trim();
+    }
+    function cleanMarkdown2(markdown) {
+      return stripColorTags2(markdown).replace(/\*\*/g, "").replace(/__/g, "").replace(/ /g, " ").trim();
+    }
+    function extractHighlightColor(markdown) {
+      for (const match of markdown.matchAll(/#\(([^)]+)\)/g)) {
+        if (!DEFAULT_TEXT_COLORS.has(match[1].toLowerCase()))
+          return match[1];
+      }
+      return null;
+    }
+    var isDefaultTextColor = (color) => DEFAULT_TEXT_COLORS.has(color.toLowerCase());
+    exports.isDefaultTextColor = isDefaultTextColor;
+    function walkNodes(node, visit) {
+      if (Array.isArray(node)) {
+        node.forEach((child) => walkNodes(child, visit));
+      } else if (isNode(node)) {
+        visit(node);
+        Object.values(node).forEach((child) => walkNodes(child, visit));
+      }
+    }
+    function findNode(node, predicate) {
+      if (Array.isArray(node)) {
+        for (const child of node) {
+          const found = findNode(child, predicate);
+          if (found)
+            return found;
+        }
+        return null;
+      }
+      if (!isNode(node))
+        return null;
+      if (predicate(node))
+        return node;
+      for (const child of Object.values(node)) {
+        const found = findNode(child, predicate);
+        if (found)
+          return found;
+      }
+      return null;
+    }
+    function ancestorsOf(root, target) {
+      const path = [];
+      const visit = (node) => {
+        if (node === target)
+          return true;
+        if (Array.isArray(node))
+          return node.some(visit);
+        if (!isNode(node))
+          return false;
+        path.push(node);
+        if (Object.values(node).some(visit))
+          return true;
+        path.pop();
+        return false;
+      };
+      return visit(root) ? path.reverse() : [];
+    }
+    var findNodeById2 = (node, id) => findNode(node, (n) => n.id === id);
+    exports.findNodeById = findNodeById2;
+    var findNodeByIdPrefix2 = (node, prefix) => findNode(node, (n) => typeof n.id === "string" && n.id.startsWith(prefix));
+    exports.findNodeByIdPrefix = findNodeByIdPrefix2;
+    function collectPropertyValues2(node, key) {
+      const values = [];
+      walkNodes(node, (n) => {
+        if (key in n)
+          values.push(n[key]);
+      });
+      return values;
+    }
+    function collectMarkdowns2(node) {
+      return collectPropertyValues2(node, "markdown").filter((m) => typeof m === "string");
+    }
+    function childrenOf(node) {
+      const children = node.children ?? node.child;
+      if (Array.isArray(children))
+        return children.filter(isNode);
+      return isNode(children) ? [children] : [];
+    }
+    function collectPriceNodes(node) {
+      const prices = [];
+      walkNodes(node, (n) => {
+        if (n.type === "PRICE" && typeof n.price === "number") {
+          prices.push({ price: n.price, isCrossed: n.isCrossed === true, color: typeof n.color === "string" ? n.color : null });
+        }
+      });
+      return prices;
+    }
+    function collectBadges(node) {
+      const badges = [];
+      const visit = (n) => {
+        if (Array.isArray(n))
+          return n.forEach(visit);
+        if (!isNode(n))
+          return;
+        if (n.type === "CONTAINER" && typeof n.backgroundColor === "string" && typeof n.borderRadius === "number") {
+          const markdown = collectMarkdowns2(n)[0];
+          if (markdown) {
+            const textColor = extractHighlightColor(markdown) ?? collectPropertyValues2(n, "textAttributes").map((attributes) => isNode(attributes) ? attributes.color : void 0).find((color) => typeof color === "string");
+            badges.push({ text: cleanMarkdown2(markdown), textColor: textColor ?? "#333333", backgroundColor: n.backgroundColor });
+            return;
+          }
+        }
+        Object.values(n).forEach(visit);
+      };
+      visit(node);
+      return badges;
+    }
+    function collectNutritionRows(node) {
+      const rows = [];
+      const visit = (n) => {
+        if (Array.isArray(n))
+          return n.forEach(visit);
+        if (!isNode(n))
+          return;
+        if (n.type === "STACK" && n.axis === "HORIZONTAL" && (n.distribution === "SPACE_BETWEEN" || n.distribution === "END")) {
+          const texts = childrenOf(n).filter((c) => c.type === "RICH_TEXT" && typeof c.markdown === "string");
+          if (texts.length > 0) {
+            rows.push({
+              label: stripColorTags2(texts[0].markdown),
+              value: texts[1] ? stripColorTags2(texts[1].markdown) : null,
+              isCategory: texts[0].textType === "HEADLINE2",
+              backgroundColor: typeof n.backgroundColor === "string" ? n.backgroundColor : null
+            });
+            return;
+          }
+        }
+        Object.values(n).forEach(visit);
+      };
+      visit(node);
+      return rows;
+    }
+    function accordionItems(accordion) {
+      const items = collectPropertyValues2(accordion, "items")[0];
+      return Array.isArray(items) ? items.filter(isNode) : [];
+    }
+    function findPmlComponent(node) {
+      const found = findNode(node, (n) => isNode(n.pml) && isNode(n.pml.component));
+      return found ? found.pml.component : null;
+    }
+    function analyticsContexts(node) {
+      const analytics = node.analytics;
+      const contexts = isNode(analytics) ? analytics.contexts : void 0;
+      return Array.isArray(contexts) ? contexts.filter(isNode) : [];
+    }
+  }
+});
+
+// node_modules/picnic-api/lib/domains/recipe/lists.js
+var require_lists = __commonJS({
+  "node_modules/picnic-api/lib/domains/recipe/lists.js"(exports) {
+    "use strict";
+    Object.defineProperty(exports, "__esModule", { value: true });
+    exports.parseMinutes = parseMinutes;
+    exports.readRecipeTile = readRecipeTile;
+    exports.extractRecipeTiles = extractRecipeTiles;
+    exports.extractRecipeOverview = extractRecipeOverview;
+    exports.extractRecipeCategory = extractRecipeCategory;
+    exports.extractRecipeCategoryGroup = extractRecipeCategoryGroup;
+    var pml_1 = require_pml();
+    var RECIPE_SCHEMA = "iglu:tech.picnic.snowplow.analytics/recipe/jsonschema/";
+    var AISLE_SCHEMA = "iglu:tech.picnic.snowplow.analytics/aisle/jsonschema/";
+    var PAGE_SECTION_SCHEMA = "iglu:tech.picnic.snowplow.analytics/page_section/jsonschema/";
+    var PML_COMPONENT_SCHEMA = "iglu:tech.picnic.snowplow.analytics/pml_component/jsonschema/";
+    var CATEGORY_LINK = /id=meals-category(-group)?-page,(?:category_id|group_name)=([^,&]+)/;
+    function parseMinutes(text3) {
+      const sum = text3.match(/^(\d+(?:\s*\+\s*\d+)*)\s*min/i)?.[1];
+      if (sum)
+        return sum.split("+").reduce((total, part) => total + Number(part.trim()), 0);
+      const hours = text3.match(/(\d+)\s*(?:uur|u|std|h)\b/i)?.[1];
+      const minutes = text3.match(/(\d+)\s*min/i)?.[1];
+      if (hours === void 0 && minutes === void 0)
+        return null;
+      return Number(hours ?? 0) * 60 + Number(minutes ?? 0);
+    }
+    function recipeContext(tile) {
+      return (0, pml_1.analyticsContexts)(tile).find((c) => c.schema?.startsWith(RECIPE_SCHEMA) && typeof c.data?.recipe_id === "string")?.data;
+    }
+    function visibleTexts(node, texts = []) {
+      if (Array.isArray(node))
+        node.forEach((child) => visibleTexts(child, texts));
+      else if (typeof node === "object" && node !== null) {
+        const record = node;
+        if (record.isHidden !== void 0 && record.isHidden !== false)
+          return texts;
+        if (record.type === "RICH_TEXT" && typeof record.markdown === "string")
+          texts.push({ markdown: record.markdown, textType: record.textType });
+        for (const [key, value] of Object.entries(record))
+          if (key !== "analytics")
+            visibleTexts(value, texts);
+      }
+      return texts;
+    }
+    function readRecipeTile(tile) {
+      const recipe = recipeContext(tile);
+      if (!recipe)
+        return null;
+      const texts = visibleTexts(tile.pml).map((t) => ({ text: (0, pml_1.cleanMarkdown)(t.markdown), textType: t.textType })).filter((t) => t.text);
+      const analyticsName = typeof recipe.recipe_name === "string" ? recipe.recipe_name.trim() : "";
+      const shownName = analyticsName ? texts.findIndex((t) => t.text === analyticsName) : -1;
+      const subtitle1 = texts.findIndex((t) => t.textType === "SUBTITLE1");
+      const hasTextTypes = texts.some((t) => t.textType !== void 0);
+      const nameIndex = shownName >= 0 ? shownName : subtitle1 >= 0 || hasTextTypes ? subtitle1 : 0;
+      const name = analyticsName || (nameIndex >= 0 ? texts[nameIndex].text : "");
+      const after = nameIndex >= 0 ? texts.slice(nameIndex + 1).filter((t) => t.text !== ">") : [];
+      const subtitle = after.find((t) => t.textType === "SUBTITLE2")?.text ?? null;
+      const tags = after.filter((t) => t.textType !== "SUBTITLE2").map((t) => t.text);
+      const image = (0, pml_1.findNode)(tile.pml, (n) => n.type === "IMAGE" && typeof n.source?.id === "string");
+      const imageType = recipe.recipe_image_type ?? recipe.image_type;
+      return {
+        id: recipe.recipe_id,
+        name,
+        imageType: typeof imageType === "string" ? imageType : null,
+        imageId: image ? image.source.id : null,
+        subtitle,
+        tags,
+        cookingTimeMinutes: firstMinutes(tags)
+      };
+    }
+    var firstMinutes = (tags) => tags.map(parseMinutes).find((minutes) => minutes !== null) ?? null;
+    function extractRecipeTiles(page) {
+      const recipes = /* @__PURE__ */ new Map();
+      walkTiles(page, (tile) => {
+        const recipe = readRecipeTile(tile);
+        if (recipe && !recipes.has(recipe.id))
+          recipes.set(recipe.id, recipe);
+      });
+      return [...recipes.values()];
+    }
+    function walkTiles(node, visit) {
+      if (Array.isArray(node))
+        return node.forEach((child) => walkTiles(child, visit));
+      if (typeof node !== "object" || node === null)
+        return;
+      const record = node;
+      if (record.type === "PML" && recipeContext(record))
+        return visit(record);
+      Object.values(record).forEach((child) => walkTiles(child, visit));
+    }
+    function categoryLink(deeplink, name, imageId) {
+      const match = deeplink.match(CATEGORY_LINK);
+      if (!match)
+        return null;
+      return { type: match[1] ? "group" : "category", id: decodeURIComponent(match[2]), name, imageId };
+    }
+    function extractRecipeOverview(page) {
+      const sections = /* @__PURE__ */ new Map();
+      walkTiles(page, (tile) => {
+        const aisle = (0, pml_1.analyticsContexts)(tile).find((c) => c.schema?.startsWith(AISLE_SCHEMA))?.data;
+        const recipe = readRecipeTile(tile);
+        if (!aisle || !recipe || typeof aisle.assortment_aisle !== "string")
+          return;
+        const key = `${aisle.aisle_ranking}:${aisle.assortment_aisle}`;
+        let section = sections.get(key);
+        if (!section) {
+          const pill = typeof aisle.pill_display_name === "string" ? aisle.pill_display_name : null;
+          section = { title: aisle.assortment_aisle, pill, recipes: [], rank: Number(aisle.aisle_ranking ?? sections.size), ids: /* @__PURE__ */ new Set() };
+          sections.set(key, section);
+        }
+        if (!section.ids.has(recipe.id)) {
+          section.ids.add(recipe.id);
+          section.recipes.push(recipe);
+        }
+      });
+      const categorySections = /* @__PURE__ */ new Map();
+      (0, pml_1.walkNodes)(page, (node) => {
+        if (node.type !== "PML")
+          return;
+        const contexts = (0, pml_1.analyticsContexts)(node);
+        const deeplink = contexts.find((c) => c.schema?.startsWith(PML_COMPONENT_SCHEMA))?.data?.deeplink;
+        const heading = contexts.find((c) => c.schema?.startsWith(PAGE_SECTION_SCHEMA))?.data?.name;
+        if (typeof deeplink !== "string" || typeof heading !== "string")
+          return;
+        const component = node.pml?.component;
+        const name = typeof component?.accessibilityLabel === "string" ? component.accessibilityLabel : "";
+        const image = (0, pml_1.findNode)(component, (n) => n.type === "IMAGE");
+        const link = categoryLink(deeplink, name, typeof image?.source?.id === "string" ? image.source.id : null);
+        if (!link || !name)
+          return;
+        const section = categorySections.get(heading) ?? { title: heading, categories: [] };
+        if (!section.categories.some((c) => c.type === link.type && c.id === link.id))
+          section.categories.push(link);
+        categorySections.set(heading, section);
+      });
+      return {
+        sections: [...sections.values()].sort((a, b) => a.rank - b.rank).map(({ title, pill, recipes }) => ({ title, pill, recipes })),
+        categorySections: [...categorySections.values()]
+      };
+    }
+    var asRecord2 = (value) => typeof value === "object" && value !== null && !Array.isArray(value) ? value : null;
+    var asString = (value) => typeof value === "string" && value !== "" ? value : null;
+    function findRscNode(nodes, component) {
+      for (const node of nodes) {
+        if (node.component === component)
+          return node;
+        const found = findRscNode(node.children, component);
+        if (found)
+          return found;
+      }
+      return null;
+    }
+    function readRscRecipeTile(item) {
+      const tile = asRecord2(item);
+      const id = asString(tile?.id);
+      if (!tile || !id || tile.sellableType !== "SELLING_GROUP")
+        return null;
+      const text3 = asRecord2(tile.text);
+      const tags = (Array.isArray(text3?.tags) ? text3.tags : []).flatMap((tag) => asString(asRecord2(tag)?.text) ?? []);
+      return {
+        id,
+        name: asString(asRecord2(text3?.title)?.text) ?? "",
+        imageType: null,
+        imageId: asString(asRecord2(tile.image)?.imageId),
+        subtitle: asString(asRecord2(text3?.subtitle)?.text),
+        tags,
+        cookingTimeMinutes: firstMinutes(tags)
+      };
+    }
+    function extractRecipeCategory(categoryId, content) {
+      const items = findRscNode(content.nodes, "vertical-list")?.props.items;
+      return {
+        id: categoryId,
+        title: asString(findRscNode(content.nodes, "page-header")?.props.title) ?? "",
+        recipes: (Array.isArray(items) ? items : []).flatMap((item) => readRscRecipeTile(item) ?? [])
+      };
+    }
+    function extractRecipeCategoryGroup(name, content) {
+      const list = findRscNode(content.nodes, "category-list");
+      const items = list?.props.items;
+      return {
+        name,
+        title: asString(list?.props.title) ?? name,
+        categories: (Array.isArray(items) ? items : []).flatMap((item) => {
+          const entry = asRecord2(item);
+          const deeplink = asString(entry?.deeplink);
+          const link = deeplink ? categoryLink(deeplink, asString(entry?.title) ?? "", asString(entry?.image)) : null;
+          return link ? [link] : [];
+        })
+      };
+    }
+  }
+});
+
+// node_modules/picnic-api/lib/domains/catalog/tiles.js
+var require_tiles = __commonJS({
+  "node_modules/picnic-api/lib/domains/catalog/tiles.js"(exports) {
+    "use strict";
+    Object.defineProperty(exports, "__esModule", { value: true });
+    exports.isFusionProductTile = void 0;
+    exports.readFusionProductTile = readFusionProductTile;
+    exports.collectFusionProductTiles = collectFusionProductTiles;
+    var pml_1 = require_pml();
+    var asRecord2 = (value) => typeof value === "object" && value !== null && !Array.isArray(value) ? value : {};
+    var asArray = (value) => Array.isArray(value) ? value : [];
+    var asString = (value) => typeof value === "string" && value !== "" ? value : null;
+    var asNumber = (value) => typeof value === "number" ? value : null;
+    var PROMOTION_SCHEMA = "iglu:tech.picnic.snowplow.analytics/promotion/";
+    var UNAVAILABILITY_SCHEMA = /\/unavailability\/jsonschema\//;
+    var LABEL_CONTAINER_ID = "selling-unit-label-container";
+    var SYMBOL_FONT = "PicnicSymbols";
+    var isFusionProductTile = (node) => node.type === "PML" && asRecord2(node.content).type === "SELLING_UNIT_TILE";
+    exports.isFusionProductTile = isFusionProductTile;
+    function readFusionProductTile(tile) {
+      const unit = asRecord2(asRecord2(tile.content).sellingUnit);
+      const id = asString(unit.id);
+      const catalogName = asString(unit.name);
+      if (!id || !catalogName)
+        return null;
+      const promotion = asRecord2((0, pml_1.analyticsContexts)(tile).find((context) => context.schema?.startsWith(PROMOTION_SCHEMA))?.data);
+      const unitQuantity = asString(unit.unit_quantity) ?? "";
+      const info = readInfoColumn(tile.pml, unitQuantity);
+      const priceRanges = asArray(unit.price_ranges).flatMap((value) => {
+        const range = asRecord2(value);
+        const price = asNumber(range.price);
+        const fromQuantity = asNumber(range.from_quantity);
+        return price !== null && fromQuantity !== null ? [{ price, from_quantity: fromQuantity }] : [];
+      });
+      const promotionLabel = asString(promotion.promotion_label);
+      return {
+        id,
+        name: info.name ?? catalogName,
+        namePrefix: info.namePrefix,
+        brand: info.brand,
+        qualityCue: info.qualityCue,
+        imageId: asString(unit.image_id),
+        displayPrice: asNumber(unit.display_price) ?? 0,
+        originalPrice: promotion.show_strikethrough_price === true ? asNumber(promotion.strikethrough_price) : null,
+        unitPrice: null,
+        // One tier means the price doesn't depend on the quantity.
+        priceRanges: priceRanges.length > 1 ? priceRanges : null,
+        unitQuantity,
+        labels: promotionLabel ? [{ position: labelPosition(tile.pml, promotionLabel), type: "PROMO", text: promotionLabel }] : [],
+        // Search tiles have no decorator; they carry an unavailability context instead.
+        isUnavailable: asArray(unit.decorators).some((decorator) => asRecord2(decorator).type === "UNAVAILABLE") || (0, pml_1.analyticsContexts)(tile).some((context) => UNAVAILABILITY_SCHEMA.test(context.schema ?? "")),
+        numberOfOrders: null
+      };
+    }
+    function collectFusionProductTiles(node, skip = () => false) {
+      const tiles = /* @__PURE__ */ new Map();
+      const visit = (value) => {
+        if (Array.isArray(value))
+          return value.forEach(visit);
+        if (typeof value !== "object" || value === null)
+          return;
+        const candidate = value;
+        if (skip(candidate))
+          return;
+        if ((0, exports.isFusionProductTile)(candidate)) {
+          const tile = readFusionProductTile(candidate);
+          if (tile && !tiles.has(tile.id))
+            tiles.set(tile.id, tile);
+          return;
+        }
+        Object.values(candidate).forEach(visit);
+      };
+      visit(node);
+      return [...tiles.values()];
+    }
+    function readInfoColumn(pml, unitQuantity) {
+      const opensProduct = (0, pml_1.findNode)(pml, (n) => n.type === "TOUCHABLE" && asRecord2(n.onPress).actionType === "OPEN");
+      const column = opensProduct ? (0, pml_1.findNode)(opensProduct.child, (n) => n.type === "STACK") : null;
+      const rows = column ? (0, pml_1.childrenOf)(column) : [];
+      const nameIndex = rows.findIndex((row) => row.type === "RICH_TEXT");
+      if (nameIndex < 0)
+        return { name: null, namePrefix: null, brand: null, qualityCue: null };
+      const spans = (0, pml_1.childrenOf)(rows[nameIndex]).filter((span) => typeof span.markdown === "string" && asRecord2(span.textAttributes).family !== SYMBOL_FONT);
+      const spanPrefix = spans.length > 1 ? highlightedText(spans[0].markdown) : null;
+      const nameSpans = spanPrefix ? spans.slice(1) : spans;
+      const shownName = nameSpans.length > 0 ? nameSpans.map((span) => (0, pml_1.stripColorTags)(span.markdown)).join(" ") : (0, pml_1.stripColorTags)((0, pml_1.collectMarkdowns)(rows[nameIndex])[0] ?? "");
+      const prefix = spanPrefix ? null : /^\*\*(.+?)\*\*\s*/.exec(shownName);
+      const name = (0, pml_1.cleanMarkdown)(prefix ? shownName.slice(prefix[0].length) : shownName) || null;
+      const firstText = (row) => row ? (0, pml_1.cleanMarkdown)((0, pml_1.collectMarkdowns)(row)[0] ?? "") || null : null;
+      const rowAfterPrices = rows.slice(nameIndex + 1).find((row) => row.type === "STACK");
+      const isQuantityRow = rowAfterPrices ? (0, pml_1.collectMarkdowns)(rowAfterPrices).some((text3) => (0, pml_1.cleanMarkdown)(text3) === unitQuantity) : false;
+      return {
+        name,
+        namePrefix: spanPrefix || (prefix ? (0, pml_1.cleanMarkdown)(prefix[1]) || null : null),
+        brand: isQuantityRow ? null : firstText(rowAfterPrices),
+        qualityCue: nameIndex > 0 ? firstText(rows[0]) : null
+      };
+    }
+    function highlightedText(markdown) {
+      const match = /^#\(([^)]+)\)([^#]*)#\(\1\)\s*$/.exec(markdown);
+      return match && !(0, pml_1.isDefaultTextColor)(match[1]) ? (0, pml_1.cleanMarkdown)(match[2]) || null : null;
+    }
+    function labelPosition(pml, label) {
+      const placed = (0, pml_1.findNode)((0, pml_1.findNodeById)(pml, LABEL_CONTAINER_ID), (n) => typeof n.absolutePosition === "object" && (0, pml_1.collectMarkdowns)(n).some((text3) => (0, pml_1.cleanMarkdown)(text3) === label));
+      if (!placed)
+        return "bottomLeft";
+      const position = asRecord2(placed.absolutePosition);
+      return `${"top" in position ? "top" : "bottom"}${"right" in position && !("left" in position) ? "Right" : "Left"}`;
+    }
+  }
+});
+
 // node_modules/picnic-api/lib/domains/catalog/search.js
 var require_search = __commonJS({
   "node_modules/picnic-api/lib/domains/catalog/search.js"(exports) {
@@ -314,6 +794,10 @@ var require_search = __commonJS({
     exports.extractProductTile = extractProductTile;
     exports.readSellableTile = readSellableTile;
     exports.extractFilters = extractFilters;
+    exports.extractFusionSearchResults = extractFusionSearchResults;
+    var pml_1 = require_pml();
+    var lists_1 = require_lists();
+    var tiles_1 = require_tiles();
     var LABEL_POSITIONS = ["topLeft", "topRight", "middleLeft", "bottomLeft"];
     var asRecord2 = (value) => typeof value === "object" && value !== null && !Array.isArray(value) ? value : {};
     var asArray = (value) => Array.isArray(value) ? value : [];
@@ -423,6 +907,102 @@ var require_search = __commonJS({
         const facetId = asString(filter.facetId);
         const name = asString(filter.name) ?? asString(filter.header);
         return facetId && name ? [{ facetId, name, imageId: asString(filter.image) }] : [];
+      });
+    }
+    var SEARCH_STATE_ID = "searchState";
+    var SECTION_WRAPPER_PREFIX = "client-side-filtering-section-wrapper-";
+    var SECTION_HEADER_PREFIX = "client-side-filtering-section-header-wrapper-";
+    var VISUAL_SECTIONS_ID = "structured-selling-unit-search-result-visual-sections";
+    var FILTER_ITEM_PREFIX = "search-header-visual-item-";
+    var SORTING_ITEM_ID = "search-header-visual-item-sorting";
+    var FILTER_TYPES = { VISUAL_FILTER: "visualFilters", POWER_FILTER: "powerFilters", TEXTUAL_FILTER: "textualFilters" };
+    function extractFusionSearchResults(page, query) {
+      const state = asRecord2((0, pml_1.findNodeById)(page, SEARCH_STATE_ID)?.state);
+      const analytics = asRecord2(asRecord2(state.analyticsTemplate).data);
+      const isRecipeSearch = state.selectedEntityType === "RECIPE";
+      return {
+        query,
+        correctedQuery: asString(analytics.query_corrected),
+        products: state.selectedEntityType === "SELLING_UNIT" ? extractFusionProductResults(page, state) : null,
+        recipes: isRecipeSearch ? (0, lists_1.extractRecipeTiles)(page).map((recipe) => ({ id: recipe.id, name: recipe.name, subtitle: recipe.subtitle, imageId: recipe.imageId, tags: recipe.tags })) : []
+      };
+    }
+    function extractFusionProductResults(page, state) {
+      const wrappers = /* @__PURE__ */ new Map();
+      (0, pml_1.walkNodes)(page, (node) => {
+        if (node.type !== "BLOCK" || typeof node.id !== "string" || !node.id.startsWith(SECTION_WRAPPER_PREFIX))
+          return;
+        const name = node.id.slice(SECTION_WRAPPER_PREFIX.length).replace(/__\d+$/, "");
+        wrappers.set(name, [...wrappers.get(name) ?? [], node]);
+      });
+      const visualSections = (0, pml_1.findNodeById)(page, VISUAL_SECTIONS_ID);
+      const sections = asArray(state.sections).flatMap((value) => {
+        const name = asString(asRecord2(value).name);
+        const blocks = name ? wrappers.get(name) : void 0;
+        if (!name || !blocks)
+          return [];
+        const header = (0, pml_1.findNodeById)(page, SECTION_HEADER_PREFIX + name);
+        const headerText = (0, pml_1.findNode)(header, (n) => n.type === "RICH_TEXT" && n.textType === "HEADER3" && typeof n.markdown === "string");
+        return [
+          {
+            id: name,
+            type: visualSections && (0, pml_1.findNodeById)(visualSections, blocks[0].id) ? "VISUAL" : "RFY",
+            title: header ? (0, pml_1.cleanMarkdown)(headerText?.markdown ?? "") || name : null,
+            products: (0, tiles_1.collectFusionProductTiles)(blocks)
+          }
+        ];
+      });
+      const filters = { visualFilters: [], powerFilters: [], textualFilters: [] };
+      (0, pml_1.walkNodes)(page, (node) => {
+        if (node.type !== "PML" || typeof node.id !== "string" || !node.id.startsWith(FILTER_ITEM_PREFIX) || node.id === SORTING_ITEM_ID)
+          return;
+        const filter = readFilterItem(node);
+        if (filter)
+          filters[filter.list].push(filter.filter);
+      });
+      const productIdsByFacetId = {};
+      for (const [facetId, ids] of Object.entries(asRecord2(state.sellingUnitIdsByFacetIds))) {
+        productIdsByFacetId[facetId] = asArray(ids).filter((id) => typeof id === "string");
+      }
+      return {
+        sections,
+        ...filters,
+        productIdsByFacetId,
+        sortingOptions: readSortingOptions((0, pml_1.findNodeById)(page, SORTING_ITEM_ID), state),
+        selectedSorting: asString(state.selectedSorting) ?? "RELEVANCE"
+      };
+    }
+    function readFilterItem(item) {
+      const touchable = (0, pml_1.findNode)(item.pml, (n) => n.type === "TOUCHABLE");
+      const props = asRecord2(asRecord2(asRecord2(touchable?.onPress).callback).props);
+      const facetId = asString(props.v0);
+      const name = asString(props.v1);
+      const list = FILTER_TYPES[props.v2];
+      if (!facetId || !name || !list)
+        return null;
+      const image = (0, pml_1.findNode)(item.pml, (n) => n.type === "IMAGE" && typeof asRecord2(n.source).id === "string");
+      return { list, filter: { facetId, name, imageId: image ? asRecord2(image.source).id : null } };
+    }
+    function readSortingOptions(button, state) {
+      const isSortingDeeplink = (value) => typeof value === "string" && value.includes("sorting_options_ids=");
+      const holder = (0, pml_1.findNode)(button, (node) => Object.values(node).some(isSortingDeeplink));
+      const deeplink = holder ? Object.values(holder).find(isSortingDeeplink) : void 0;
+      if (deeplink) {
+        const ids = [];
+        const titles = [];
+        for (const param of deeplink.slice(deeplink.indexOf(";") + 1).split(/[,&]/)) {
+          const [key, value = ""] = param.split("=");
+          if (key === "sorting_options_ids")
+            ids.push(decodeURIComponent(value));
+          if (key === "sorting_options_names")
+            titles.push(decodeURIComponent(value));
+        }
+        if (ids.length > 0)
+          return ids.map((name, index) => ({ name, title: titles[index] || name }));
+      }
+      return asArray(asRecord2(asRecord2(state.analyticsTemplate).data).initial_sorting_strategies).flatMap((value) => {
+        const name = asString(value);
+        return name ? [{ name, title: name }] : [];
       });
     }
   }
@@ -937,281 +1517,6 @@ var require_service3 = __commonJS({
       }
     };
     exports.UserService = UserService;
-  }
-});
-
-// node_modules/picnic-api/lib/pages/pml.js
-var require_pml = __commonJS({
-  "node_modules/picnic-api/lib/pages/pml.js"(exports) {
-    "use strict";
-    Object.defineProperty(exports, "__esModule", { value: true });
-    exports.findNodeByIdPrefix = exports.findNodeById = exports.isDefaultTextColor = void 0;
-    exports.stripColorTags = stripColorTags2;
-    exports.cleanMarkdown = cleanMarkdown2;
-    exports.extractHighlightColor = extractHighlightColor;
-    exports.walkNodes = walkNodes;
-    exports.findNode = findNode;
-    exports.ancestorsOf = ancestorsOf;
-    exports.collectPropertyValues = collectPropertyValues2;
-    exports.collectMarkdowns = collectMarkdowns2;
-    exports.childrenOf = childrenOf;
-    exports.collectPriceNodes = collectPriceNodes;
-    exports.collectBadges = collectBadges;
-    exports.collectNutritionRows = collectNutritionRows;
-    exports.accordionItems = accordionItems;
-    exports.findPmlComponent = findPmlComponent;
-    exports.analyticsContexts = analyticsContexts;
-    var DEFAULT_TEXT_COLORS = /* @__PURE__ */ new Set(["#333333", "#5b534e", "#787570"]);
-    var isNode = (value) => typeof value === "object" && value !== null && !Array.isArray(value);
-    function stripColorTags2(markdown) {
-      return markdown.replace(/#\([^)]+\)/g, "").trim();
-    }
-    function cleanMarkdown2(markdown) {
-      return stripColorTags2(markdown).replace(/\*\*/g, "").replace(/__/g, "").replace(/ /g, " ").trim();
-    }
-    function extractHighlightColor(markdown) {
-      for (const match of markdown.matchAll(/#\(([^)]+)\)/g)) {
-        if (!DEFAULT_TEXT_COLORS.has(match[1].toLowerCase()))
-          return match[1];
-      }
-      return null;
-    }
-    var isDefaultTextColor = (color) => DEFAULT_TEXT_COLORS.has(color.toLowerCase());
-    exports.isDefaultTextColor = isDefaultTextColor;
-    function walkNodes(node, visit) {
-      if (Array.isArray(node)) {
-        node.forEach((child) => walkNodes(child, visit));
-      } else if (isNode(node)) {
-        visit(node);
-        Object.values(node).forEach((child) => walkNodes(child, visit));
-      }
-    }
-    function findNode(node, predicate) {
-      if (Array.isArray(node)) {
-        for (const child of node) {
-          const found = findNode(child, predicate);
-          if (found)
-            return found;
-        }
-        return null;
-      }
-      if (!isNode(node))
-        return null;
-      if (predicate(node))
-        return node;
-      for (const child of Object.values(node)) {
-        const found = findNode(child, predicate);
-        if (found)
-          return found;
-      }
-      return null;
-    }
-    function ancestorsOf(root, target) {
-      const path = [];
-      const visit = (node) => {
-        if (node === target)
-          return true;
-        if (Array.isArray(node))
-          return node.some(visit);
-        if (!isNode(node))
-          return false;
-        path.push(node);
-        if (Object.values(node).some(visit))
-          return true;
-        path.pop();
-        return false;
-      };
-      return visit(root) ? path.reverse() : [];
-    }
-    var findNodeById2 = (node, id) => findNode(node, (n) => n.id === id);
-    exports.findNodeById = findNodeById2;
-    var findNodeByIdPrefix2 = (node, prefix) => findNode(node, (n) => typeof n.id === "string" && n.id.startsWith(prefix));
-    exports.findNodeByIdPrefix = findNodeByIdPrefix2;
-    function collectPropertyValues2(node, key) {
-      const values = [];
-      walkNodes(node, (n) => {
-        if (key in n)
-          values.push(n[key]);
-      });
-      return values;
-    }
-    function collectMarkdowns2(node) {
-      return collectPropertyValues2(node, "markdown").filter((m) => typeof m === "string");
-    }
-    function childrenOf(node) {
-      const children = node.children ?? node.child;
-      if (Array.isArray(children))
-        return children.filter(isNode);
-      return isNode(children) ? [children] : [];
-    }
-    function collectPriceNodes(node) {
-      const prices = [];
-      walkNodes(node, (n) => {
-        if (n.type === "PRICE" && typeof n.price === "number") {
-          prices.push({ price: n.price, isCrossed: n.isCrossed === true, color: typeof n.color === "string" ? n.color : null });
-        }
-      });
-      return prices;
-    }
-    function collectBadges(node) {
-      const badges = [];
-      const visit = (n) => {
-        if (Array.isArray(n))
-          return n.forEach(visit);
-        if (!isNode(n))
-          return;
-        if (n.type === "CONTAINER" && typeof n.backgroundColor === "string" && typeof n.borderRadius === "number") {
-          const markdown = collectMarkdowns2(n)[0];
-          if (markdown) {
-            const textColor = extractHighlightColor(markdown) ?? collectPropertyValues2(n, "textAttributes").map((attributes) => isNode(attributes) ? attributes.color : void 0).find((color) => typeof color === "string");
-            badges.push({ text: cleanMarkdown2(markdown), textColor: textColor ?? "#333333", backgroundColor: n.backgroundColor });
-            return;
-          }
-        }
-        Object.values(n).forEach(visit);
-      };
-      visit(node);
-      return badges;
-    }
-    function collectNutritionRows(node) {
-      const rows = [];
-      const visit = (n) => {
-        if (Array.isArray(n))
-          return n.forEach(visit);
-        if (!isNode(n))
-          return;
-        if (n.type === "STACK" && n.axis === "HORIZONTAL" && (n.distribution === "SPACE_BETWEEN" || n.distribution === "END")) {
-          const texts = childrenOf(n).filter((c) => c.type === "RICH_TEXT" && typeof c.markdown === "string");
-          if (texts.length > 0) {
-            rows.push({
-              label: stripColorTags2(texts[0].markdown),
-              value: texts[1] ? stripColorTags2(texts[1].markdown) : null,
-              isCategory: texts[0].textType === "HEADLINE2",
-              backgroundColor: typeof n.backgroundColor === "string" ? n.backgroundColor : null
-            });
-            return;
-          }
-        }
-        Object.values(n).forEach(visit);
-      };
-      visit(node);
-      return rows;
-    }
-    function accordionItems(accordion) {
-      const items = collectPropertyValues2(accordion, "items")[0];
-      return Array.isArray(items) ? items.filter(isNode) : [];
-    }
-    function findPmlComponent(node) {
-      const found = findNode(node, (n) => isNode(n.pml) && isNode(n.pml.component));
-      return found ? found.pml.component : null;
-    }
-    function analyticsContexts(node) {
-      const analytics = node.analytics;
-      const contexts = isNode(analytics) ? analytics.contexts : void 0;
-      return Array.isArray(contexts) ? contexts.filter(isNode) : [];
-    }
-  }
-});
-
-// node_modules/picnic-api/lib/domains/catalog/tiles.js
-var require_tiles = __commonJS({
-  "node_modules/picnic-api/lib/domains/catalog/tiles.js"(exports) {
-    "use strict";
-    Object.defineProperty(exports, "__esModule", { value: true });
-    exports.isFusionProductTile = void 0;
-    exports.readFusionProductTile = readFusionProductTile;
-    exports.collectFusionProductTiles = collectFusionProductTiles;
-    var pml_1 = require_pml();
-    var asRecord2 = (value) => typeof value === "object" && value !== null && !Array.isArray(value) ? value : {};
-    var asArray = (value) => Array.isArray(value) ? value : [];
-    var asString = (value) => typeof value === "string" && value !== "" ? value : null;
-    var asNumber = (value) => typeof value === "number" ? value : null;
-    var PROMOTION_SCHEMA = "iglu:tech.picnic.snowplow.analytics/promotion/";
-    var LABEL_CONTAINER_ID = "selling-unit-label-container";
-    var isFusionProductTile = (node) => node.type === "PML" && asRecord2(node.content).type === "SELLING_UNIT_TILE";
-    exports.isFusionProductTile = isFusionProductTile;
-    function readFusionProductTile(tile) {
-      const unit = asRecord2(asRecord2(tile.content).sellingUnit);
-      const id = asString(unit.id);
-      const catalogName = asString(unit.name);
-      if (!id || !catalogName)
-        return null;
-      const promotion = asRecord2((0, pml_1.analyticsContexts)(tile).find((context) => context.schema?.startsWith(PROMOTION_SCHEMA))?.data);
-      const unitQuantity = asString(unit.unit_quantity) ?? "";
-      const info = readInfoColumn(tile.pml, unitQuantity);
-      const priceRanges = asArray(unit.price_ranges).flatMap((value) => {
-        const range = asRecord2(value);
-        const price = asNumber(range.price);
-        const fromQuantity = asNumber(range.from_quantity);
-        return price !== null && fromQuantity !== null ? [{ price, from_quantity: fromQuantity }] : [];
-      });
-      const promotionLabel = asString(promotion.promotion_label);
-      return {
-        id,
-        name: info.name ?? catalogName,
-        namePrefix: info.namePrefix,
-        brand: info.brand,
-        qualityCue: info.qualityCue,
-        imageId: asString(unit.image_id),
-        displayPrice: asNumber(unit.display_price) ?? 0,
-        originalPrice: promotion.show_strikethrough_price === true ? asNumber(promotion.strikethrough_price) : null,
-        unitPrice: null,
-        // One tier means the price doesn't depend on the quantity.
-        priceRanges: priceRanges.length > 1 ? priceRanges : null,
-        unitQuantity,
-        labels: promotionLabel ? [{ position: labelPosition(tile.pml, promotionLabel), type: "PROMO", text: promotionLabel }] : [],
-        isUnavailable: asArray(unit.decorators).some((decorator) => asRecord2(decorator).type === "UNAVAILABLE"),
-        numberOfOrders: null
-      };
-    }
-    function collectFusionProductTiles(node, skip = () => false) {
-      const tiles = /* @__PURE__ */ new Map();
-      const visit = (value) => {
-        if (Array.isArray(value))
-          return value.forEach(visit);
-        if (typeof value !== "object" || value === null)
-          return;
-        const candidate = value;
-        if (skip(candidate))
-          return;
-        if ((0, exports.isFusionProductTile)(candidate)) {
-          const tile = readFusionProductTile(candidate);
-          if (tile && !tiles.has(tile.id))
-            tiles.set(tile.id, tile);
-          return;
-        }
-        Object.values(candidate).forEach(visit);
-      };
-      visit(node);
-      return [...tiles.values()];
-    }
-    function readInfoColumn(pml, unitQuantity) {
-      const opensProduct = (0, pml_1.findNode)(pml, (n) => n.type === "TOUCHABLE" && asRecord2(n.onPress).actionType === "OPEN");
-      const column = opensProduct ? (0, pml_1.findNode)(opensProduct.child, (n) => n.type === "STACK") : null;
-      const rows = column ? (0, pml_1.childrenOf)(column) : [];
-      const nameIndex = rows.findIndex((row) => row.type === "RICH_TEXT");
-      if (nameIndex < 0)
-        return { name: null, namePrefix: null, brand: null, qualityCue: null };
-      const shownName = (0, pml_1.stripColorTags)((0, pml_1.collectMarkdowns)(rows[nameIndex])[0] ?? "");
-      const prefix = /^\*\*(.+?)\*\*\s*/.exec(shownName);
-      const name = (0, pml_1.cleanMarkdown)(prefix ? shownName.slice(prefix[0].length) : shownName) || null;
-      const firstText = (row) => row ? (0, pml_1.cleanMarkdown)((0, pml_1.collectMarkdowns)(row)[0] ?? "") || null : null;
-      const rowAfterPrices = rows.slice(nameIndex + 1).find((row) => row.type === "STACK");
-      const isQuantityRow = rowAfterPrices ? (0, pml_1.collectMarkdowns)(rowAfterPrices).some((text3) => (0, pml_1.cleanMarkdown)(text3) === unitQuantity) : false;
-      return {
-        name,
-        namePrefix: prefix ? (0, pml_1.cleanMarkdown)(prefix[1]) || null : null,
-        brand: isQuantityRow ? null : firstText(rowAfterPrices),
-        qualityCue: nameIndex > 0 ? firstText(rows[0]) : null
-      };
-    }
-    function labelPosition(pml, label) {
-      const placed = (0, pml_1.findNode)((0, pml_1.findNodeById)(pml, LABEL_CONTAINER_ID), (n) => typeof n.absolutePosition === "object" && (0, pml_1.collectMarkdowns)(n).some((text3) => (0, pml_1.cleanMarkdown)(text3) === label));
-      if (!placed)
-        return "bottomLeft";
-      const position = asRecord2(placed.absolutePosition);
-      return `${"top" in position ? "top" : "bottom"}${"right" in position && !("left" in position) ? "Right" : "Left"}`;
-    }
   }
 });
 
@@ -1740,15 +2045,29 @@ var require_service4 = __commonJS({
         return (0, favorites_1.extractFavoritesInAisle)(await this.pages.getFusionPage(`aisle-deep-dive?aisle_id=${encodeURIComponent(aisleId)}`));
       }
       /**
-       * Searches for products and recipes the way the app does: it fetches the search page (an RSC
-       * page with the search parameters), then runs the page's `fetchSearchResults` server action,
-       * which returns the results.
+       * Searches the way the app does: it fetches the search page (`search-page-results`), which
+       * Picnic serves in either format.
+       *
+       * - A Fusion page has the results in it: products, or recipes in the `"MEALS"` context. For
+       *   another sort order the app reloads the page with `selected_sorting`, and so does this method.
+       * - An RSC page has the search parameters; its `fetchSearchResults` server action returns the
+       *   results, products and recipes together.
        * @param {string} query The keywords to search for.
        * @param {SearchOptions} [options] The sort order and the context the search is opened from.
        */
       async getSearchResults(query, options = {}) {
         const contextParams = options.context === "MEALS" ? "&page_context=MEALS&is_recipe=true" : "";
-        const page = await this.pages.getRscPayload(`search-page-results?search_term=${encodeURIComponent(query)}${contextParams}`);
+        const pageId = `search-page-results?search_term=${encodeURIComponent(query)}${contextParams}`;
+        const loaded = await this.pages.load(pageId);
+        if (loaded.format === "rsc")
+          return this.getRscSearchResults(loaded.payload, query, options);
+        const results = (0, search_1.extractFusionSearchResults)(loaded.page, query);
+        if (!options.sorting || !results.products || results.products.selectedSorting === options.sorting)
+          return results;
+        return (0, search_1.extractFusionSearchResults)(await this.pages.getFusionPage(`${pageId}&selected_sorting=${encodeURIComponent(options.sorting)}`), query);
+      }
+      /** Runs the `fetchSearchResults` action of an RSC search page with the page's search parameters. */
+      async getRscSearchResults(page, query, options) {
         const params = (0, rsc_1.findRscElementProps)(page, SEARCH_PARAMS_MODULE)[0]?.params;
         if (!params)
           throw new Error("The search page has no search parameters");
@@ -2852,199 +3171,6 @@ var require_service11 = __commonJS({
       }
     };
     exports.ContentService = ContentService;
-  }
-});
-
-// node_modules/picnic-api/lib/domains/recipe/lists.js
-var require_lists = __commonJS({
-  "node_modules/picnic-api/lib/domains/recipe/lists.js"(exports) {
-    "use strict";
-    Object.defineProperty(exports, "__esModule", { value: true });
-    exports.parseMinutes = parseMinutes;
-    exports.readRecipeTile = readRecipeTile;
-    exports.extractRecipeTiles = extractRecipeTiles;
-    exports.extractRecipeOverview = extractRecipeOverview;
-    exports.extractRecipeCategory = extractRecipeCategory;
-    exports.extractRecipeCategoryGroup = extractRecipeCategoryGroup;
-    var pml_1 = require_pml();
-    var RECIPE_SCHEMA = "iglu:tech.picnic.snowplow.analytics/recipe/jsonschema/";
-    var AISLE_SCHEMA = "iglu:tech.picnic.snowplow.analytics/aisle/jsonschema/";
-    var PAGE_SECTION_SCHEMA = "iglu:tech.picnic.snowplow.analytics/page_section/jsonschema/";
-    var PML_COMPONENT_SCHEMA = "iglu:tech.picnic.snowplow.analytics/pml_component/jsonschema/";
-    var CATEGORY_LINK = /id=meals-category(-group)?-page,(?:category_id|group_name)=([^,&]+)/;
-    function parseMinutes(text3) {
-      const sum = text3.match(/^(\d+(?:\s*\+\s*\d+)*)\s*min/i)?.[1];
-      if (sum)
-        return sum.split("+").reduce((total, part) => total + Number(part.trim()), 0);
-      const hours = text3.match(/(\d+)\s*(?:uur|u|std|h)\b/i)?.[1];
-      const minutes = text3.match(/(\d+)\s*min/i)?.[1];
-      if (hours === void 0 && minutes === void 0)
-        return null;
-      return Number(hours ?? 0) * 60 + Number(minutes ?? 0);
-    }
-    function recipeContext(tile) {
-      return (0, pml_1.analyticsContexts)(tile).find((c) => c.schema?.startsWith(RECIPE_SCHEMA) && typeof c.data?.recipe_id === "string")?.data;
-    }
-    function visibleTexts(node, texts = []) {
-      if (Array.isArray(node))
-        node.forEach((child) => visibleTexts(child, texts));
-      else if (typeof node === "object" && node !== null) {
-        const record = node;
-        if (record.isHidden !== void 0 && record.isHidden !== false)
-          return texts;
-        if (record.type === "RICH_TEXT" && typeof record.markdown === "string")
-          texts.push({ markdown: record.markdown, textType: record.textType });
-        for (const [key, value] of Object.entries(record))
-          if (key !== "analytics")
-            visibleTexts(value, texts);
-      }
-      return texts;
-    }
-    function readRecipeTile(tile) {
-      const recipe = recipeContext(tile);
-      if (!recipe)
-        return null;
-      const texts = visibleTexts(tile.pml).map((t) => ({ text: (0, pml_1.cleanMarkdown)(t.markdown), textType: t.textType })).filter((t) => t.text);
-      const analyticsName = typeof recipe.recipe_name === "string" ? recipe.recipe_name.trim() : "";
-      const shownName = analyticsName ? texts.findIndex((t) => t.text === analyticsName) : -1;
-      const nameIndex = shownName >= 0 ? shownName : texts.findIndex((t) => t.textType === "SUBTITLE1");
-      const name = analyticsName || (nameIndex >= 0 ? texts[nameIndex].text : "");
-      const after = nameIndex >= 0 ? texts.slice(nameIndex + 1).filter((t) => t.text !== ">") : [];
-      const subtitle = after.find((t) => t.textType === "SUBTITLE2")?.text ?? null;
-      const tags = after.filter((t) => t.textType !== "SUBTITLE2").map((t) => t.text);
-      const image = (0, pml_1.findNode)(tile.pml, (n) => n.type === "IMAGE" && typeof n.source?.id === "string");
-      const imageType = recipe.recipe_image_type ?? recipe.image_type;
-      return {
-        id: recipe.recipe_id,
-        name,
-        imageType: typeof imageType === "string" ? imageType : null,
-        imageId: image ? image.source.id : null,
-        subtitle,
-        tags,
-        cookingTimeMinutes: firstMinutes(tags)
-      };
-    }
-    var firstMinutes = (tags) => tags.map(parseMinutes).find((minutes) => minutes !== null) ?? null;
-    function extractRecipeTiles(page) {
-      const recipes = /* @__PURE__ */ new Map();
-      walkTiles(page, (tile) => {
-        const recipe = readRecipeTile(tile);
-        if (recipe && !recipes.has(recipe.id))
-          recipes.set(recipe.id, recipe);
-      });
-      return [...recipes.values()];
-    }
-    function walkTiles(node, visit) {
-      if (Array.isArray(node))
-        return node.forEach((child) => walkTiles(child, visit));
-      if (typeof node !== "object" || node === null)
-        return;
-      const record = node;
-      if (record.type === "PML" && recipeContext(record))
-        return visit(record);
-      Object.values(record).forEach((child) => walkTiles(child, visit));
-    }
-    function categoryLink(deeplink, name, imageId) {
-      const match = deeplink.match(CATEGORY_LINK);
-      if (!match)
-        return null;
-      return { type: match[1] ? "group" : "category", id: decodeURIComponent(match[2]), name, imageId };
-    }
-    function extractRecipeOverview(page) {
-      const sections = /* @__PURE__ */ new Map();
-      walkTiles(page, (tile) => {
-        const aisle = (0, pml_1.analyticsContexts)(tile).find((c) => c.schema?.startsWith(AISLE_SCHEMA))?.data;
-        const recipe = readRecipeTile(tile);
-        if (!aisle || !recipe || typeof aisle.assortment_aisle !== "string")
-          return;
-        const key = `${aisle.aisle_ranking}:${aisle.assortment_aisle}`;
-        let section = sections.get(key);
-        if (!section) {
-          const pill = typeof aisle.pill_display_name === "string" ? aisle.pill_display_name : null;
-          section = { title: aisle.assortment_aisle, pill, recipes: [], rank: Number(aisle.aisle_ranking ?? sections.size), ids: /* @__PURE__ */ new Set() };
-          sections.set(key, section);
-        }
-        if (!section.ids.has(recipe.id)) {
-          section.ids.add(recipe.id);
-          section.recipes.push(recipe);
-        }
-      });
-      const categorySections = /* @__PURE__ */ new Map();
-      (0, pml_1.walkNodes)(page, (node) => {
-        if (node.type !== "PML")
-          return;
-        const contexts = (0, pml_1.analyticsContexts)(node);
-        const deeplink = contexts.find((c) => c.schema?.startsWith(PML_COMPONENT_SCHEMA))?.data?.deeplink;
-        const heading = contexts.find((c) => c.schema?.startsWith(PAGE_SECTION_SCHEMA))?.data?.name;
-        if (typeof deeplink !== "string" || typeof heading !== "string")
-          return;
-        const component = node.pml?.component;
-        const name = typeof component?.accessibilityLabel === "string" ? component.accessibilityLabel : "";
-        const image = (0, pml_1.findNode)(component, (n) => n.type === "IMAGE");
-        const link = categoryLink(deeplink, name, typeof image?.source?.id === "string" ? image.source.id : null);
-        if (!link || !name)
-          return;
-        const section = categorySections.get(heading) ?? { title: heading, categories: [] };
-        if (!section.categories.some((c) => c.type === link.type && c.id === link.id))
-          section.categories.push(link);
-        categorySections.set(heading, section);
-      });
-      return {
-        sections: [...sections.values()].sort((a, b) => a.rank - b.rank).map(({ title, pill, recipes }) => ({ title, pill, recipes })),
-        categorySections: [...categorySections.values()]
-      };
-    }
-    var asRecord2 = (value) => typeof value === "object" && value !== null && !Array.isArray(value) ? value : null;
-    var asString = (value) => typeof value === "string" && value !== "" ? value : null;
-    function findRscNode(nodes, component) {
-      for (const node of nodes) {
-        if (node.component === component)
-          return node;
-        const found = findRscNode(node.children, component);
-        if (found)
-          return found;
-      }
-      return null;
-    }
-    function readRscRecipeTile(item) {
-      const tile = asRecord2(item);
-      const id = asString(tile?.id);
-      if (!tile || !id || tile.sellableType !== "SELLING_GROUP")
-        return null;
-      const text3 = asRecord2(tile.text);
-      const tags = (Array.isArray(text3?.tags) ? text3.tags : []).flatMap((tag) => asString(asRecord2(tag)?.text) ?? []);
-      return {
-        id,
-        name: asString(asRecord2(text3?.title)?.text) ?? "",
-        imageType: null,
-        imageId: asString(asRecord2(tile.image)?.imageId),
-        subtitle: asString(asRecord2(text3?.subtitle)?.text),
-        tags,
-        cookingTimeMinutes: firstMinutes(tags)
-      };
-    }
-    function extractRecipeCategory(categoryId, content) {
-      const items = findRscNode(content.nodes, "vertical-list")?.props.items;
-      return {
-        id: categoryId,
-        title: asString(findRscNode(content.nodes, "page-header")?.props.title) ?? "",
-        recipes: (Array.isArray(items) ? items : []).flatMap((item) => readRscRecipeTile(item) ?? [])
-      };
-    }
-    function extractRecipeCategoryGroup(name, content) {
-      const list = findRscNode(content.nodes, "category-list");
-      const items = list?.props.items;
-      return {
-        name,
-        title: asString(list?.props.title) ?? name,
-        categories: (Array.isArray(items) ? items : []).flatMap((item) => {
-          const entry = asRecord2(item);
-          const deeplink = asString(entry?.deeplink);
-          const link = deeplink ? categoryLink(deeplink, asString(entry?.title) ?? "", asString(entry?.image)) : null;
-          return link ? [link] : [];
-        })
-      };
-    }
   }
 });
 
@@ -11626,7 +11752,7 @@ function startDesk(env = process.env) {
     pictureCacheMb,
     allowedUsers,
     ingressOnly: env.INGRESS_ONLY === "1",
-    version: true ? "1.0.6" : "dev",
+    version: true ? "1.0.7" : "dev",
     routes: VENDORED_ROUTES,
     demo: demo ? demoShop() : void 0
   });

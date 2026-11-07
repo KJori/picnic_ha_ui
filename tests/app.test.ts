@@ -11,7 +11,7 @@ import { after, afterEach, beforeEach, describe, test } from "node:test";
 
 import { fromGateway, pageBase } from "../src/server/app";
 import { installFetchTimeout } from "../src/server/fetch-timeout";
-import { FAKE_SAFE_FETCH, FakePicnic, fakeAppSearch, fixture, json, runDesk, searchTile, signIn, type Running } from "./helpers";
+import { FAKE_SAFE_FETCH, FakePicnic, fakeAppSearch, fakeFusionSearch, fixture, fusionSearchTile, json, runDesk, searchTile, signIn, type Running } from "./helpers";
 
 let picnic: FakePicnic;
 let desk: Running;
@@ -435,11 +435,40 @@ describe("picnic-web's parsers on Picnic's real answers", () => {
     assert.equal(JSON.parse(JSON.parse(action.body!).params)[0].searchId, "id-1");
   });
 
-  // This sample is older than the app's RSC search page; the route says it
-  // could not search, and the session stays.
-  test("search on a page it cannot read answers 502, still signed in", async () => {
+  // Some accounts get the search page as a Fusion page with the results in it
+  // (picnic-api 5.3.1); the desk shows those results like the RSC ones.
+  test("search on a Fusion search page gives its products and sections", async () => {
+    fakeFusionSearch(picnic, "milch", "H-Milch", [fusionSearchTile("s1000001", "H-Milch 1,5%", 109, "1 Liter")]);
+    const result = await desk.get("/api/search?q=milch");
+    assert.equal(result.status, 200, JSON.stringify(result.body));
+    assert.deepEqual(
+      result.body.products.map((p: { id: string; name: string; displayPrice: number; unitQuantity: string }) => [p.id, p.name, p.displayPrice, p.unitQuantity]),
+      [["s1000001", "H-Milch 1,5%", 109, "1 Liter"]]
+    );
+    assert.deepEqual(result.body.sections.map((s: { title: string }) => s.title), ["H-Milch"]);
+    // One page, no script or action.
+    assert.equal(picnic.last("/pages/action/"), undefined);
+  });
+
+  // This sample is an older Fusion search page without the search state;
+  // picnic-api reads it as a page without results, and the session stays.
+  test("search on an old Fusion page without search state finds nothing, still signed in", async () => {
     picnic.on("GET", /^\/pages\/search-page-results\?search_term=koffie/, json(fixture("search_page_nl.json")));
     const result = await desk.get("/api/search?q=koffie");
+    assert.equal(result.status, 200, JSON.stringify(result.body));
+    assert.deepEqual(result.body.products, []);
+    assert.equal((await desk.get("/api/desk/state")).body.signedIn, true);
+  });
+
+  // An RSC search page without the search parameters cannot be searched: the
+  // route says it could not search, and the session stays.
+  test("search on a page it cannot read answers 502, still signed in", async () => {
+    picnic.on(
+      "GET",
+      /^\/pages\/search-page-results\?search_term=thee/,
+      new Response('0:["$","div",null,{"children":"nothing here"}]', { headers: { "content-type": "text/x-component" } })
+    );
+    const result = await desk.get("/api/search?q=thee");
     assert.equal(result.status, 502);
     assert.equal(typeof result.body.error, "string");
     assert.equal((await desk.get("/api/desk/state")).body.signedIn, true);
