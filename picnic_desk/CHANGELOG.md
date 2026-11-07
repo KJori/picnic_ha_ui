@@ -4,6 +4,16 @@ All notable changes to Picnic Desk. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the version
 numbers [Semantic Versioning](https://semver.org/).
 
+## [1.0.7]
+
+### Fixed
+
+- Search works for accounts that Picnic shows a different kind of search page
+  (seen in Germany). Before, searching there failed with "Failed to search for
+  products"; now you get the products with their sections, as in the app.
+  Products that are out of season show as unavailable in those results, and
+  recipe searches show the recipe names.
+
 ## [1.0.6]
 
 ### Fixed

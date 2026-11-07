@@ -101,6 +101,70 @@ export function fakeAppSearch(picnic: FakePicnic, term: string, tiles: Record<st
   picnic.on("POST", "/pages/action/act_fetchSearchResults_0f1e2d", () => rsc(`0:["$","$L3",null,${JSON.stringify(results)}]`));
 }
 
+/**
+ * Picnic's search as some accounts get it (seen in Germany): the search page
+ * is a Fusion page with the results in it, the shape picnic-api 5.3.1 reads
+ * (`searchState` with the sections, then a block of tiles per section).
+ */
+export function fakeFusionSearch(picnic: FakePicnic, term: string, section: string, tiles: Record<string, unknown>[]): void {
+  const prefix = "client-side-filtering-section-";
+  picnic.on(
+    "GET",
+    new RegExp(`^/pages/search-page-results\\?search_term=${encodeURIComponent(term)}$`),
+    json({
+      layout: {
+        type: "STATE_BOUNDARY",
+        id: "searchState",
+        state: {
+          analyticsTemplate: { data: { query: term, initial_sorting_strategies: ["RELEVANCE"] } },
+          sections: [{ index: 1, name: section }],
+          selectedEntityType: "SELLING_UNIT",
+          selectedSorting: "RELEVANCE",
+          sellingUnitIdsByFacetIds: {},
+        },
+        child: {
+          type: "BLOCK",
+          id: "structured-selling-unit-search-result-visual-sections",
+          children: [
+            {
+              type: "BLOCK",
+              id: `${prefix}header-wrapper-${section}`,
+              isHidden: false,
+              children: [{ type: "PML", pml: { component: { type: "RICH_TEXT", textType: "HEADER3", markdown: `#(#333333)${section}#(#333333)` } } }],
+            },
+            { type: "BLOCK", id: `${prefix}wrapper-${section}`, children: tiles },
+          ],
+        },
+      },
+    })
+  );
+}
+
+/** A product tile of a Fusion page: the selling unit and the info column that opens the product. */
+export const fusionSearchTile = (id: string, name: string, cents: number, size: string) => ({
+  type: "PML",
+  id: `selling-unit-${id}-tile`,
+  analytics: { contexts: [{ schema: "iglu:tech.picnic.snowplow.analytics/product/jsonschema/1-0-0", data: { product_id: id } }] },
+  content: {
+    type: "SELLING_UNIT_TILE",
+    sellingUnit: { id, name, image_id: `img-${id}`, display_price: cents, unit_quantity: size, max_count: 50, decorators: [], price_ranges: [{ price: cents, from_quantity: 1 }] },
+  },
+  pml: {
+    component: {
+      type: "TOUCHABLE",
+      onPress: { actionType: "OPEN", target: `app.picnic://store/page;id=product-details-page-root,id=${id}` },
+      child: {
+        type: "STACK",
+        children: [
+          { type: "RICH_TEXT", children: [{ type: "RICH_TEXT", markdown: `#(#333333)${name}#(#333333)` }] },
+          { type: "STACK", children: [{ type: "RICH_TEXT", markdown: (cents / 100).toFixed(2) }] },
+          { type: "STACK", children: [{ type: "RICH_TEXT", markdown: size }] },
+        ],
+      },
+    },
+  },
+});
+
 /** A product tile as Picnic's search action sends it. */
 export const searchTile = (id: string, name: string, cents: number, size: string) => ({
   type: "sellable",
