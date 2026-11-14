@@ -420,6 +420,9 @@ test("price per kilo agrees with the one Picnic itself prints on its product pag
     assert.equal(ours.per, picnicPrice[2].toLowerCase());
     const theirs = Math.round(Number(picnicPrice[1].replace(",", ".")) * 100);
     assert.ok(Math.abs(ours.cents - theirs) <= 1, `ours ${ours.cents} vs Picnic's ${theirs} (${product.unitQuantity}, ${product.displayPrice})`);
+    // picnic-api's comparison price (picnic-web 2026-11) comes through the route and agrees.
+    assert.equal(product.comparisonPrice?.unit, ours.per);
+    assert.ok(Math.abs(product.comparisonPrice.price - ours.cents) <= 1, JSON.stringify(product.comparisonPrice));
   } finally {
     picnic.restore();
     await desk.close();
@@ -471,4 +474,19 @@ test("a basket for the time of an order already placed is added to it, so no min
   assert.equal(orderAtSameTime(null, orders), null);
   assert.equal(orderAtSameTime({ windowStart: "2026-10-27T17:00:00.000+01:00" }, null), null, "orders not known yet");
   assert.equal(orderAtSameTime({ windowStart: "", windowEnd: "" }, orders), null);
+});
+
+test("the demo's prices per kg, litre or piece are the ones picnic-api works out", async () => {
+  const { createRequire } = await import("node:module");
+  const { getComparisonPrice } = createRequire(import.meta.url)("picnic-api/lib/domains/catalog/comparison-price.js");
+  const { PRODUCTS } = await import("../src/server/demo/data");
+  let priced = 0;
+  for (const product of PRODUCTS) {
+    const tiers = product.priceRanges?.map((tier) => ({ price: tier.pricePerUnit, from_quantity: tier.quantity })) ?? null;
+    const expected = getComparisonPrice(product.displayPrice, product.unitQuantity, tiers);
+    assert.deepEqual(product.comparisonPrice, expected, `${product.name} (${product.unitQuantity})`);
+    if (expected) priced++;
+  }
+  assert.ok(priced > 20);
+  assert.ok(PRODUCTS.some((p) => p.comparisonPrice?.lowestPrice), "a bundle has a cheaper price per unit from a quantity");
 });

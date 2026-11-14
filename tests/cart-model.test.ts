@@ -23,6 +23,7 @@ const item = (productId: string, quantity: number): CartItem => ({
   isUnavailable: false,
   unavailableExplanation: null,
   basketGroupId: null,
+  comparisonPrice: null,
 });
 
 const cartOf = (lines: Record<string, number>): CartData => ({

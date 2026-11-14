@@ -88,6 +88,18 @@ export type SubtitleIcon = {
 
 // ─── Product ─────────────────────────────────────────────────────────────────
 
+/** The base unit of a comparison price: per kilogram, per litre or per piece. */
+export type ComparisonUnit = "kg" | "l" | "piece";
+
+/** The price per kilogram, litre or piece, to compare products of different package sizes. */
+export type ComparisonPrice = {
+  unit: ComparisonUnit;
+  /** Cents per unit, e.g. 299 for €2.99/kg. */
+  price: number;
+  /** Cents per unit at the cheapest price tier, when buying more costs less per package. */
+  lowestPrice: { price: number; fromQuantity: number } | null;
+};
+
 export type Product = {
   id: string;
   name: string;
@@ -122,6 +134,8 @@ export type Product = {
   displayPriceColor: string | null;
   /** Human-readable unit/quantity string (e.g. "500 g", "6 x 300 ml"). */
   unitQuantity: string;
+  /** The price per kg, litre or piece from picnic-api, or null when the package size has none. */
+  comparisonPrice: ComparisonPrice | null;
   /** Maximum number of units a user can order. */
   maxCount: number;
   /** Bundle price ranges from the API, or null if no bundle. */
@@ -295,6 +309,8 @@ export type SliderProduct = {
   displayPrice: number;
   /** Unit quantity description (e.g. "6 x 330 ml"). */
   unitQuantity: string;
+  /** The price per kg, litre or piece from picnic-api, or null when the package size has none. */
+  comparisonPrice: ComparisonPrice | null;
   /** Maximum cart quantity. */
   maxCount: number;
   /** Deposit amount in cents, if applicable. */
@@ -331,6 +347,10 @@ export type NutritionRow = {
   isCategory: boolean;
   /** Background color for zebra striping, or null. */
   backgroundColor: string | null;
+  /** The number in `value` (e.g. 4.8 for "4,8g"), from picnic-api, or null. */
+  amount: number | null;
+  /** Whether less or more of the nutrient is the healthier choice, from picnic-api, or null. */
+  preference: "lower" | "higher" | null;
 };
 
 /** Comprehensive product detail displayed on the product detail page. */
@@ -347,6 +367,8 @@ export type ProductDetail = {
   unitQuantity: string;
   /** Unit price description (e.g. "€4.81/l"). Null if not available. */
   unitPrice: string | null;
+  /** The price per kg, litre or piece from picnic-api, or null when the package size has none. */
+  comparisonPrice: ComparisonPrice | null;
   /** Tags after the unit price (e.g. "Diepvries"), with their color or null for the default. */
   tags: { text: string; color: string | null }[];
   /** Selling price in euro cents. */
@@ -423,6 +445,28 @@ export type CartItem = {
   unavailableExplanation: string | null;
   /** ID of the recipe group (selling group) this item belongs to, or null. */
   basketGroupId: string | null;
+  /** The price of one package per kg, litre or piece, or null when the size has none. */
+  comparisonPrice: ComparisonPrice | null;
+};
+
+/** A similar product that costs less per kg, litre or piece than a cart line. */
+export type CheaperAlternative = {
+  id: string;
+  name: string;
+  imageId: string;
+  /** The price of one package in cents. */
+  displayPrice: number;
+  unitQuantity: string;
+  maxCount: number;
+  comparisonPrice: ComparisonPrice;
+  /** How much less it costs per unit than the cart line, in cents. */
+  savingPerUnit: number;
+};
+
+/** GET /api/product/[id]/alternatives. */
+export type CheaperAlternativesResponse = {
+  comparisonPrice: ComparisonPrice | null;
+  alternatives: CheaperAlternative[];
 };
 
 /** A single deposit category entry in the deposit breakdown. */

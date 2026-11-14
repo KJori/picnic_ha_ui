@@ -57,6 +57,7 @@ import {
   PRODUCTS,
   RECIPE_CATEGORIES,
   RECIPES,
+  comparisonPrice,
   img,
   plainProduct,
   productById,
@@ -413,6 +414,7 @@ function lineItem(line: Line, index: number): CartItem {
     isUnavailable: product.isUnavailable,
     unavailableExplanation: product.unavailableReason,
     basketGroupId: line.group,
+    comparisonPrice: comparisonPrice(unit, product.unitQuantity, product.priceRanges),
   };
 }
 
@@ -636,8 +638,8 @@ function recipeDetail(state: DemoState, id: string, portions: number): RecipeDet
     steps: recipe.steps,
     stepsPortionWarning: portions > 6 ? "Let op: de bereiding is geschreven voor 6 personen of minder." : null,
     recipeNutritionRows: [
-      { label: "Energie", value: "520 kcal", isCategory: true, backgroundColor: null },
-      { label: "Eiwitten", value: "21 g", isCategory: true, backgroundColor: "#f5f1ec" },
+      { label: "Energie", value: "520 kcal", isCategory: true, backgroundColor: null, amount: 520, preference: "lower" },
+      { label: "Eiwitten", value: "21 g", isCategory: true, backgroundColor: "#f5f1ec", amount: 21, preference: "higher" },
     ],
     allergens: {
       confirmed: [{ text: "Soja", backgroundColor: "#b40117", textColor: "#ffffff" }],

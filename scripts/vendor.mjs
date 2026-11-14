@@ -3,7 +3,9 @@
 //   node scripts/vendor.mjs <path to a picnic-web checkout>
 //
 // Copies src/lib and src/app/api unchanged, plus the licence, and records the
-// commit in vendor/picnic-web/UPSTREAM. Nothing in vendor/ is edited by hand:
+// commit in vendor/picnic-web/UPSTREAM. picnic-web's own tests (*.test.ts) stay
+// behind: they run on vitest against fakes in its src/test, which the desk
+// does not have; the desk tests the routes in tests/. Nothing in vendor/ is edited by hand:
 // to take a newer picnic-web, check it out, run this, then run the checks.
 import { execFileSync } from "node:child_process";
 import { cpSync, existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
@@ -26,8 +28,9 @@ if (git("status", "--porcelain", "--", "src/lib", "src/app/api")) {
 const target = resolve("vendor/picnic-web");
 rmSync(target, { recursive: true, force: true });
 mkdirSync(join(target, "src", "app"), { recursive: true });
-cpSync(join(source, "src", "lib"), join(target, "src", "lib"), { recursive: true });
-cpSync(join(source, "src", "app", "api"), join(target, "src", "app", "api"), { recursive: true });
+const notATest = (path) => !/\.test\.tsx?$/.test(path);
+cpSync(join(source, "src", "lib"), join(target, "src", "lib"), { recursive: true, filter: notATest });
+cpSync(join(source, "src", "app", "api"), join(target, "src", "app", "api"), { recursive: true, filter: notATest });
 cpSync(join(source, "LICENSE"), join(target, "LICENSE"));
 writeFileSync(
   join(target, "UPSTREAM"),

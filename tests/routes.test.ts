@@ -21,6 +21,13 @@ test("every picnic-web route is served, except the ones skipped on purpose", () 
   }
 });
 
+test("picnic-web's own tests stay out of vendor/ (they need vitest and its fakes)", async () => {
+  const { readdirSync } = await import("node:fs");
+  const files = readdirSync(new URL("../vendor/picnic-web/src", import.meta.url), { recursive: true }) as string[];
+  assert.ok(files.length > 50);
+  assert.deepEqual(files.filter((file) => /\.test\.tsx?$/.test(file)), []);
+});
+
 test("referral, family and wallet are not reachable", () => {
   const router = new Router(VENDORED_ROUTES);
   for (const path of ["user/referral", "user/family", "wallet", "wallet/balance", "wallet/transactions/t1"]) {
