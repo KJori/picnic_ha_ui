@@ -6,6 +6,7 @@
 import type { CategoryItem } from "@/lib/category/category-types";
 import type {
   AllergenInfo,
+  ComparisonPrice,
   NutritionRow,
   Product,
   ProductDetail,
@@ -60,6 +61,23 @@ const INPUT: ProductInput[] = [
   { id: "s1026", name: "Verse koriander", price: 99, unit: "30 g", words: ["koriander", "kruiden"], category: "groente" },
 ];
 
+/** The demo's sizes, in kilograms, litres or pieces per unit word. */
+const SIZE_UNITS: Record<string, [ComparisonPrice["unit"], number]> = { g: ["kg", 0.001], kg: ["kg", 1], ml: ["l", 0.001], l: ["l", 1], stuks: ["piece", 1] };
+
+/** The price per kg, litre or piece as picnic-api works it out, for the demo's plain sizes ("800 g", "4 stuks"). */
+export function comparisonPrice(cents: number, unitQuantity: string, tiers: { quantity: number; pricePerUnit: number }[] | null = null): ComparisonPrice | null {
+  const match = /^(\d+) (\w+)$/.exec(unitQuantity);
+  const unit = match && SIZE_UNITS[match[2]];
+  if (!match || !unit || cents <= 0) return null;
+  const amount = Number(match[1]) * unit[1];
+  const cheapest = (tiers ?? []).filter((tier) => tier.pricePerUnit < cents).sort((a, b) => a.pricePerUnit - b.pricePerUnit)[0];
+  return {
+    unit: unit[0],
+    price: Math.round(cents / amount),
+    lowestPrice: cheapest ? { price: Math.round(cheapest.pricePerUnit / amount), fromQuantity: cheapest.quantity } : null,
+  };
+}
+
 export const PRODUCTS: (Product & { words: string[]; category: string })[] = INPUT.map((p) => ({
   id: p.id,
   name: p.name,
@@ -78,6 +96,7 @@ export const PRODUCTS: (Product & { words: string[]; category: string })[] = INP
   // Picnic colours offer prices red, chosen for its white app; the dark theme must cope.
   displayPriceColor: p.was ? "#B40117" : null,
   unitQuantity: p.unit,
+  comparisonPrice: comparisonPrice(p.price, p.unit, p.bundle),
   maxCount: p.max ?? 99,
   priceRanges: p.bundle ?? null,
   badges: [],
@@ -94,13 +113,13 @@ export const productById = (id: string) => PRODUCTS.find((p) => p.id === id) ?? 
 export const plainProduct = ({ words: _w, category: _c, ...product }: (typeof PRODUCTS)[number]): Product => product;
 
 const NUTRITION: NutritionRow[] = [
-  { label: "Energie", value: "1050 kJ / 250 kcal", isCategory: true, backgroundColor: null },
-  { label: "Vet", value: "3,1 g", isCategory: true, backgroundColor: "#f5f1ec" },
-  { label: "waarvan verzadigd", value: "0,6 g", isCategory: false, backgroundColor: null },
-  { label: "Koolhydraten", value: "41 g", isCategory: true, backgroundColor: "#f5f1ec" },
-  { label: "waarvan suikers", value: "3,5 g", isCategory: false, backgroundColor: null },
-  { label: "Eiwitten", value: "11 g", isCategory: true, backgroundColor: "#f5f1ec" },
-  { label: "Zout", value: "1,0 g", isCategory: true, backgroundColor: null },
+  { label: "Energie", value: "1050 kJ / 250 kcal", isCategory: true, backgroundColor: null, amount: 250, preference: "lower" },
+  { label: "Vet", value: "3,1 g", isCategory: true, backgroundColor: "#f5f1ec", amount: 3.1, preference: "lower" },
+  { label: "waarvan verzadigd", value: "0,6 g", isCategory: false, backgroundColor: null, amount: 0.6, preference: "lower" },
+  { label: "Koolhydraten", value: "41 g", isCategory: true, backgroundColor: "#f5f1ec", amount: 41, preference: null },
+  { label: "waarvan suikers", value: "3,5 g", isCategory: false, backgroundColor: null, amount: 3.5, preference: "lower" },
+  { label: "Eiwitten", value: "11 g", isCategory: true, backgroundColor: "#f5f1ec", amount: 11, preference: "higher" },
+  { label: "Zout", value: "1,0 g", isCategory: true, backgroundColor: null, amount: 1, preference: "lower" },
 ];
 
 const ALLERGENS: Record<string, AllergenInfo> = {
@@ -129,6 +148,7 @@ export function productDetail(id: string): ProductDetail | null {
     quantityBadges: product.unitQuantity === "1 kg" ? [{ text: "XL", textColor: "#ffffff", backgroundColor: "#295813" }] : [],
     unitQuantity: product.unitQuantity,
     unitPrice: `€${((product.displayPrice / 100) * 1.5).toFixed(2).replace(".", ",")}/kg`,
+    comparisonPrice: product.comparisonPrice,
     tags: [{ text: product.category[0].toUpperCase() + product.category.slice(1), color: "#295813" }],
     displayPrice: product.displayPrice,
     originalPrice: product.originalPrice,
@@ -161,6 +181,7 @@ export function productDetail(id: string): ProductDetail | null {
       imageId: p.imageId,
       displayPrice: p.displayPrice,
       unitQuantity: p.unitQuantity,
+      comparisonPrice: p.comparisonPrice,
       maxCount: p.maxCount,
     })),
     nutritionRows: NUTRITION,

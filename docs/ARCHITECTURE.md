@@ -11,6 +11,9 @@ and fixes it when Picnic changes.
 
 Picnic Desk takes those two folders unchanged (`vendor/picnic-web`, with the
 upstream commit in `UPSTREAM`) and runs the routes on a plain Node HTTP server.
+picnic-web's own tests (`*.test.ts`, on vitest with fakes in its `src/test`)
+stay behind; `meal-plan-file.ts`, which reads a type from picnic-web's React
+hooks, is copied but left out of the type check, as the desk does not use it.
 Everything about talking to Picnic, reading its answers and telling a dead
 session from a rate limit is therefore picnic-web's code, not a second
 implementation that could drift.

@@ -22,5 +22,8 @@
       "next/server": ["./src/server/next-server.ts"]
     }
   },
-  "include": ["src", "vendor/picnic-web/src", "tests", "scripts/*.ts"]
+  "include": ["src", "vendor/picnic-web/src", "tests", "scripts/*.ts"],
+  // picnic-web's meal plan file format reads a type from its React hooks
+  // (src/hooks), which are not copied; the desk does not use the file.
+  "exclude": ["vendor/picnic-web/src/lib/meal-plan/meal-plan-file.ts"]
 }

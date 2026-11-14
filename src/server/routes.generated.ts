@@ -33,17 +33,18 @@ import * as r29 from "@/app/api/pages/products/route";
 import * as r30 from "@/app/api/parcels/route";
 import * as r31 from "@/app/api/parcels/[parcelId]/route";
 import * as r32 from "@/app/api/product/[id]/route";
-import * as r33 from "@/app/api/promotions/route";
-import * as r34 from "@/app/api/promotions/[groupId]/route";
-import * as r35 from "@/app/api/recipe/[id]/route";
-import * as r36 from "@/app/api/recipe/[id]/add-to-cart/route";
-import * as r37 from "@/app/api/recipe/[id]/ingredient/[ingredientId]/route";
-import * as r38 from "@/app/api/recipe/[id]/save/route";
-import * as r39 from "@/app/api/recipe/saved/route";
-import * as r40 from "@/app/api/rsc-pages/route";
-import * as r41 from "@/app/api/search/route";
-import * as r42 from "@/app/api/suggestions/route";
-import * as r43 from "@/app/api/user/profile/route";
+import * as r33 from "@/app/api/product/[id]/alternatives/route";
+import * as r34 from "@/app/api/promotions/route";
+import * as r35 from "@/app/api/promotions/[groupId]/route";
+import * as r36 from "@/app/api/recipe/[id]/route";
+import * as r37 from "@/app/api/recipe/[id]/add-to-cart/route";
+import * as r38 from "@/app/api/recipe/[id]/ingredient/[ingredientId]/route";
+import * as r39 from "@/app/api/recipe/[id]/save/route";
+import * as r40 from "@/app/api/recipe/saved/route";
+import * as r41 from "@/app/api/rsc-pages/route";
+import * as r42 from "@/app/api/search/route";
+import * as r43 from "@/app/api/suggestions/route";
+import * as r44 from "@/app/api/user/profile/route";
 
 export const VENDORED_ROUTES = [
   { path: "auth/login", methods: ["POST"], module: r0 as RouteModule },
@@ -79,15 +80,16 @@ export const VENDORED_ROUTES = [
   { path: "parcels", methods: ["GET"], module: r30 as RouteModule },
   { path: "parcels/[parcelId]", methods: ["GET"], module: r31 as RouteModule },
   { path: "product/[id]", methods: ["GET"], module: r32 as RouteModule },
-  { path: "promotions", methods: ["GET"], module: r33 as RouteModule },
-  { path: "promotions/[groupId]", methods: ["GET"], module: r34 as RouteModule },
-  { path: "recipe/[id]", methods: ["GET"], module: r35 as RouteModule },
-  { path: "recipe/[id]/add-to-cart", methods: ["POST"], module: r36 as RouteModule },
-  { path: "recipe/[id]/ingredient/[ingredientId]", methods: ["GET","POST"], module: r37 as RouteModule },
-  { path: "recipe/[id]/save", methods: ["POST"], module: r38 as RouteModule },
-  { path: "recipe/saved", methods: ["GET"], module: r39 as RouteModule },
-  { path: "rsc-pages", methods: ["GET"], module: r40 as RouteModule },
-  { path: "search", methods: ["GET"], module: r41 as RouteModule },
-  { path: "suggestions", methods: ["GET"], module: r42 as RouteModule },
-  { path: "user/profile", methods: ["GET"], module: r43 as RouteModule },
+  { path: "product/[id]/alternatives", methods: ["GET"], module: r33 as RouteModule },
+  { path: "promotions", methods: ["GET"], module: r34 as RouteModule },
+  { path: "promotions/[groupId]", methods: ["GET"], module: r35 as RouteModule },
+  { path: "recipe/[id]", methods: ["GET"], module: r36 as RouteModule },
+  { path: "recipe/[id]/add-to-cart", methods: ["POST"], module: r37 as RouteModule },
+  { path: "recipe/[id]/ingredient/[ingredientId]", methods: ["GET","POST"], module: r38 as RouteModule },
+  { path: "recipe/[id]/save", methods: ["POST"], module: r39 as RouteModule },
+  { path: "recipe/saved", methods: ["GET"], module: r40 as RouteModule },
+  { path: "rsc-pages", methods: ["GET"], module: r41 as RouteModule },
+  { path: "search", methods: ["GET"], module: r42 as RouteModule },
+  { path: "suggestions", methods: ["GET"], module: r43 as RouteModule },
+  { path: "user/profile", methods: ["GET"], module: r44 as RouteModule },
 ];

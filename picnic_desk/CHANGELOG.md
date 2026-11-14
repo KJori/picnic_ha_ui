@@ -4,6 +4,25 @@ All notable changes to Picnic Desk. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the version
 numbers [Semantic Versioning](https://semver.org/).
 
+## [1.0.8]
+
+### Fixed
+
+- Recipe categories work again in Germany. Since 1.0.4, opening a recipe
+  category or group there showed no recipes, because Picnic serves those
+  pages in another format in Germany. Large German categories (such as
+  Blitzrezepte) list all their recipes again.
+- Recipe search shows the whole cooking time for recipes that take an hour
+  or more ("1 Std 10 min") or that give preparation and cooking apart
+  ("15 + 25 min"). Before, those showed no time or only the first part.
+
+### Changed
+
+- Theme and shop pages (the ones Picnic's banners and offers link to) are
+  read by picnic-api 5.5, the same way as the other product lists. You
+  should see no difference; if one of those pages looks wrong, please
+  report it.
+
 ## [1.0.7]
 
 ### Fixed

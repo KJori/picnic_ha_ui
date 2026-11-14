@@ -246,12 +246,12 @@ var require_service = __commonJS({
        *
        * Pages known to be RSC: `category-tree-root`, `subcategory-page?category_id=<id>`,
        * `category-product-overview?category_id=<id>`, `promotion-category-page?category_id=<id>`,
-       * `profile-root`, `promo-group-deep-dive?promo_group_id=<id>`,
+       * `profile-root`, `promo-page-root`, `promo-group-deep-dive?promo_group_id=<id>`,
        * `search-page-results?search_term=<term>`, `search-page-index`, `meals-category-page`,
        * `meals-category-group-page` and `unavailability-replacements-page-root`.
        *
        * Pages known to be Fusion: `home_page_root`, `purchases-page-root`, `meals-page-root`,
-       * `slot-selector-root`, `parcels-overview-page-root`, `promo-page-root`,
+       * `slot-selector-root`, `parcels-overview-page-root`,
        * `product-details-page-root?id=<selling_unit_id>`,
        * `selling-group-details-page?selling_group_id=<id>` and
        * `parcel-tracking-page-root?parcel_id=<id>`.
@@ -317,6 +317,7 @@ var require_pml = __commonJS({
     exports.walkNodes = walkNodes;
     exports.findNode = findNode;
     exports.ancestorsOf = ancestorsOf;
+    exports.findSuspensePageId = findSuspensePageId;
     exports.collectPropertyValues = collectPropertyValues2;
     exports.collectMarkdowns = collectMarkdowns2;
     exports.childrenOf = childrenOf;
@@ -388,10 +389,18 @@ var require_pml = __commonJS({
       };
       return visit(root) ? path.reverse() : [];
     }
+    function findSuspensePageId(node) {
+      const suspense = findNode(node, (n) => n.type === "SUSPENSE" && isNode(n.pageConfig) && typeof n.pageConfig.id === "string");
+      if (!suspense)
+        return null;
+      const { id, parameters } = suspense.pageConfig;
+      const query = Object.entries(isNode(parameters) ? parameters : {}).filter(([, value]) => value !== null && value !== void 0).map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(String(value))}`).join("&");
+      return query ? `${id}?${query}` : id;
+    }
     var findNodeById2 = (node, id) => findNode(node, (n) => n.id === id);
     exports.findNodeById = findNodeById2;
-    var findNodeByIdPrefix2 = (node, prefix) => findNode(node, (n) => typeof n.id === "string" && n.id.startsWith(prefix));
-    exports.findNodeByIdPrefix = findNodeByIdPrefix2;
+    var findNodeByIdPrefix = (node, prefix) => findNode(node, (n) => typeof n.id === "string" && n.id.startsWith(prefix));
+    exports.findNodeByIdPrefix = findNodeByIdPrefix;
     function collectPropertyValues2(node, key) {
       const values = [];
       walkNodes(node, (n) => {
@@ -483,19 +492,22 @@ var require_lists = __commonJS({
   "node_modules/picnic-api/lib/domains/recipe/lists.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
-    exports.parseMinutes = parseMinutes;
+    exports.firstMinutes = void 0;
+    exports.parseMinutes = parseMinutes2;
     exports.readRecipeTile = readRecipeTile;
     exports.extractRecipeTiles = extractRecipeTiles;
     exports.extractRecipeOverview = extractRecipeOverview;
+    exports.extractFusionRecipeCategory = extractFusionRecipeCategory;
+    exports.extractFusionRecipeCategoryGroup = extractFusionRecipeCategoryGroup;
     exports.extractRecipeCategory = extractRecipeCategory;
     exports.extractRecipeCategoryGroup = extractRecipeCategoryGroup;
     var pml_1 = require_pml();
-    var RECIPE_SCHEMA = "iglu:tech.picnic.snowplow.analytics/recipe/jsonschema/";
+    var RECIPE_SCHEMA2 = "iglu:tech.picnic.snowplow.analytics/recipe/jsonschema/";
     var AISLE_SCHEMA = "iglu:tech.picnic.snowplow.analytics/aisle/jsonschema/";
     var PAGE_SECTION_SCHEMA = "iglu:tech.picnic.snowplow.analytics/page_section/jsonschema/";
     var PML_COMPONENT_SCHEMA = "iglu:tech.picnic.snowplow.analytics/pml_component/jsonschema/";
     var CATEGORY_LINK = /id=meals-category(-group)?-page,(?:category_id|group_name)=([^,&]+)/;
-    function parseMinutes(text3) {
+    function parseMinutes2(text3) {
       const sum = text3.match(/^(\d+(?:\s*\+\s*\d+)*)\s*min/i)?.[1];
       if (sum)
         return sum.split("+").reduce((total, part) => total + Number(part.trim()), 0);
@@ -505,8 +517,8 @@ var require_lists = __commonJS({
         return null;
       return Number(hours ?? 0) * 60 + Number(minutes ?? 0);
     }
-    function recipeContext(tile) {
-      return (0, pml_1.analyticsContexts)(tile).find((c) => c.schema?.startsWith(RECIPE_SCHEMA) && typeof c.data?.recipe_id === "string")?.data;
+    function recipeContext2(tile) {
+      return (0, pml_1.analyticsContexts)(tile).find((c) => c.schema?.startsWith(RECIPE_SCHEMA2) && typeof c.data?.recipe_id === "string")?.data;
     }
     function visibleTexts(node, texts = []) {
       if (Array.isArray(node))
@@ -524,7 +536,7 @@ var require_lists = __commonJS({
       return texts;
     }
     function readRecipeTile(tile) {
-      const recipe = recipeContext(tile);
+      const recipe = recipeContext2(tile);
       if (!recipe)
         return null;
       const texts = visibleTexts(tile.pml).map((t) => ({ text: (0, pml_1.cleanMarkdown)(t.markdown), textType: t.textType })).filter((t) => t.text);
@@ -546,10 +558,11 @@ var require_lists = __commonJS({
         imageId: image ? image.source.id : null,
         subtitle,
         tags,
-        cookingTimeMinutes: firstMinutes(tags)
+        cookingTimeMinutes: (0, exports.firstMinutes)(tags)
       };
     }
-    var firstMinutes = (tags) => tags.map(parseMinutes).find((minutes) => minutes !== null) ?? null;
+    var firstMinutes2 = (tags) => tags.map(parseMinutes2).find((minutes) => minutes !== null) ?? null;
+    exports.firstMinutes = firstMinutes2;
     function extractRecipeTiles(page) {
       const recipes = /* @__PURE__ */ new Map();
       walkTiles(page, (tile) => {
@@ -565,7 +578,7 @@ var require_lists = __commonJS({
       if (typeof node !== "object" || node === null)
         return;
       const record = node;
-      if (record.type === "PML" && recipeContext(record))
+      if (record.type === "PML" && recipeContext2(record))
         return visit(record);
       Object.values(record).forEach((child) => walkTiles(child, visit));
     }
@@ -619,7 +632,31 @@ var require_lists = __commonJS({
         categorySections: [...categorySections.values()]
       };
     }
-    var asRecord2 = (value) => typeof value === "object" && value !== null && !Array.isArray(value) ? value : null;
+    var headerTitle = (page) => {
+      const title = page.layout?.header?.title;
+      return typeof title === "string" && title !== "" ? title : null;
+    };
+    function extractFusionRecipeCategory(categoryId, page, content) {
+      return { id: categoryId, title: headerTitle(page) ?? "", recipes: extractRecipeTiles(content) };
+    }
+    function extractFusionRecipeCategoryGroup(name, page) {
+      const categories = [];
+      (0, pml_1.walkNodes)(page, (node) => {
+        if (node.type !== "PML")
+          return;
+        const deeplink = (0, pml_1.analyticsContexts)(node).find((c) => c.schema?.startsWith(PML_COMPONENT_SCHEMA))?.data?.deeplink;
+        if (typeof deeplink !== "string")
+          return;
+        const component = node.pml?.component;
+        const label = typeof component?.accessibilityLabel === "string" ? component.accessibilityLabel : "";
+        const image = (0, pml_1.findNode)(component, (n) => n.type === "IMAGE" && typeof n.source?.id === "string");
+        const link = categoryLink(deeplink, label, image ? image.source.id : null);
+        if (link && !categories.some((c) => c.type === link.type && c.id === link.id))
+          categories.push(link);
+      });
+      return { name, title: headerTitle(page) ?? name, categories };
+    }
+    var asRecord = (value) => typeof value === "object" && value !== null && !Array.isArray(value) ? value : null;
     var asString = (value) => typeof value === "string" && value !== "" ? value : null;
     function findRscNode(nodes, component) {
       for (const node of nodes) {
@@ -632,20 +669,20 @@ var require_lists = __commonJS({
       return null;
     }
     function readRscRecipeTile(item) {
-      const tile = asRecord2(item);
+      const tile = asRecord(item);
       const id = asString(tile?.id);
       if (!tile || !id || tile.sellableType !== "SELLING_GROUP")
         return null;
-      const text3 = asRecord2(tile.text);
-      const tags = (Array.isArray(text3?.tags) ? text3.tags : []).flatMap((tag) => asString(asRecord2(tag)?.text) ?? []);
+      const text3 = asRecord(tile.text);
+      const tags = (Array.isArray(text3?.tags) ? text3.tags : []).flatMap((tag) => asString(asRecord(tag)?.text) ?? []);
       return {
         id,
-        name: asString(asRecord2(text3?.title)?.text) ?? "",
+        name: asString(asRecord(text3?.title)?.text) ?? "",
         imageType: null,
-        imageId: asString(asRecord2(tile.image)?.imageId),
-        subtitle: asString(asRecord2(text3?.subtitle)?.text),
+        imageId: asString(asRecord(tile.image)?.imageId),
+        subtitle: asString(asRecord(text3?.subtitle)?.text),
         tags,
-        cookingTimeMinutes: firstMinutes(tags)
+        cookingTimeMinutes: (0, exports.firstMinutes)(tags)
       };
     }
     function extractRecipeCategory(categoryId, content) {
@@ -663,12 +700,100 @@ var require_lists = __commonJS({
         name,
         title: asString(list?.props.title) ?? name,
         categories: (Array.isArray(items) ? items : []).flatMap((item) => {
-          const entry = asRecord2(item);
+          const entry = asRecord(item);
           const deeplink = asString(entry?.deeplink);
           const link = deeplink ? categoryLink(deeplink, asString(entry?.title) ?? "", asString(entry?.image)) : null;
           return link ? [link] : [];
         })
       };
+    }
+  }
+});
+
+// node_modules/picnic-api/lib/domains/catalog/comparison-price.js
+var require_comparison_price = __commonJS({
+  "node_modules/picnic-api/lib/domains/catalog/comparison-price.js"(exports) {
+    "use strict";
+    Object.defineProperty(exports, "__esModule", { value: true });
+    exports.parseAmount = parseAmount;
+    exports.parsePackageSize = parsePackageSize;
+    exports.getComparisonPrice = getComparisonPrice;
+    exports.findCheaperAlternatives = findCheaperAlternatives;
+    var UNITS = [
+      ["kilogramm", "kg", 1],
+      ["kilogram", "kg", 1],
+      ["kilo", "kg", 1],
+      ["kg", "kg", 1],
+      ["gramm", "kg", 1e-3],
+      ["gram", "kg", 1e-3],
+      ["gr", "kg", 1e-3],
+      ["g", "kg", 1e-3],
+      ["milliliter", "l", 1e-3],
+      ["millilitre", "l", 1e-3],
+      ["liter", "l", 1],
+      ["litre", "l", 1],
+      ["ml", "l", 1e-3],
+      ["cl", "l", 0.01],
+      ["l", "l", 1],
+      ["stuks", "piece", 1],
+      ["stuk", "piece", 1],
+      ["stück", "piece", 1],
+      ["stk", "piece", 1],
+      ["st", "piece", 1],
+      ["unités", "piece", 1],
+      ["unité", "piece", 1],
+      ["pièces", "piece", 1],
+      ["pièce", "piece", 1],
+      ["pieces", "piece", 1],
+      ["piece", "piece", 1],
+      ["pcs", "piece", 1]
+    ];
+    var NUMBER = String.raw`\d+(?:[.,]\d+)*`;
+    var UNIT = UNITS.map(([word]) => word).join("|");
+    var SIZE = new RegExp(String.raw`(?:(\d+)\s*[x×]\s*)?(${NUMBER})\s*(${UNIT})(?![\p{L}])`, "iu");
+    var RANGE = new RegExp(String.raw`${NUMBER}\s*(?:-|–|of|oder|bis|ou|à)\s*${NUMBER}\s*(?:${UNIT})(?![\p{L}])`, "iu");
+    function parseAmount(text3) {
+      if (/^[1-9]\d{0,2}(?:\.\d{3})+$/.test(text3))
+        return Number(text3.replace(/\./g, ""));
+      return Number(text3.replace(",", "."));
+    }
+    function parsePackageSize(unitQuantity) {
+      for (const part of unitQuantity.split(/,\s|•/)) {
+        if (RANGE.test(part))
+          continue;
+        const match = SIZE.exec(part);
+        if (!match)
+          continue;
+        const [, count2, amount, word] = match;
+        const [, unit, factor] = UNITS.find(([w]) => w === word.toLowerCase());
+        const total = (count2 ? Number(count2) : 1) * parseAmount(amount) * factor;
+        if (total > 0)
+          return { amount: Math.round(total * 1e6) / 1e6, unit };
+      }
+      return null;
+    }
+    function getComparisonPrice(price, unitQuantity, priceRanges) {
+      const size = parsePackageSize(unitQuantity);
+      if (!size || price <= 0)
+        return null;
+      const perUnit = (cents) => Math.round(cents / size.amount);
+      const cheapestTier = (priceRanges ?? []).filter((tier) => tier.price > 0 && tier.price < price).sort((a, b) => a.price - b.price)[0];
+      return {
+        unit: size.unit,
+        price: perUnit(price),
+        lowestPrice: cheapestTier ? { price: perUnit(cheapestTier.price), fromQuantity: cheapestTier.from_quantity } : null
+      };
+    }
+    function findCheaperAlternatives(product) {
+      const own = product.comparisonPrice;
+      if (!own)
+        return [];
+      return product.similarProducts.flatMap((similar) => {
+        const price = similar.comparisonPrice;
+        if (!price || price.unit !== own.unit || price.price >= own.price || similar.id === product.id)
+          return [];
+        return [{ ...similar, comparisonPrice: price, savingPerUnit: own.price - price.price }];
+      }).sort((a, b) => a.comparisonPrice.price - b.comparisonPrice.price);
     }
   }
 });
@@ -682,7 +807,8 @@ var require_tiles = __commonJS({
     exports.readFusionProductTile = readFusionProductTile;
     exports.collectFusionProductTiles = collectFusionProductTiles;
     var pml_1 = require_pml();
-    var asRecord2 = (value) => typeof value === "object" && value !== null && !Array.isArray(value) ? value : {};
+    var comparison_price_1 = require_comparison_price();
+    var asRecord = (value) => typeof value === "object" && value !== null && !Array.isArray(value) ? value : {};
     var asArray = (value) => Array.isArray(value) ? value : [];
     var asString = (value) => typeof value === "string" && value !== "" ? value : null;
     var asNumber = (value) => typeof value === "number" ? value : null;
@@ -690,24 +816,25 @@ var require_tiles = __commonJS({
     var UNAVAILABILITY_SCHEMA = /\/unavailability\/jsonschema\//;
     var LABEL_CONTAINER_ID = "selling-unit-label-container";
     var SYMBOL_FONT = "PicnicSymbols";
-    var isFusionProductTile = (node) => node.type === "PML" && asRecord2(node.content).type === "SELLING_UNIT_TILE";
+    var isFusionProductTile = (node) => node.type === "PML" && asRecord(node.content).type === "SELLING_UNIT_TILE";
     exports.isFusionProductTile = isFusionProductTile;
     function readFusionProductTile(tile) {
-      const unit = asRecord2(asRecord2(tile.content).sellingUnit);
+      const unit = asRecord(asRecord(tile.content).sellingUnit);
       const id = asString(unit.id);
       const catalogName = asString(unit.name);
       if (!id || !catalogName)
         return null;
-      const promotion = asRecord2((0, pml_1.analyticsContexts)(tile).find((context) => context.schema?.startsWith(PROMOTION_SCHEMA))?.data);
+      const promotion = asRecord((0, pml_1.analyticsContexts)(tile).find((context) => context.schema?.startsWith(PROMOTION_SCHEMA))?.data);
       const unitQuantity = asString(unit.unit_quantity) ?? "";
       const info = readInfoColumn(tile.pml, unitQuantity);
       const priceRanges = asArray(unit.price_ranges).flatMap((value) => {
-        const range = asRecord2(value);
+        const range = asRecord(value);
         const price = asNumber(range.price);
         const fromQuantity = asNumber(range.from_quantity);
         return price !== null && fromQuantity !== null ? [{ price, from_quantity: fromQuantity }] : [];
       });
       const promotionLabel = asString(promotion.promotion_label);
+      const displayPrice = asNumber(unit.display_price) ?? 0;
       return {
         id,
         name: info.name ?? catalogName,
@@ -715,15 +842,16 @@ var require_tiles = __commonJS({
         brand: info.brand,
         qualityCue: info.qualityCue,
         imageId: asString(unit.image_id),
-        displayPrice: asNumber(unit.display_price) ?? 0,
+        displayPrice,
         originalPrice: promotion.show_strikethrough_price === true ? asNumber(promotion.strikethrough_price) : null,
         unitPrice: null,
+        comparisonPrice: (0, comparison_price_1.getComparisonPrice)(displayPrice, unitQuantity, priceRanges),
         // One tier means the price doesn't depend on the quantity.
         priceRanges: priceRanges.length > 1 ? priceRanges : null,
         unitQuantity,
         labels: promotionLabel ? [{ position: labelPosition(tile.pml, promotionLabel), type: "PROMO", text: promotionLabel }] : [],
         // Search tiles have no decorator; they carry an unavailability context instead.
-        isUnavailable: asArray(unit.decorators).some((decorator) => asRecord2(decorator).type === "UNAVAILABLE") || (0, pml_1.analyticsContexts)(tile).some((context) => UNAVAILABILITY_SCHEMA.test(context.schema ?? "")),
+        isUnavailable: asArray(unit.decorators).some((decorator) => asRecord(decorator).type === "UNAVAILABLE") || (0, pml_1.analyticsContexts)(tile).some((context) => UNAVAILABILITY_SCHEMA.test(context.schema ?? "")),
         numberOfOrders: null
       };
     }
@@ -749,13 +877,13 @@ var require_tiles = __commonJS({
       return [...tiles.values()];
     }
     function readInfoColumn(pml, unitQuantity) {
-      const opensProduct = (0, pml_1.findNode)(pml, (n) => n.type === "TOUCHABLE" && asRecord2(n.onPress).actionType === "OPEN");
+      const opensProduct = (0, pml_1.findNode)(pml, (n) => n.type === "TOUCHABLE" && asRecord(n.onPress).actionType === "OPEN");
       const column = opensProduct ? (0, pml_1.findNode)(opensProduct.child, (n) => n.type === "STACK") : null;
       const rows = column ? (0, pml_1.childrenOf)(column) : [];
       const nameIndex = rows.findIndex((row) => row.type === "RICH_TEXT");
       if (nameIndex < 0)
         return { name: null, namePrefix: null, brand: null, qualityCue: null };
-      const spans = (0, pml_1.childrenOf)(rows[nameIndex]).filter((span) => typeof span.markdown === "string" && asRecord2(span.textAttributes).family !== SYMBOL_FONT);
+      const spans = (0, pml_1.childrenOf)(rows[nameIndex]).filter((span) => typeof span.markdown === "string" && asRecord(span.textAttributes).family !== SYMBOL_FONT);
       const spanPrefix = spans.length > 1 ? highlightedText(spans[0].markdown) : null;
       const nameSpans = spanPrefix ? spans.slice(1) : spans;
       const shownName = nameSpans.length > 0 ? nameSpans.map((span) => (0, pml_1.stripColorTags)(span.markdown)).join(" ") : (0, pml_1.stripColorTags)((0, pml_1.collectMarkdowns)(rows[nameIndex])[0] ?? "");
@@ -779,7 +907,7 @@ var require_tiles = __commonJS({
       const placed = (0, pml_1.findNode)((0, pml_1.findNodeById)(pml, LABEL_CONTAINER_ID), (n) => typeof n.absolutePosition === "object" && (0, pml_1.collectMarkdowns)(n).some((text3) => (0, pml_1.cleanMarkdown)(text3) === label));
       if (!placed)
         return "bottomLeft";
-      const position = asRecord2(placed.absolutePosition);
+      const position = asRecord(placed.absolutePosition);
       return `${"top" in position ? "top" : "bottom"}${"right" in position && !("left" in position) ? "Right" : "Left"}`;
     }
   }
@@ -798,40 +926,41 @@ var require_search = __commonJS({
     var pml_1 = require_pml();
     var lists_1 = require_lists();
     var tiles_1 = require_tiles();
+    var comparison_price_1 = require_comparison_price();
     var LABEL_POSITIONS = ["topLeft", "topRight", "middleLeft", "bottomLeft"];
-    var asRecord2 = (value) => typeof value === "object" && value !== null && !Array.isArray(value) ? value : {};
+    var asRecord = (value) => typeof value === "object" && value !== null && !Array.isArray(value) ? value : {};
     var asArray = (value) => Array.isArray(value) ? value : [];
     var asString = (value) => typeof value === "string" && value !== "" ? value : null;
     var asNumber = (value) => typeof value === "number" ? value : null;
     var toCents2 = (value) => typeof value === "number" ? Math.round(value * 100) : null;
     function extractSearchResults(props) {
-      const stores = asRecord2(props.storeResults);
-      const supermarket = stores.SUPERMARKET ? asRecord2(stores.SUPERMARKET) : null;
-      const meals = asRecord2(stores.MEALS);
+      const stores = asRecord(props.storeResults);
+      const supermarket = stores.SUPERMARKET ? asRecord(stores.SUPERMARKET) : null;
+      const meals = asRecord(stores.MEALS);
       return {
         query: asString(props.searchQuery) ?? "",
         correctedQuery: asString(supermarket?.correctedSearchTerm) ?? asString(meals.correctedSearchTerm),
         products: supermarket ? extractProductResults(supermarket) : null,
-        recipes: asArray(meals.sections).flatMap((section) => asArray(asRecord2(section).items)).flatMap((item) => {
-          const recipe = extractSearchRecipe(asRecord2(item));
+        recipes: asArray(meals.sections).flatMap((section) => asArray(asRecord(section).items)).flatMap((item) => {
+          const recipe = extractSearchRecipe(asRecord(item));
           return recipe ? [recipe] : [];
         })
       };
     }
     function extractProductResults(store) {
       const productIdsByFacetId = {};
-      for (const [facetId, ids] of Object.entries(asRecord2(store.entityIdsByFacetId))) {
+      for (const [facetId, ids] of Object.entries(asRecord(store.entityIdsByFacetId))) {
         productIdsByFacetId[facetId] = asArray(ids).filter((id) => typeof id === "string");
       }
       return {
         sections: asArray(store.sections).map((value) => {
-          const section = asRecord2(value);
+          const section = asRecord(value);
           return {
             id: asString(section.id) ?? "",
             type: asString(section.type) ?? "",
             title: section.shouldShowHeader ? asString(section.headerName) : null,
             products: asArray(section.items).flatMap((item) => {
-              const product = extractProductTile(asRecord2(item));
+              const product = extractProductTile(asRecord(item));
               return product ? [product] : [];
             })
           };
@@ -841,7 +970,7 @@ var require_search = __commonJS({
         textualFilters: extractFilters(store.textualFilters),
         productIdsByFacetId,
         sortingOptions: asArray(store.sortingOptions).flatMap((value) => {
-          const option = asRecord2(value);
+          const option = asRecord(value);
           const name = asString(option.name);
           return name ? [{ name, title: asString(option.localizedTitle) ?? name }] : [];
         }),
@@ -853,34 +982,36 @@ var require_search = __commonJS({
     }
     function readSellableTile(tile) {
       const id = asString(tile.id);
-      const title = asRecord2(tile.title);
+      const title = asRecord(tile.title);
       const name = asString(title.title);
       if (!id || !name)
         return null;
-      const images = asRecord2(tile.images);
-      const price = asRecord2(tile.price);
+      const images = asRecord(tile.images);
+      const price = asRecord(tile.price);
       const priceRanges = asArray(price.priceRanges).flatMap((value) => {
-        const range = asRecord2(value);
+        const range = asRecord(value);
         const rangePrice = asNumber(range.price);
         const fromQuantity = asNumber(range.fromQuantity);
         return rangePrice !== null && fromQuantity !== null ? [{ price: rangePrice, from_quantity: fromQuantity }] : [];
       });
-      const labels = asRecord2(tile.labels);
+      const labels = asRecord(tile.labels);
+      const displayPrice = toCents2(price.priceValue) ?? [...priceRanges].sort((x, y) => x.from_quantity - y.from_quantity)[0]?.price ?? 0;
+      const unitQuantity = asArray(tile.suffixes).map(asRecord).filter((suffix) => suffix.type === "TEXT").flatMap((suffix) => asString(suffix.text) ?? []).join(", ");
       return {
         id,
         name,
         namePrefix: asString(title.prefix)?.trim() || null,
-        brand: asString(asRecord2(tile.subtitle).text),
-        qualityCue: asString(asRecord2(tile.qualityCue).text),
-        imageId: asString(asRecord2(images.primaryImage).imageId) ?? asString(asRecord2(images.sellingUnitImage).imageId),
-        // The tile's own price; the lowest-quantity price tier when it has none.
-        displayPrice: toCents2(price.priceValue) ?? [...priceRanges].sort((x, y) => x.from_quantity - y.from_quantity)[0]?.price ?? 0,
+        brand: asString(asRecord(tile.subtitle).text),
+        qualityCue: asString(asRecord(tile.qualityCue).text),
+        imageId: asString(asRecord(images.primaryImage).imageId) ?? asString(asRecord(images.sellingUnitImage).imageId),
+        displayPrice,
         originalPrice: toCents2(price.referencePriceValue),
         unitPrice: asString(price.unitPrice),
+        comparisonPrice: (0, comparison_price_1.getComparisonPrice)(displayPrice, unitQuantity, priceRanges),
         priceRanges: priceRanges.length > 0 ? priceRanges : null,
-        unitQuantity: asArray(tile.suffixes).map(asRecord2).filter((suffix) => suffix.type === "TEXT").flatMap((suffix) => asString(suffix.text) ?? []).join(", "),
+        unitQuantity,
         labels: LABEL_POSITIONS.flatMap((position) => asArray(labels[position]).map((value) => {
-          const label = asRecord2(value);
+          const label = asRecord(value);
           return { position, type: asString(label.type), text: asString(label.labelText) };
         })),
         isUnavailable: tile.unavailability !== null && tile.unavailability !== void 0,
@@ -889,21 +1020,23 @@ var require_search = __commonJS({
     }
     function extractSearchRecipe(tile) {
       const id = asString(tile.id);
-      const text3 = asRecord2(tile.text);
-      const name = asString(asRecord2(text3.title).text);
+      const text3 = asRecord(tile.text);
+      const name = asString(asRecord(text3.title).text);
       if (!id || !name)
         return null;
+      const tags = asArray(text3.tags).flatMap((tag) => asString(asRecord(tag).text) ?? []);
       return {
         id,
         name,
-        subtitle: asString(asRecord2(text3.subtitle).text),
-        imageId: asString(asRecord2(tile.image).imageId),
-        tags: asArray(text3.tags).flatMap((tag) => asString(asRecord2(tag).text) ?? [])
+        subtitle: asString(asRecord(text3.subtitle).text),
+        imageId: asString(asRecord(tile.image).imageId),
+        tags,
+        cookingTimeMinutes: (0, lists_1.firstMinutes)(tags)
       };
     }
     function extractFilters(value) {
       return asArray(value).flatMap((item) => {
-        const filter = asRecord2(item);
+        const filter = asRecord(item);
         const facetId = asString(filter.facetId);
         const name = asString(filter.name) ?? asString(filter.header);
         return facetId && name ? [{ facetId, name, imageId: asString(filter.image) }] : [];
@@ -917,14 +1050,14 @@ var require_search = __commonJS({
     var SORTING_ITEM_ID = "search-header-visual-item-sorting";
     var FILTER_TYPES = { VISUAL_FILTER: "visualFilters", POWER_FILTER: "powerFilters", TEXTUAL_FILTER: "textualFilters" };
     function extractFusionSearchResults(page, query) {
-      const state = asRecord2((0, pml_1.findNodeById)(page, SEARCH_STATE_ID)?.state);
-      const analytics = asRecord2(asRecord2(state.analyticsTemplate).data);
+      const state = asRecord((0, pml_1.findNodeById)(page, SEARCH_STATE_ID)?.state);
+      const analytics = asRecord(asRecord(state.analyticsTemplate).data);
       const isRecipeSearch = state.selectedEntityType === "RECIPE";
       return {
         query,
         correctedQuery: asString(analytics.query_corrected),
         products: state.selectedEntityType === "SELLING_UNIT" ? extractFusionProductResults(page, state) : null,
-        recipes: isRecipeSearch ? (0, lists_1.extractRecipeTiles)(page).map((recipe) => ({ id: recipe.id, name: recipe.name, subtitle: recipe.subtitle, imageId: recipe.imageId, tags: recipe.tags })) : []
+        recipes: isRecipeSearch ? (0, lists_1.extractRecipeTiles)(page).map(({ id, name, subtitle, imageId, tags, cookingTimeMinutes }) => ({ id, name, subtitle, imageId, tags, cookingTimeMinutes })) : []
       };
     }
     function extractFusionProductResults(page, state) {
@@ -937,7 +1070,7 @@ var require_search = __commonJS({
       });
       const visualSections = (0, pml_1.findNodeById)(page, VISUAL_SECTIONS_ID);
       const sections = asArray(state.sections).flatMap((value) => {
-        const name = asString(asRecord2(value).name);
+        const name = asString(asRecord(value).name);
         const blocks = name ? wrappers.get(name) : void 0;
         if (!name || !blocks)
           return [];
@@ -961,7 +1094,7 @@ var require_search = __commonJS({
           filters[filter.list].push(filter.filter);
       });
       const productIdsByFacetId = {};
-      for (const [facetId, ids] of Object.entries(asRecord2(state.sellingUnitIdsByFacetIds))) {
+      for (const [facetId, ids] of Object.entries(asRecord(state.sellingUnitIdsByFacetIds))) {
         productIdsByFacetId[facetId] = asArray(ids).filter((id) => typeof id === "string");
       }
       return {
@@ -974,14 +1107,14 @@ var require_search = __commonJS({
     }
     function readFilterItem(item) {
       const touchable = (0, pml_1.findNode)(item.pml, (n) => n.type === "TOUCHABLE");
-      const props = asRecord2(asRecord2(asRecord2(touchable?.onPress).callback).props);
+      const props = asRecord(asRecord(asRecord(touchable?.onPress).callback).props);
       const facetId = asString(props.v0);
       const name = asString(props.v1);
       const list = FILTER_TYPES[props.v2];
       if (!facetId || !name || !list)
         return null;
-      const image = (0, pml_1.findNode)(item.pml, (n) => n.type === "IMAGE" && typeof asRecord2(n.source).id === "string");
-      return { list, filter: { facetId, name, imageId: image ? asRecord2(image.source).id : null } };
+      const image = (0, pml_1.findNode)(item.pml, (n) => n.type === "IMAGE" && typeof asRecord(n.source).id === "string");
+      return { list, filter: { facetId, name, imageId: image ? asRecord(image.source).id : null } };
     }
     function readSortingOptions(button, state) {
       const isSortingDeeplink = (value) => typeof value === "string" && value.includes("sorting_options_ids=");
@@ -1000,7 +1133,7 @@ var require_search = __commonJS({
         if (ids.length > 0)
           return ids.map((name, index) => ({ name, title: titles[index] || name }));
       }
-      return asArray(asRecord2(asRecord2(state.analyticsTemplate).data).initial_sorting_strategies).flatMap((value) => {
+      return asArray(asRecord(asRecord(state.analyticsTemplate).data).initial_sorting_strategies).flatMap((value) => {
         const name = asString(value);
         return name ? [{ name, title: name }] : [];
       });
@@ -1400,12 +1533,12 @@ var require_profile = __commonJS({
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.extractProfile = extractProfile;
-    var asRecord2 = (value) => typeof value === "object" && value !== null && !Array.isArray(value) ? value : null;
+    var asRecord = (value) => typeof value === "object" && value !== null && !Array.isArray(value) ? value : null;
     var asString = (value) => typeof value === "string" && value !== "" ? value : null;
     function extractProfile(content) {
-      const user = asRecord2(findNode(content.nodes, "user-info")?.props.user) ?? {};
+      const user = asRecord(findNode(content.nodes, "user-info")?.props.user) ?? {};
       const items = findNode(content.nodes, "menu-list")?.props.items;
-      const address = asRecord2(user.preferredAddress);
+      const address = asRecord(user.preferredAddress);
       return {
         firstName: asString(user.firstName) ?? "",
         lastName: asString(user.lastName) ?? "",
@@ -1413,7 +1546,7 @@ var require_profile = __commonJS({
         hasMembership: user.hasMembership === true,
         address: address ? extractAddress(address) : null,
         menu: (Array.isArray(items) ? items : []).flatMap((item) => {
-          const entry = asRecord2(item);
+          const entry = asRecord(item);
           const id = asString(entry?.id);
           return id ? [{ id, deeplink: asString(entry?.deeplink) }] : [];
         })
@@ -1525,12 +1658,76 @@ var require_promotions = __commonJS({
   "node_modules/picnic-api/lib/domains/catalog/promotions.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
+    exports.extractRscPromotions = extractRscPromotions;
     exports.extractPromotions = extractPromotions;
     exports.extractPromotionGroup = extractPromotionGroup;
     var pml_1 = require_pml();
     var tiles_1 = require_tiles();
     var LAYOUT_CONTENT_ID_PREFIX = "campaign-page-layout-content";
     var PROMOTION_GROUP_ID = /[;,]promo_group_id=([^,&;]+)/;
+    var STREAMING_DATA_COLLECTOR = "streaming-data-collector";
+    var SECTION_EFFECTS = /* @__PURE__ */ new Set(["PAGE_LAYOUT", "PROMOBOX"]);
+    var asRecord = (value) => typeof value === "object" && value !== null && !Array.isArray(value) ? value : {};
+    var asString = (value) => typeof value === "string" && value !== "" ? value : null;
+    function extractRscPromotions(content) {
+      const effects = [];
+      const visit = (nodes) => {
+        for (const node of nodes) {
+          if (node.component === STREAMING_DATA_COLLECTOR && Array.isArray(node.props.data)) {
+            for (const entry of node.props.data.map(asRecord)) {
+              if (entry.type !== "RESOLVED")
+                continue;
+              effects.push({
+                index: typeof entry.componentIndex === "number" ? entry.componentIndex : effects.length,
+                component: asRecord(entry.component)
+              });
+            }
+          }
+          visit(node.children);
+        }
+      };
+      visit(content.nodes);
+      const sections = effects.sort((a, b) => a.index - b.index).map(({ component }) => component).filter((component) => SECTION_EFFECTS.has(String(component.effect_template_name))).map(readRscSection).filter((section) => section.products.length > 0 || section.groups.length > 0);
+      return { sections };
+    }
+    function readRscSection(component) {
+      const items = Array.isArray(component.items) ? component.items.map(asRecord) : [];
+      const title = asString(component.title) ?? asString(items.find((item) => item.type === "section-title")?.title) ?? "";
+      const products = /* @__PURE__ */ new Map();
+      const groups = /* @__PURE__ */ new Map();
+      const visit = (value) => {
+        if (Array.isArray(value))
+          return value.forEach(visit);
+        if (typeof value !== "object" || value === null)
+          return;
+        if (isProductTile2(value)) {
+          if (!products.has(value.id))
+            products.set(value.id, value);
+          return;
+        }
+        const group = readRscGroup(value);
+        if (group) {
+          const known = groups.get(group.id);
+          if (!known || group.label && !known.label)
+            groups.set(group.id, group);
+          return;
+        }
+        Object.values(value).forEach(visit);
+      };
+      visit(items);
+      return { id: asString(component.id) ?? "", title, products: [...products.values()], groups: [...groups.values()] };
+    }
+    function readRscGroup(item) {
+      if (item.type !== "promo-group-list-item" && item.type !== "campaign")
+        return null;
+      const id = PROMOTION_GROUP_ID.exec(asString(item.deeplink) ?? "")?.[1];
+      const name = asString(item.title)?.trim();
+      if (!id || !name)
+        return null;
+      const accessibilityLabel = asString(item.accessibilityLabel);
+      const label = asString(asRecord(item.badge).text) ?? (accessibilityLabel?.startsWith(`${name} `) ? accessibilityLabel.slice(name.length + 1).trim() || null : null);
+      return { id, name, example: asString(item.subtitle)?.trim() || null, label };
+    }
     function extractPromotions(page) {
       const layout = (0, pml_1.findNodeByIdPrefix)(page, LAYOUT_CONTENT_ID_PREFIX);
       const sections = (layout ? (0, pml_1.childrenOf)(layout) : []).filter((child) => child.type !== "PML").map(readSection).filter((section) => section.products.length > 0 || section.groups.length > 0);
@@ -1653,6 +1850,67 @@ var require_product_not_found_error = __commonJS({
   }
 });
 
+// node_modules/picnic-api/lib/domains/catalog/nutrition.js
+var require_nutrition = __commonJS({
+  "node_modules/picnic-api/lib/domains/catalog/nutrition.js"(exports) {
+    "use strict";
+    Object.defineProperty(exports, "__esModule", { value: true });
+    exports.nutritionPreference = nutritionPreference;
+    exports.nutritionAmount = nutritionAmount;
+    exports.readNutritionRows = readNutritionRows;
+    var comparison_price_1 = require_comparison_price();
+    var NEITHER = ["onverzadigd", "ungesättigt", "insaturé", "unsaturated"];
+    var HIGHER_IS_BETTER = ["eiwit", "eiweiß", "eiweiss", "protéine", "protein", "vezel", "ballaststoff", "fibre", "fiber"];
+    var LOWER_IS_BETTER = [
+      "energie",
+      "énergie",
+      "énergétique",
+      "brennwert",
+      "energy",
+      "kcal",
+      "kj",
+      "vet",
+      "fett",
+      "graisse",
+      "matières grasses",
+      "fat",
+      "verzadigd",
+      "gesättigt",
+      "saturé",
+      "saturated",
+      "suiker",
+      "zucker",
+      "sucre",
+      "sugar",
+      "zout",
+      "salz",
+      "sel",
+      "salt"
+    ];
+    function nutritionPreference(label) {
+      const text3 = label.toLowerCase();
+      if (NEITHER.some((word) => text3.includes(word)))
+        return null;
+      if (HIGHER_IS_BETTER.some((word) => text3.includes(word)))
+        return "higher";
+      if (LOWER_IS_BETTER.some((word) => text3.includes(word)))
+        return "lower";
+      return null;
+    }
+    function nutritionAmount(value) {
+      const match = value ? /\d+(?:[.,]\d+)*/.exec(value) : null;
+      return match ? (0, comparison_price_1.parseAmount)(match[0]) : null;
+    }
+    function readNutritionRows(rows) {
+      return rows.map((row) => ({
+        ...row,
+        amount: nutritionAmount(row.value),
+        preference: row.value === null ? null : nutritionPreference(row.label)
+      }));
+    }
+  }
+});
+
 // node_modules/picnic-api/lib/domains/catalog/product.js
 var require_product = __commonJS({
   "node_modules/picnic-api/lib/domains/catalog/product.js"(exports) {
@@ -1661,6 +1919,8 @@ var require_product = __commonJS({
     exports.extractProductDetails = extractProductDetails;
     exports.productDetailsPageId = productDetailsPageId;
     var product_not_found_error_1 = require_product_not_found_error();
+    var comparison_price_1 = require_comparison_price();
+    var nutrition_1 = require_nutrition();
     var pml_1 = require_pml();
     var MAIN_CONTAINER_ID = "product-details-page-root-main-container";
     var GALLERY_ID = "product-page-image-gallery-main-image-container";
@@ -1687,6 +1947,7 @@ var require_product = __commonJS({
         id: productId,
         ...header,
         ...prices,
+        comparisonPrice: (0, comparison_price_1.getComparisonPrice)(prices.displayPrice, header.unitQuantity, prices.priceRanges),
         maxCount: typeof mainUnit?.max_count === "number" ? mainUnit.max_count : 99,
         imageIds: extractImageIds(page, mainUnit),
         labels,
@@ -1835,7 +2096,7 @@ var require_product = __commonJS({
     }
     function extractNutritionRows(page) {
       const item = (0, pml_1.accordionItems)((0, pml_1.findNodeById)(page, ACCORDION_ID)).find((i) => NUTRITION_TITLE.test((0, pml_1.collectMarkdowns)(i.header).map(pml_1.cleanMarkdown)[0] ?? ""));
-      return item ? (0, pml_1.collectNutritionRows)(item.body) : [];
+      return item ? (0, nutrition_1.readNutritionRows)((0, pml_1.collectNutritionRows)(item.body)) : [];
     }
     function extractPromotion2(labels, page) {
       const labelTexts = new Set(labels.map((label) => label.text));
@@ -1849,6 +2110,7 @@ var require_product = __commonJS({
         imageId: String(u.image_id ?? ""),
         displayPrice: Number(u.display_price ?? 0),
         unitQuantity: String(u.unit_quantity ?? ""),
+        comparisonPrice: (0, comparison_price_1.getComparisonPrice)(Number(u.display_price ?? 0), String(u.unit_quantity ?? ""), Array.isArray(u.price_ranges) ? u.price_ranges : null),
         maxCount: Number(u.max_count ?? 0),
         ...u.deposit !== void 0 ? { deposit: Number(u.deposit) } : {},
         ...Array.isArray(u.price_ranges) ? { priceRanges: u.price_ranges } : {}
@@ -1869,7 +2131,7 @@ var require_categories = __commonJS({
     exports.extractSubcategories = extractSubcategories;
     exports.extractCategoryProducts = extractCategoryProducts;
     var search_1 = require_search();
-    var asRecord2 = (value) => typeof value === "object" && value !== null && !Array.isArray(value) ? value : null;
+    var asRecord = (value) => typeof value === "object" && value !== null && !Array.isArray(value) ? value : null;
     var asArray = (value) => Array.isArray(value) ? value : [];
     var asString = (value) => typeof value === "string" && value !== "" ? value : null;
     var TARGET_TYPES = {
@@ -1894,7 +2156,7 @@ var require_categories = __commonJS({
       return type && categoryId ? { type, categoryId: decodeURIComponent(categoryId) } : { type: "page" };
     }
     function readLink(item) {
-      const entry = asRecord2(item);
+      const entry = asRecord(item);
       const name = asString(entry?.title);
       const deeplink = asString(entry?.deeplink);
       if (!entry || !name || !deeplink)
@@ -1902,7 +2164,7 @@ var require_categories = __commonJS({
       return {
         name,
         imageId: asString(entry.image),
-        label: asString(asRecord2(entry.label)?.title),
+        label: asString(asRecord(entry.label)?.title),
         deeplink,
         target: readTarget(deeplink)
       };
@@ -1910,7 +2172,7 @@ var require_categories = __commonJS({
     function extractCategoryTree(content) {
       const sections = [{ title: null, links: [] }];
       for (const item of asArray(findNode(content.nodes, "vertical-list")?.props.items)) {
-        const entry = asRecord2(item);
+        const entry = asRecord(item);
         if (entry?.type === "section-title") {
           sections.push({ title: asString(entry.title), links: [] });
           continue;
@@ -1929,16 +2191,16 @@ var require_categories = __commonJS({
         links: asArray(list?.props.items).flatMap((item) => readLink(item) ?? [])
       };
     }
-    var isProductTile2 = (item) => typeof asRecord2(item)?.id === "string" && typeof asRecord2(item)?.name === "string" && typeof asRecord2(item)?.displayPrice === "number";
+    var isProductTile2 = (item) => typeof asRecord(item)?.id === "string" && typeof asRecord(item)?.name === "string" && typeof asRecord(item)?.displayPrice === "number";
     function extractCategoryProducts(categoryId, content) {
       const items = findNode(content.nodes, "items")?.props;
       const filterBar = findNode(content.nodes, "filter-bar")?.props;
       const productIdsByFacetId = {};
-      for (const [facetId, ids] of Object.entries(asRecord2(findNode(content.nodes, "context")?.props.entityIdsByFacetId) ?? {})) {
+      for (const [facetId, ids] of Object.entries(asRecord(findNode(content.nodes, "context")?.props.entityIdsByFacetId) ?? {})) {
         productIdsByFacetId[facetId] = asArray(ids).filter((id) => typeof id === "string");
       }
       const sections = asArray(items?.sections).map((value) => {
-        const section = asRecord2(value) ?? {};
+        const section = asRecord(value) ?? {};
         return {
           id: asString(section.id) ?? "",
           type: asString(section.type) ?? "",
@@ -1963,6 +2225,45 @@ var require_categories = __commonJS({
   }
 });
 
+// node_modules/picnic-api/lib/domains/catalog/product-page.js
+var require_product_page = __commonJS({
+  "node_modules/picnic-api/lib/domains/catalog/product-page.js"(exports) {
+    "use strict";
+    Object.defineProperty(exports, "__esModule", { value: true });
+    exports.extractProductPage = extractProductPage;
+    var pml_1 = require_pml();
+    var tiles_1 = require_tiles();
+    var SECTION_ID_PREFIX = "core-horizontal-selling-unit-section-localized";
+    var SECTION_HEADER_ID_PREFIX = "horizontal-selling-unit-tiles-sub-header-pml";
+    var asRecord = (value) => typeof value === "object" && value !== null && !Array.isArray(value) ? value : {};
+    function extractProductPage(page) {
+      const layout = asRecord(asRecord(page).layout);
+      const header = asRecord(layout.header ?? asRecord(page).header);
+      const title = typeof header.title === "string" && header.title !== "" ? header.title : null;
+      const rows = [];
+      (0, pml_1.walkNodes)(page, (node) => {
+        if (typeof node.id === "string" && node.id.startsWith(SECTION_ID_PREFIX))
+          rows.push(node);
+      });
+      if (rows.length === 0) {
+        const products = (0, tiles_1.collectFusionProductTiles)(page);
+        return { title, sections: products.length > 0 ? [{ title: null, products }] : [] };
+      }
+      const seen = /* @__PURE__ */ new Set();
+      const sections = rows.flatMap((row) => {
+        const products = (0, tiles_1.collectFusionProductTiles)(row).filter((tile) => !seen.has(tile.id));
+        products.forEach((tile) => seen.add(tile.id));
+        return products.length > 0 ? [{ title: rowTitle(row), products }] : [];
+      });
+      return { title, sections };
+    }
+    function rowTitle(row) {
+      const header = (0, pml_1.findNode)(row, (node) => typeof node.id === "string" && node.id.startsWith(SECTION_HEADER_ID_PREFIX));
+      return header ? (0, pml_1.collectMarkdowns)(header).map(pml_1.cleanMarkdown).find((text3) => text3 !== "") ?? null : null;
+    }
+  }
+});
+
 // node_modules/picnic-api/lib/domains/catalog/service.js
 var require_service4 = __commonJS({
   "node_modules/picnic-api/lib/domains/catalog/service.js"(exports) {
@@ -1975,6 +2276,8 @@ var require_service4 = __commonJS({
     var product_1 = require_product();
     var rsc_1 = require_rsc();
     var categories_1 = require_categories();
+    var product_page_1 = require_product_page();
+    var comparison_price_1 = require_comparison_price();
     var SEARCH_PARAMS_MODULE = "search-page-params/search-page-params-provider.tsx";
     var SEARCH_RESULTS_MODULE = "search-page-content/results/index.tsx";
     var CatalogService = class {
@@ -2015,11 +2318,23 @@ var require_service4 = __commonJS({
         return (0, categories_1.extractCategoryProducts)(categoryId, content);
       }
       /**
+       * Returns a page that lists products, such as a theme page or a shop page that a link opens
+       * (`app.picnic://store/page;id=<pageId>`). A Fusion page is read into its title and rows of product tiles;
+       * an RSC page is returned as its components, whose product tiles are parsed too.
+       * @param {string} pageId The page id with its parameters, e.g. `fresh-market-wineshop`.
+       */
+      async getProductPage(pageId) {
+        const page = await this.pages.getPage(pageId);
+        return page.format === "rsc" ? { format: "rsc", pageId, content: page.content } : { format: "fusion", pageId, ...(0, product_page_1.extractProductPage)(page.page) };
+      }
+      /**
        * Returns the promotions page as the app shows it (`promo-page-root`): sections with products
        * and promotion groups, e.g. the personal promotions, "Uitgelicht" and one section per category.
+       * Picnic serves it as RSC to picnic-api's agent; the Fusion reader stays while Picnic serves both formats.
        */
       async getPromotions() {
-        return (0, promotions_1.extractPromotions)(await this.pages.getFusionPage("promo-page-root"));
+        const page = await this.pages.getPage("promo-page-root");
+        return page.format === "rsc" ? (0, promotions_1.extractRscPromotions)(page.content) : (0, promotions_1.extractPromotions)(page.page);
       }
       /**
        * Returns the products of a promotion on several products (`promo-group-deep-dive`).
@@ -2111,6 +2426,17 @@ var require_service4 = __commonJS({
       async getProduct(productId) {
         const page = await this.getProductDetailsPage(productId);
         return (0, product_1.extractProductDetails)(productId, page);
+      }
+      /**
+       * Returns the similar products of a product that cost less per kilogram, litre or piece, the way a
+       * customer compares shelf labels. The app has no such list; this reads the similar products on the
+       * product page (one request) and compares their {@link ComparisonPrice}s.
+       * @param {string} productId The product ID, e.g. a cart line's `productId`.
+       * @throws {ProductNotFoundError} When the product doesn't exist or isn't available at the user's location.
+       */
+      async getCheaperAlternatives(productId) {
+        const product = await this.getProduct(productId);
+        return { productId, comparisonPrice: product.comparisonPrice, alternatives: (0, comparison_price_1.findCheaperAlternatives)(product) };
       }
       /**
        * Returns the URL of a product image, e.g. for an `<img>` or a chat message. The images don't
@@ -2340,8 +2666,9 @@ var require_cart = __commonJS({
     exports.readFees = readFees;
     exports.extractCart = extractCart;
     var delivery_slots_1 = require_delivery_slots();
-    var asRecord2 = (value) => typeof value === "object" && value !== null && !Array.isArray(value) ? value : null;
-    var asRecords = (value) => Array.isArray(value) ? value.flatMap((v) => asRecord2(v) ? [asRecord2(v)] : []) : [];
+    var comparison_price_1 = require_comparison_price();
+    var asRecord = (value) => typeof value === "object" && value !== null && !Array.isArray(value) ? value : null;
+    var asRecords = (value) => Array.isArray(value) ? value.flatMap((v) => asRecord(v) ? [asRecord(v)] : []) : [];
     var asString = (value) => typeof value === "string" && value !== "" ? value : null;
     var asNumber = (value, fallback = 0) => typeof value === "number" ? value : fallback;
     function mergeDecorators(decorators, overrides) {
@@ -2393,13 +2720,15 @@ var require_cart = __commonJS({
       const unavailable = find("UNAVAILABLE");
       const imageIds = Array.isArray(article?.image_ids) ? article.image_ids : [];
       const priceRanges = Array.isArray(article?.price_ranges) && article.price_ranges.length > 1 ? article.price_ranges : null;
+      const unitQuantity = asString(find("UNIT_QUANTITY")?.unit_quantity_text) ?? asString(article?.unit_quantity) ?? "";
+      const quantity = asNumber(find("QUANTITY")?.quantity, 1);
       return {
         id,
         productId: articleId ?? "",
         name: asString(article?.name) ?? asString(raw.name) ?? "",
-        unitQuantity: asString(find("UNIT_QUANTITY")?.unit_quantity_text) ?? asString(article?.unit_quantity) ?? "",
+        unitQuantity,
         imageId: asString(imageIds[0]),
-        quantity: asNumber(find("QUANTITY")?.quantity, 1),
+        quantity,
         maxCount: asNumber(article?.max_count, 99),
         displayPrice,
         originalPrice: price > displayPrice ? price : null,
@@ -2407,10 +2736,12 @@ var require_cart = __commonJS({
         priceRanges,
         labels: readLabels(decorators),
         basePrice: asString(find("BASE_PRICE")?.base_price_text),
+        // The line price is for all packages in the line.
+        comparisonPrice: quantity > 0 ? (0, comparison_price_1.getComparisonPrice)(Math.round(displayPrice / quantity), unitQuantity, priceRanges) : null,
         freshness: asString(find("FRESH_LABEL")?.period),
         characteristics: asRecords(find("PRODUCT_CHARACTERISTICS")?.characteristics).flatMap((c) => asString(c.type) ?? []),
         isUnavailable: unavailable !== void 0,
-        unavailableReason: asString(asRecord2(unavailable?.explanation)?.short_explanation),
+        unavailableReason: asString(asRecord(unavailable?.explanation)?.short_explanation),
         replacements: asRecords(unavailable?.replacements).flatMap((r) => readReplacement(r) ?? []),
         bundlesLink: asString(find("BUNDLES_BUTTON")?.deeplink),
         recipeId: asString(lineDecorators.find((d) => d.type === "BASKET_GROUP")?.id)
@@ -2733,8 +3064,8 @@ var require_delivery = __commonJS({
     exports.extractDeliveryRoute = extractDeliveryRoute;
     exports.combineDeliveryTracking = combineDeliveryTracking;
     var cart_1 = require_cart();
-    var asRecord2 = (value) => typeof value === "object" && value !== null && !Array.isArray(value) ? value : null;
-    var asRecords = (value) => Array.isArray(value) ? value.flatMap((v) => asRecord2(v) ? [asRecord2(v)] : []) : [];
+    var asRecord = (value) => typeof value === "object" && value !== null && !Array.isArray(value) ? value : null;
+    var asRecords = (value) => Array.isArray(value) ? value.flatMap((v) => asRecord(v) ? [asRecord(v)] : []) : [];
     var asString = (value) => typeof value === "string" && value !== "" ? value : null;
     var asNumber = (value, fallback = 0) => typeof value === "number" && Number.isFinite(value) ? value : fallback;
     function readReturnedContainers(raw) {
@@ -2746,7 +3077,7 @@ var require_delivery = __commonJS({
       }));
     }
     function readPayment(raw) {
-      const info = asRecord2(raw);
+      const info = asRecord(raw);
       const paymentType = asString(info?.payment_type);
       const redactedIban = asString(info?.redacted_iban);
       if (!paymentType && !redactedIban)
@@ -2778,9 +3109,9 @@ var require_delivery = __commonJS({
     }
     function extractDelivery(delivery) {
       const raw = delivery;
-      const slot2 = asRecord2(raw.slot);
-      const deliveryTime = asRecord2(raw.delivery_time);
-      const eta2 = asRecord2(raw.eta2);
+      const slot2 = asRecord(raw.slot);
+      const deliveryTime = asRecord(raw.delivery_time);
+      const eta2 = asRecord(raw.eta2);
       const orders = (delivery.orders ?? []).flatMap((order) => readOrder(order) ?? []);
       const items = orders.flatMap((order) => order.items);
       const deposits = orders.flatMap((order) => order.deposits);
@@ -2818,8 +3149,8 @@ var require_delivery = __commonJS({
       return best;
     }
     function extractDeliveryPosition(raw) {
-      const pos = asRecord2(raw) ?? {};
-      const etaWindow = asRecord2(pos.eta_window);
+      const pos = asRecord(raw) ?? {};
+      const etaWindow = asRecord(pos.eta_window);
       return {
         routeVersion: asNumber(pos.version),
         inProgress: pos.scenario_in_progress === true,
@@ -2831,11 +3162,11 @@ var require_delivery = __commonJS({
       };
     }
     function extractDeliveryRoute(raw) {
-      const scenario = asRecord2(raw) ?? {};
+      const scenario = asRecord(raw) ?? {};
       const points = asRecords(scenario.scenario).flatMap((point) => readRoutePoint(point) ?? []);
-      const driver = asRecord2(scenario.driver);
-      const vehicle = asRecord2(scenario.vehicle);
-      const destination = asRecord2(scenario.destination);
+      const driver = asRecord(scenario.driver);
+      const vehicle = asRecord(scenario.vehicle);
+      const destination = asRecord(scenario.destination);
       const end = points[points.length - 1];
       const lat = asNumber(destination?.lat) || (end?.lat ?? 0);
       const lng = asNumber(destination?.lng) || (end?.lng ?? 0);
@@ -2957,8 +3288,8 @@ var require_wallet_transaction = __commonJS({
     exports.extractWalletTransaction = extractWalletTransaction;
     var cart_1 = require_cart();
     var delivery_1 = require_delivery();
-    var asRecord2 = (value) => typeof value === "object" && value !== null && !Array.isArray(value) ? value : null;
-    var asRecords = (value) => Array.isArray(value) ? value.flatMap((v) => asRecord2(v) ? [asRecord2(v)] : []) : [];
+    var asRecord = (value) => typeof value === "object" && value !== null && !Array.isArray(value) ? value : null;
+    var asRecords = (value) => Array.isArray(value) ? value.flatMap((v) => asRecord(v) ? [asRecord(v)] : []) : [];
     var asString = (value) => typeof value === "string" && value !== "" ? value : null;
     var asNumber = (value, fallback = 0) => typeof value === "number" && Number.isFinite(value) ? value : fallback;
     var firstImage = (raw) => asString(Array.isArray(raw?.image_ids) ? raw.image_ids[0] : null);
@@ -2989,7 +3320,7 @@ var require_wallet_transaction = __commonJS({
       };
     }
     function extractWalletTransaction(transactionId, transaction) {
-      const raw = asRecord2(transaction) ?? {};
+      const raw = asRecord(transaction) ?? {};
       const lines = asRecords(raw.shop_items);
       const articles = articlesById(lines);
       const refunds = asRecords(raw.article_issue_refunds);
@@ -3187,8 +3518,9 @@ var require_recipe = __commonJS({
     exports.extractIngredientQuantities = extractIngredientQuantities;
     exports.extractSuggestedImages = extractSuggestedImages;
     var pml_1 = require_pml();
+    var nutrition_1 = require_nutrition();
     var lists_1 = require_lists();
-    var RECIPE_SCHEMA = "iglu:tech.picnic.snowplow.analytics/recipe/jsonschema/";
+    var RECIPE_SCHEMA2 = "iglu:tech.picnic.snowplow.analytics/recipe/jsonschema/";
     var SEGMENT_SCHEMA = "iglu:tech.picnic.snowplow.analytics/segment/jsonschema/";
     var PROMOTION_SCHEMA = "iglu:tech.picnic.snowplow.analytics/promotion/jsonschema/";
     var walkObjects = (node, visit) => {
@@ -3218,7 +3550,7 @@ var require_recipe = __commonJS({
         const segment = contexts.find((c) => c.schema?.startsWith(SEGMENT_SCHEMA));
         if (segment?.data?.segment_type !== segmentType)
           return;
-        const recipe = contexts.find((c) => c.schema?.startsWith(RECIPE_SCHEMA))?.data;
+        const recipe = contexts.find((c) => c.schema?.startsWith(RECIPE_SCHEMA2))?.data;
         if (typeof recipe?.recipe_id !== "string")
           return;
         const previous = byId.get(recipe.recipe_id);
@@ -3265,7 +3597,7 @@ var require_recipe = __commonJS({
         if (obj.type !== "PML" || typeof obj.id !== "string" || !obj.id.includes("selling-unit-tile"))
           return;
         const contexts = obj.analytics?.contexts ?? [];
-        const recipe = contexts.find((c) => c.schema?.startsWith(RECIPE_SCHEMA))?.data;
+        const recipe = contexts.find((c) => c.schema?.startsWith(RECIPE_SCHEMA2))?.data;
         const units = recipe?.selling_units;
         const unit = Array.isArray(units) && units.length === 1 ? units[0] : void 0;
         const ingredientId = unit ? unit.ingredient_id : JSON.stringify(obj.pml ?? {}).match(/ingredient_id=([a-f0-9-]+)&/)?.[1];
@@ -3356,13 +3688,13 @@ var require_recipe = __commonJS({
     }
     function extractRecipeNutritionRows(page) {
       const item = (0, pml_1.accordionItems)((0, pml_1.findNodeById)(page, "accordion-list")).find((i) => /voedingswaarde|nährwert|valeurs nutritionnelles/i.test((0, pml_1.collectMarkdowns)(i.header)[0] ?? ""));
-      return item ? (0, pml_1.collectNutritionRows)(item.body) : [];
+      return item ? (0, nutrition_1.readNutritionRows)((0, pml_1.collectNutritionRows)(item.body)) : [];
     }
     function extractIngredientProductName(page) {
       return textByType(page, "HEADER1");
     }
     function extractRecipeDetails(recipeId, page) {
-      let recipeContext;
+      let recipeContext2;
       let header;
       let owner;
       let note = null;
@@ -3374,8 +3706,8 @@ var require_recipe = __commonJS({
               imageId = image.source.id;
           });
         }
-        if (!recipeContext && obj.recipe_id === recipeId && Array.isArray(obj.selling_units) && typeof obj.recipe_name === "string") {
-          recipeContext = obj;
+        if (!recipeContext2 && obj.recipe_id === recipeId && Array.isArray(obj.selling_units) && typeof obj.recipe_name === "string") {
+          recipeContext2 = obj;
         }
         if (!header && typeof obj.creator_type === "string" && typeof obj.sellable_name === "string") {
           header = obj;
@@ -3387,12 +3719,12 @@ var require_recipe = __commonJS({
           note = obj.initialContent;
         }
       });
-      if (!recipeContext)
+      if (!recipeContext2)
         throw new Error(`Could not extract recipe ${recipeId}: recipe context missing from details page`);
       const tiles = extractIngredientTiles(page);
       const states = extractIngredientStates(page);
       const allergens = extractAllergensByIngredient(page);
-      const ingredients = recipeContext.selling_units.map((unit) => {
+      const ingredients = recipeContext2.selling_units.map((unit) => {
         const sellingUnitId = unit.selling_unit_id ?? "";
         const tile = tiles.get(unit.ingredient_id);
         const showsThisUnit = tile?.sellingUnitId === null || tile?.sellingUnitId === sellingUnitId;
@@ -3427,14 +3759,14 @@ var require_recipe = __commonJS({
       const times = extractTimes(page);
       return {
         id: recipeId,
-        name: recipeContext?.recipe_name ?? header?.sellable_name ?? owner?.name ?? "",
-        portions: recipeContext.portions ?? header?.default_portions ?? 0,
-        defaultPortions: header?.default_portions ?? recipeContext.portions ?? 0,
-        displayedPortions: recipeContext?.portions ?? header?.default_portions ?? 0,
+        name: recipeContext2?.recipe_name ?? header?.sellable_name ?? owner?.name ?? "",
+        portions: recipeContext2.portions ?? header?.default_portions ?? 0,
+        defaultPortions: header?.default_portions ?? recipeContext2.portions ?? 0,
+        displayedPortions: recipeContext2?.portions ?? header?.default_portions ?? 0,
         creatorType: header?.creator_type ?? "UNKNOWN",
         isRecipeOwner: owner?.is_recipe_owner ?? false,
         isSaved: header?.is_saved ?? false,
-        imageType: recipeContext?.image_type ?? null,
+        imageType: recipeContext2?.image_type ?? null,
         imageId,
         ingredients,
         note,
@@ -3485,6 +3817,7 @@ var require_service12 = __commonJS({
     exports.RecipeService = void 0;
     var product_1 = require_product();
     var recipe_1 = require_recipe();
+    var pml_1 = require_pml();
     var lists_1 = require_lists();
     var RecipeService = class {
       constructor(http, pages) {
@@ -3533,20 +3866,27 @@ var require_service12 = __commonJS({
         return (0, lists_1.extractRecipeOverview)(await this.getRecipesPage());
       }
       /**
-       * Returns the recipes of a category, from the `meals-category-page` RSC page.
+       * Returns the recipes of a category, from `meals-category-page`. Picnic serves the page as RSC
+       * or as Fusion depending on the account (Fusion seen in DE). The Fusion page is a shell that
+       * loads its recipes from a content page, and so does this method: one request more.
        * @param {string} categoryId The `category_id` of a category link from {@link getRecipeOverview}.
        */
       async getRecipeCategory(categoryId) {
-        const content = await this.pages.getRscContent(`meals-category-page?category_id=${encodeURIComponent(categoryId)}`);
-        return (0, lists_1.extractRecipeCategory)(categoryId, content);
+        const page = await this.pages.getPage(`meals-category-page?category_id=${encodeURIComponent(categoryId)}`);
+        if (page.format === "rsc")
+          return (0, lists_1.extractRecipeCategory)(categoryId, page.content);
+        const contentPageId = (0, pml_1.findSuspensePageId)(page.page);
+        const content = contentPageId ? await this.pages.getFusionPage(contentPageId) : page.page;
+        return (0, lists_1.extractFusionRecipeCategory)(categoryId, page.page, content);
       }
       /**
-       * Returns the categories of a group, from the `meals-category-group-page` RSC page.
+       * Returns the categories of a group, from `meals-category-group-page`, which Picnic serves as
+       * RSC or as Fusion depending on the account (Fusion seen in DE).
        * @param {string} groupName The `group_name` of a group link from {@link getRecipeOverview}, e.g. "Kids".
        */
       async getRecipeCategoryGroup(groupName) {
-        const content = await this.pages.getRscContent(`meals-category-group-page?group_name=${encodeURIComponent(groupName)}`);
-        return (0, lists_1.extractRecipeCategoryGroup)(groupName, content);
+        const page = await this.pages.getPage(`meals-category-group-page?group_name=${encodeURIComponent(groupName)}`);
+        return page.format === "rsc" ? (0, lists_1.extractRecipeCategoryGroup)(groupName, page.content) : (0, lists_1.extractFusionRecipeCategoryGroup)(groupName, page.page);
       }
       /**
        * Returns structured catalog or user-defined recipe details at the requested
@@ -4219,6 +4559,19 @@ var INPUT = [
   { id: "s1025", name: "Basmatirijst", price: 219, unit: "1 kg", brand: "Lassie", words: ["rijst", "basmati"], category: "voorraad" },
   { id: "s1026", name: "Verse koriander", price: 99, unit: "30 g", words: ["koriander", "kruiden"], category: "groente" }
 ];
+var SIZE_UNITS = { g: ["kg", 1e-3], kg: ["kg", 1], ml: ["l", 1e-3], l: ["l", 1], stuks: ["piece", 1] };
+function comparisonPrice(cents, unitQuantity, tiers = null) {
+  const match = /^(\d+) (\w+)$/.exec(unitQuantity);
+  const unit = match && SIZE_UNITS[match[2]];
+  if (!match || !unit || cents <= 0) return null;
+  const amount = Number(match[1]) * unit[1];
+  const cheapest = (tiers ?? []).filter((tier) => tier.pricePerUnit < cents).sort((a, b) => a.pricePerUnit - b.pricePerUnit)[0];
+  return {
+    unit: unit[0],
+    price: Math.round(cents / amount),
+    lowestPrice: cheapest ? { price: Math.round(cheapest.pricePerUnit / amount), fromQuantity: cheapest.quantity } : null
+  };
+}
 var PRODUCTS = INPUT.map((p) => ({
   id: p.id,
   name: p.name,
@@ -4237,6 +4590,7 @@ var PRODUCTS = INPUT.map((p) => ({
   // Picnic colours offer prices red, chosen for its white app; the dark theme must cope.
   displayPriceColor: p.was ? "#B40117" : null,
   unitQuantity: p.unit,
+  comparisonPrice: comparisonPrice(p.price, p.unit, p.bundle),
   maxCount: p.max ?? 99,
   priceRanges: p.bundle ?? null,
   badges: [],
@@ -4250,13 +4604,13 @@ var PRODUCTS = INPUT.map((p) => ({
 var productById = (id) => PRODUCTS.find((p) => p.id === id) ?? null;
 var plainProduct = ({ words: _w, category: _c, ...product }) => product;
 var NUTRITION = [
-  { label: "Energie", value: "1050 kJ / 250 kcal", isCategory: true, backgroundColor: null },
-  { label: "Vet", value: "3,1 g", isCategory: true, backgroundColor: "#f5f1ec" },
-  { label: "waarvan verzadigd", value: "0,6 g", isCategory: false, backgroundColor: null },
-  { label: "Koolhydraten", value: "41 g", isCategory: true, backgroundColor: "#f5f1ec" },
-  { label: "waarvan suikers", value: "3,5 g", isCategory: false, backgroundColor: null },
-  { label: "Eiwitten", value: "11 g", isCategory: true, backgroundColor: "#f5f1ec" },
-  { label: "Zout", value: "1,0 g", isCategory: true, backgroundColor: null }
+  { label: "Energie", value: "1050 kJ / 250 kcal", isCategory: true, backgroundColor: null, amount: 250, preference: "lower" },
+  { label: "Vet", value: "3,1 g", isCategory: true, backgroundColor: "#f5f1ec", amount: 3.1, preference: "lower" },
+  { label: "waarvan verzadigd", value: "0,6 g", isCategory: false, backgroundColor: null, amount: 0.6, preference: "lower" },
+  { label: "Koolhydraten", value: "41 g", isCategory: true, backgroundColor: "#f5f1ec", amount: 41, preference: null },
+  { label: "waarvan suikers", value: "3,5 g", isCategory: false, backgroundColor: null, amount: 3.5, preference: "lower" },
+  { label: "Eiwitten", value: "11 g", isCategory: true, backgroundColor: "#f5f1ec", amount: 11, preference: "higher" },
+  { label: "Zout", value: "1,0 g", isCategory: true, backgroundColor: null, amount: 1, preference: "lower" }
 ];
 var ALLERGENS = {
   brood: {
@@ -4283,6 +4637,7 @@ function productDetail(id) {
     quantityBadges: product.unitQuantity === "1 kg" ? [{ text: "XL", textColor: "#ffffff", backgroundColor: "#295813" }] : [],
     unitQuantity: product.unitQuantity,
     unitPrice: `€${(product.displayPrice / 100 * 1.5).toFixed(2).replace(".", ",")}/kg`,
+    comparisonPrice: product.comparisonPrice,
     tags: [{ text: product.category[0].toUpperCase() + product.category.slice(1), color: "#295813" }],
     displayPrice: product.displayPrice,
     originalPrice: product.originalPrice,
@@ -4315,6 +4670,7 @@ function productDetail(id) {
       imageId: p.imageId,
       displayPrice: p.displayPrice,
       unitQuantity: p.unitQuantity,
+      comparisonPrice: p.comparisonPrice,
       maxCount: p.maxCount
     })),
     nutritionRows: NUTRITION
@@ -6538,7 +6894,8 @@ function lineItem(line, index) {
     badges: tier ? [{ text: `${tier.quantity} voor ${(tier.pricePerUnit * tier.quantity / 100).toFixed(2).replace(".", ",")}`, variant: "bundle" }] : [],
     isUnavailable: product.isUnavailable,
     unavailableExplanation: product.unavailableReason,
-    basketGroupId: line.group
+    basketGroupId: line.group,
+    comparisonPrice: comparisonPrice(unit, product.unitQuantity, product.priceRanges)
   };
 }
 function cart(state) {
@@ -6738,8 +7095,8 @@ function recipeDetail(state, id, portions) {
     steps: recipe.steps,
     stepsPortionWarning: portions > 6 ? "Let op: de bereiding is geschreven voor 6 personen of minder." : null,
     recipeNutritionRows: [
-      { label: "Energie", value: "520 kcal", isCategory: true, backgroundColor: null },
-      { label: "Eiwitten", value: "21 g", isCategory: true, backgroundColor: "#f5f1ec" }
+      { label: "Energie", value: "520 kcal", isCategory: true, backgroundColor: null, amount: 520, preference: "lower" },
+      { label: "Eiwitten", value: "21 g", isCategory: true, backgroundColor: "#f5f1ec", amount: 21, preference: "higher" }
     ],
     allergens: {
       confirmed: [{ text: "Soja", backgroundColor: "#b40117", textColor: "#ffffff" }],
@@ -7209,6 +7566,42 @@ var de = {
   tryAnotherTerm: "Versuche einen anderen Suchbegriff",
   resultSingular: "Ergebnis",
   resultPlural: "Ergebnisse",
+  // Comparison prices
+  perPieceUnit: "Stück",
+  sortRelevance: "Relevanz",
+  sortComparisonPrice: "Preis pro kg/l",
+  sortByLabel: "Sortieren",
+  cheapestPerUnit: "Am günstigsten pro {unit}",
+  comparisonPriceFrom: "{price} ab {quantity}",
+  comparisonUnitHeader: "Pro {unit}",
+  noComparisonPrice: "Ohne Preis pro kg/l",
+  findCheaperAlternative: "Günstigere Alternative?",
+  hideCheaperAlternatives: "Alternativen ausblenden",
+  noCheaperAlternative: "Kein ähnliches Produkt, das pro {unit} weniger kostet.",
+  cheaperAlternativesError: "Alternativen konnten nicht geladen werden.",
+  cheaperBy: "{price} günstiger",
+  replaceInCart: "Ersetzen",
+  replaceInCartAriaLabel: "Durch {name} ersetzen",
+  replaceInCartError: "Ersetzen fehlgeschlagen. Bitte versuche es erneut.",
+  // Product comparison
+  compareAdd: "Vergleichen",
+  compareAdded: "Im Vergleich",
+  compareFull: "Du vergleichst schon {count} Produkte. Entferne zuerst eins.",
+  compareBar: "Vergleichen ({count})",
+  compareTitle: "Produkte vergleichen",
+  compareEmpty: 'Noch nichts zu vergleichen. Wähle "Vergleichen" auf einer Produktseite.',
+  compareAddMore: "Wähle noch ein Produkt zum Vergleichen.",
+  compareRemove: "Aus dem Vergleich entfernen",
+  compareClear: "Liste leeren",
+  compareLoadError: "Dieses Produkt konnte nicht geladen werden.",
+  compareRowPrice: "Preis",
+  compareRowComparisonPrice: "Preis pro kg/l",
+  compareRowUnitQuantity: "Inhalt",
+  compareRowLabels: "Merkmale",
+  compareRowContains: "Enthält",
+  compareRowMayContain: "Kann enthalten",
+  compareRowNutrition: "Nährwerte",
+  compareBestHint: "Grün ist pro Zeile der bessere Wert: niedriger bei Preis, Allergenen, Energie, Fett, Zucker und Salz, höher bei Eiweiß und Ballaststoffen.",
   // Login page
   loginTitle: "Anmelden",
   sessionExpired: "Deine Sitzung ist abgelaufen. Bitte melde dich erneut an.",
@@ -7353,6 +7746,13 @@ var de = {
   mealPlanContinueDisabledHint: "Mehr Tage eintragen oder ein Rezept abwählen, um weiterzuplanen",
   mealPlanRecent: "Letzter Essensplan",
   mealPlanClear: "Plan löschen",
+  mealPlanExport: "Exportieren",
+  mealPlanImport: "Importieren",
+  mealPlanImportInvalid: "Diese Datei ist kein gültiger Essensplan.",
+  mealPlanImportReplaceTitle: "Aktuellen Plan ersetzen?",
+  mealPlanImportReplaceMessage: "Der aktuelle Plan mit {current} Rezepten wird durch den importierten Plan mit {imported} Rezepten ersetzt.",
+  mealPlanImportReplaceConfirm: "Ersetzen",
+  mealPlanImported: "Plan mit {count} Rezepten importiert.",
   mealPlanViewShoppingList: "Einkaufsliste ansehen",
   mealPlanPackagesSaved: "{n} Packungen gespart",
   mealPlanSharedWith: "Auch verwendet in {recipe}",
@@ -7520,6 +7920,42 @@ var fr = {
   tryAnotherTerm: "Essayez un autre terme de recherche",
   resultSingular: "résultat",
   resultPlural: "résultats",
+  // Comparison prices
+  perPieceUnit: "pièce",
+  sortRelevance: "Pertinence",
+  sortComparisonPrice: "Prix au kg/l",
+  sortByLabel: "Trier",
+  cheapestPerUnit: "Le moins cher au {unit}",
+  comparisonPriceFrom: "{price} dès {quantity}",
+  comparisonUnitHeader: "Au {unit}",
+  noComparisonPrice: "Sans prix au kg/l",
+  findCheaperAlternative: "Alternative moins chère ?",
+  hideCheaperAlternatives: "Masquer les alternatives",
+  noCheaperAlternative: "Aucun produit similaire moins cher au {unit}.",
+  cheaperAlternativesError: "Impossible de charger les alternatives.",
+  cheaperBy: "{price} de moins",
+  replaceInCart: "Remplacer",
+  replaceInCartAriaLabel: "Remplacer par {name}",
+  replaceInCartError: "Le remplacement a échoué. Veuillez réessayer.",
+  // Product comparison
+  compareAdd: "Comparer",
+  compareAdded: "Dans la comparaison",
+  compareFull: "Vous comparez déjà {count} produits. Retirez-en un d'abord.",
+  compareBar: "Comparer ({count})",
+  compareTitle: "Comparer des produits",
+  compareEmpty: `Rien à comparer pour l'instant. Choisissez "Comparer" sur une page produit.`,
+  compareAddMore: "Choisissez encore un produit à comparer.",
+  compareRemove: "Retirer de la comparaison",
+  compareClear: "Vider la liste",
+  compareLoadError: "Impossible de charger ce produit.",
+  compareRowPrice: "Prix",
+  compareRowComparisonPrice: "Prix au kg/l",
+  compareRowUnitQuantity: "Contenance",
+  compareRowLabels: "Caractéristiques",
+  compareRowContains: "Contient",
+  compareRowMayContain: "Peut contenir",
+  compareRowNutrition: "Valeurs nutritionnelles",
+  compareBestHint: "En vert, la meilleure valeur de chaque ligne : plus bas pour le prix, les allergènes, l'énergie, les graisses, le sucre et le sel, plus haut pour les protéines et les fibres.",
   // Login page
   loginTitle: "Connexion",
   sessionExpired: "Votre session a expiré. Veuillez vous reconnecter.",
@@ -7664,6 +8100,13 @@ var fr = {
   mealPlanContinueDisabledHint: "Augmentez le nombre de jours ou décochez une recette pour continuer",
   mealPlanRecent: "Plan de repas récent",
   mealPlanClear: "Effacer le plan",
+  mealPlanExport: "Exporter",
+  mealPlanImport: "Importer",
+  mealPlanImportInvalid: "Ce fichier n'est pas un plan de repas valide.",
+  mealPlanImportReplaceTitle: "Remplacer le plan actuel ?",
+  mealPlanImportReplaceMessage: "Le plan actuel de {current} recettes sera remplacé par le plan importé de {imported} recettes.",
+  mealPlanImportReplaceConfirm: "Remplacer",
+  mealPlanImported: "Plan de {count} recettes importé.",
   mealPlanViewShoppingList: "Voir la liste de courses",
   mealPlanPackagesSaved: "{n} emballages économisés",
   mealPlanSharedWith: "Aussi utilisé dans {recipe}",
@@ -7831,6 +8274,42 @@ var nl = {
   tryAnotherTerm: "Probeer een andere zoekterm",
   resultSingular: "resultaat",
   resultPlural: "resultaten",
+  // Comparison prices
+  perPieceUnit: "stuk",
+  sortRelevance: "Relevant",
+  sortComparisonPrice: "Prijs per kg/l",
+  sortByLabel: "Sorteer",
+  cheapestPerUnit: "Goedkoopst per {unit}",
+  comparisonPriceFrom: "{price} vanaf {quantity}",
+  comparisonUnitHeader: "Per {unit}",
+  noComparisonPrice: "Zonder prijs per kg/l",
+  findCheaperAlternative: "Goedkoper alternatief?",
+  hideCheaperAlternatives: "Verberg alternatieven",
+  noCheaperAlternative: "Geen vergelijkbaar product dat per {unit} minder kost.",
+  cheaperAlternativesError: "Alternatieven laden mislukt.",
+  cheaperBy: "{price} goedkoper",
+  replaceInCart: "Vervang",
+  replaceInCartAriaLabel: "Vervang door {name}",
+  replaceInCartError: "Vervangen mislukt. Probeer het opnieuw.",
+  // Product comparison
+  compareAdd: "Vergelijk",
+  compareAdded: "In vergelijking",
+  compareFull: "Je vergelijkt al {count} producten. Haal er eerst een weg.",
+  compareBar: "Vergelijk ({count})",
+  compareTitle: "Producten vergelijken",
+  compareEmpty: 'Nog niets om te vergelijken. Kies "Vergelijk" op een productpagina.',
+  compareAddMore: "Kies nog een product om mee te vergelijken.",
+  compareRemove: "Verwijder uit vergelijking",
+  compareClear: "Leeg de lijst",
+  compareLoadError: "Dit product kon niet geladen worden.",
+  compareRowPrice: "Prijs",
+  compareRowComparisonPrice: "Prijs per kg/l",
+  compareRowUnitQuantity: "Inhoud",
+  compareRowLabels: "Kenmerken",
+  compareRowContains: "Bevat",
+  compareRowMayContain: "Bevat mogelijk",
+  compareRowNutrition: "Voedingswaarde",
+  compareBestHint: "Groen is per regel de betere waarde: lager voor prijs, allergenen, energie, vet, suiker en zout, hoger voor eiwit en vezels.",
   // Login page
   loginTitle: "Inloggen",
   sessionExpired: "Je sessie is verlopen. Log opnieuw in.",
@@ -7975,6 +8454,13 @@ var nl = {
   mealPlanContinueDisabledHint: "Verhoog het aantal dagen of vink een recept uit om verder te plannen",
   mealPlanRecent: "Recent voedingsplan",
   mealPlanClear: "Plan wissen",
+  mealPlanExport: "Exporteren",
+  mealPlanImport: "Importeren",
+  mealPlanImportInvalid: "Dit bestand is geen geldig voedingsplan.",
+  mealPlanImportReplaceTitle: "Huidig plan vervangen?",
+  mealPlanImportReplaceMessage: "Het huidige plan met {current} recepten wordt vervangen door het geïmporteerde plan met {imported} recepten.",
+  mealPlanImportReplaceConfirm: "Vervangen",
+  mealPlanImported: "Plan met {count} recepten geïmporteerd.",
   mealPlanViewShoppingList: "Boodschappenlijst bekijken",
   mealPlanPackagesSaved: "{n} verpakkingen bespaard",
   mealPlanSharedWith: "Ook gebruikt in {recipe}",
@@ -8164,7 +8650,8 @@ function mapCartLine(line) {
     badges: mapBadges(line),
     isUnavailable: line.isUnavailable,
     unavailableExplanation: line.unavailableReason,
-    basketGroupId: line.recipeId
+    basketGroupId: line.recipeId,
+    comparisonPrice: line.comparisonPrice
   };
 }
 function mapCart(cart2, countryCode) {
@@ -8811,6 +9298,7 @@ function mapProductTile(tile, tokens = {}) {
     originalPrice: tile.originalPrice,
     displayPriceColor: null,
     unitQuantity: tile.unitQuantity,
+    comparisonPrice: tile.comparisonPrice,
     maxCount: DEFAULT_MAX_COUNT2,
     priceRanges: mapPriceRanges(tile.priceRanges),
     badges: [],
@@ -8995,10 +9483,194 @@ function cachedCall(client, name, call, ttlMs = PAGE_CACHE_TTL_MS) {
   return promise;
 }
 
+// vendor/picnic-web/src/lib/pml/pml-helpers.ts
+function stripColorTags(md) {
+  return md.replace(/#\([^)]+\)/g, "").trim();
+}
+function cleanMarkdown(md) {
+  return stripColorTags(md).replace(/\*\*/g, "").replace(/__/g, "").trim();
+}
+function extractInnerColor(md) {
+  const colorRegex = /#\(([^)]+)\)/g;
+  const colors = [];
+  let match;
+  while ((match = colorRegex.exec(md)) !== null) {
+    colors.push(match[1]);
+  }
+  if (colors.length === 0) return null;
+  const DEFAULT_COLORS = /* @__PURE__ */ new Set(["#333333", "#5b534e", "#787570"]);
+  for (const color of colors) {
+    if (!DEFAULT_COLORS.has(color.toLowerCase())) {
+      return color;
+    }
+  }
+  return null;
+}
+function collectMarkdowns(node) {
+  const results = [];
+  if (typeof node !== "object" || node === null) return results;
+  if (Array.isArray(node)) {
+    for (const item of node) {
+      results.push(...collectMarkdowns(item));
+    }
+    return results;
+  }
+  const record = node;
+  if (typeof record.markdown === "string") {
+    results.push(record.markdown);
+  }
+  for (const value of Object.values(record)) {
+    if (typeof value === "object" && value !== null) {
+      results.push(...collectMarkdowns(value));
+    }
+  }
+  return results;
+}
+function findNodeById(obj, id) {
+  if (typeof obj !== "object" || obj === null) return null;
+  if (Array.isArray(obj)) {
+    for (const item of obj) {
+      const result = findNodeById(item, id);
+      if (result) return result;
+    }
+    return null;
+  }
+  const record = obj;
+  if (record.id === id) return record;
+  for (const value of Object.values(record)) {
+    const result = findNodeById(value, id);
+    if (result) return result;
+  }
+  return null;
+}
+function collectPropertyValues(node, key) {
+  const results = [];
+  if (typeof node !== "object" || node === null) return results;
+  if (Array.isArray(node)) {
+    for (const item of node) {
+      results.push(...collectPropertyValues(item, key));
+    }
+    return results;
+  }
+  const record = node;
+  if (key in record) {
+    results.push(record[key]);
+  }
+  for (const [k, value] of Object.entries(record)) {
+    if (k !== key && typeof value === "object" && value !== null) {
+      results.push(...collectPropertyValues(value, key));
+    }
+  }
+  return results;
+}
+
+// vendor/picnic-web/src/lib/recipe/parse-recipe-pages.ts
+var RECIPE_SCHEMA = "iglu:tech.picnic.snowplow.analytics/recipe/jsonschema/";
+function parseMinutes(tag) {
+  const sum = tag.match(/^(\d+(?:\s*\+\s*\d+)*)\s*min/i)?.[1];
+  if (sum) return sum.split("+").reduce((total, part) => total + Number(part.trim()), 0);
+  const hours = tag.match(/(\d+)\s*(?:uur|u|std|h)\b/i)?.[1];
+  const minutes = tag.match(/(\d+)\s*min/i)?.[1];
+  if (hours === void 0 && minutes === void 0) return null;
+  return Number(hours ?? 0) * 60 + Number(minutes ?? 0);
+}
+function firstMinutes(tags) {
+  return tags.map(parseMinutes).find((minutes) => minutes !== null) ?? null;
+}
+function recipeContext(node) {
+  const contexts = node.analytics?.contexts;
+  const context = contexts?.find(
+    (c) => c?.schema?.startsWith(RECIPE_SCHEMA) && typeof c.data?.recipe_id === "string"
+  );
+  return context?.data ?? null;
+}
+function readTile(node, recipe) {
+  const texts = collectMarkdowns(node.pml ?? node).map(cleanMarkdown).filter(Boolean);
+  const analyticsName = typeof recipe.recipe_name === "string" ? recipe.recipe_name.trim() : "";
+  const name = analyticsName || texts[0] || "";
+  if (!name) return null;
+  const tags = texts.slice(texts.indexOf(name) + 1);
+  const image = collectPropertyValues(node, "source").find(
+    (source) => typeof source?.id === "string"
+  );
+  return {
+    id: recipe.recipe_id,
+    name,
+    imageId: image?.id ?? null,
+    cookingTimeMinutes: firstMinutes(tags)
+  };
+}
+function parseRecipeTiles(page) {
+  const recipes = /* @__PURE__ */ new Map();
+  const visit = (value) => {
+    if (Array.isArray(value)) return value.forEach(visit);
+    if (typeof value !== "object" || value === null) return;
+    const node = value;
+    const recipe = (node.type === "PML" || node.type === "BLOCK") && recipeContext(node);
+    if (!recipe) return Object.values(node).forEach(visit);
+    const item = readTile(node, recipe);
+    if (item && !recipes.has(item.id)) recipes.set(item.id, item);
+  };
+  visit(page);
+  return [...recipes.values()];
+}
+
+// vendor/picnic-web/src/lib/recipe/recipe-cattree-pages.ts
+var DE_RECIPE_CATTREE_PAGES = {
+  Blitzrezepte: "recipe-cattree-25min",
+  "One Pot": "recipe-cattree-onepot",
+  Pasta: "recipe-cattree-pasta",
+  "Gefüllte Pasta": "recipe-cattree-stuffedpasta",
+  Lasagne: "recipe-cattree-lasagne",
+  Gnocchi: "recipe-cattree-gnocchi",
+  Nudeln: "recipe-cattree-noodles",
+  Schupfnudeln: "recipe-cattree-schupfnudeln",
+  Maultaschen: "recipe-cattree-maultaschen",
+  Spätzle: "recipe-cattree-spaetzle",
+  "Asia & Reis": "recipe-cattree-asia-reis",
+  Risotto: "recipe-cattree-risotto",
+  Couscous: "recipe-cattree-couscous",
+  Bulgur: "recipe-cattree-bulgur",
+  Knödel: "recipe-cattree-knoedel",
+  Kartoffel: "recipe-cattree-kartoffel",
+  Suppen: "recipe-cattree-suppen",
+  Eintopf: "recipe-cattree-eintopf",
+  Curry: "recipe-cattree-curry2",
+  Bowls: "recipe-cattree-bowls",
+  Wraps: "recipe-cattree-wraps",
+  Pita: "recipe-cattree-pita2",
+  Quiche: "recipe-cattree-quiche",
+  Traybake: "recipe-cattree-traybake",
+  Aufläufe: "recipe-cattree-auflaufe",
+  Vegetarisch: "recipe-cattree-vegetarisch",
+  Vegan: "recipe-cattree-vegan",
+  "Viel Gemüse": "recipe-cattree-highinveg",
+  Brunch: "recipe-cattree-brunch",
+  Aperitif: "recipe-cattree-aperitif",
+  Dessert: "recipe-cattree-dessert",
+  Abendbrot: "recipe-cattree-abendbrot",
+  BBQ: "recipe-cattree-bbq",
+  Basics: "recipe-cattree-basic",
+  Backen: "recipe-cattree-baking",
+  Snacks: "recipe-cattree-snacks",
+  Getränke: "recipe-cattree-getraenke",
+  Airfryer: "recipe-cattree-airfryer",
+  Budget: "recipe-cattree-budget",
+  "Jamie Oliver": "recipe-cattree-jamieoliver",
+  Saisonal: "recipe-cattree-season"
+};
+function findRecipeCattreePage(name) {
+  const key = name.trim();
+  return Object.hasOwn(DE_RECIPE_CATTREE_PAGES, key) ? DE_RECIPE_CATTREE_PAGES[key] : null;
+}
+
 // vendor/picnic-web/src/lib/recipe/fetch-recipe-lists.ts
 var SAVED_CATEGORY_ID = "__saved__";
-var CATEGORY_KEY_RE = /^category:[\w-]{1,80}$|^group:[^/?#]{1,80}$/;
-var categoryKey = (link) => `${link.type}:${link.id}`;
+var CATEGORY_KEY_RE = /^category:[\w-]{1,80}$|^group:[^/?#]{1,80}$|^legacy:recipe-cattree-[\w-]{1,60}$/;
+function categoryKey(link, countryCode) {
+  const cattreePage = countryCode === "DE" && link.type === "category" ? findRecipeCattreePage(link.name) : null;
+  return cattreePage ? `legacy:${cattreePage}` : `${link.type}:${link.id}`;
+}
 function mapRecipe(recipe) {
   return {
     id: recipe.id,
@@ -9009,13 +9681,9 @@ function mapRecipe(recipe) {
 }
 function uniqueRecipes(recipes) {
   const seen = /* @__PURE__ */ new Set();
-  return recipes.flatMap((recipe) => {
-    if (seen.has(recipe.id)) return [];
-    seen.add(recipe.id);
-    return [mapRecipe(recipe)];
-  });
+  return recipes.filter((recipe) => !seen.has(recipe.id) && seen.add(recipe.id));
 }
-async function fetchRecipeOverview(client) {
+async function fetchRecipeOverview(client, countryCode) {
   const overview = await cachedCall(
     client,
     "recipes:overview",
@@ -9024,9 +9692,9 @@ async function fetchRecipeOverview(client) {
   const links = overview.categorySections.flatMap((section) => section.categories);
   const seen = /* @__PURE__ */ new Set();
   return {
-    recipes: uniqueRecipes(overview.sections.flatMap((section) => section.recipes)),
+    recipes: uniqueRecipes(overview.sections.flatMap((section) => section.recipes.map(mapRecipe))),
     categories: links.flatMap((link) => {
-      const id = categoryKey(link);
+      const id = categoryKey(link, countryCode);
       if (seen.has(id)) return [];
       seen.add(id);
       return [{ id, name: link.name }];
@@ -9037,26 +9705,33 @@ async function fetchSavedRecipes(client) {
   return (await client.recipe.getSavedRecipes()).map(mapRecipe);
 }
 function fetchCategory(client, categoryId) {
-  return cachedCall(
-    client,
-    `recipes:category:${categoryId}`,
-    () => client.recipe.getRecipeCategory(categoryId).then((category) => category.recipes)
-  );
+  return cachedCall(client, `recipes:category:${categoryId}`, async () => {
+    const category = await client.recipe.getRecipeCategory(categoryId);
+    return uniqueRecipes(category.recipes.map(mapRecipe));
+  });
+}
+function fetchGroupCategoryIds(client, groupName) {
+  return cachedCall(client, `recipes:group:${groupName}`, async () => {
+    const group = await client.recipe.getRecipeCategoryGroup(groupName);
+    return group.categories.filter((link) => link.type === "category").map((link) => link.id);
+  });
 }
 async function fetchCategoryRecipes(client, key, concurrency = RECIPE_PAGE_CONCURRENCY) {
   const separator = key.indexOf(":");
   const type = key.slice(0, separator);
   const id = key.slice(separator + 1);
-  if (type === "category") return uniqueRecipes(await fetchCategory(client, id));
-  const group = await cachedCall(
-    client,
-    `recipes:group:${id}`,
-    () => client.recipe.getRecipeCategoryGroup(id)
-  );
-  const categories = group.categories.filter((link) => link.type === "category");
+  if (type === "category") return fetchCategory(client, id);
+  if (type === "legacy") {
+    return cachedCall(
+      client,
+      `recipes:legacy:${id}`,
+      async () => parseRecipeTiles(await getFusionPage(client, id))
+    );
+  }
+  const categoryIds = await fetchGroupCategoryIds(client, id);
   const lists = await mapWithConcurrency(
-    categories,
-    (link) => fetchCategory(client, link.id),
+    categoryIds,
+    (categoryId) => fetchCategory(client, categoryId),
     concurrency
   );
   return uniqueRecipes(lists.flat());
@@ -9086,7 +9761,7 @@ async function GET8(request) {
       const recipes = await fetchCategoryRecipes(client, categoryId);
       return NextResponse.json({ categories: [], recipes });
     }
-    return NextResponse.json(await fetchRecipeOverview(client));
+    return NextResponse.json(await fetchRecipeOverview(client, countryCode));
   } catch (error2) {
     if (isApiAuthError(error2)) {
       return NextResponse.json(
@@ -9119,8 +9794,8 @@ async function count(name, recipes) {
     return 0;
   }
 }
-async function fetchCounts(client) {
-  const overview = await fetchRecipeOverview(client);
+async function fetchCounts(client, countryCode) {
+  const overview = await fetchRecipeOverview(client, countryCode);
   const [savedCount, ...categoryCounts] = await mapWithConcurrency(
     [SAVED_CATEGORY_ID, ...overview.categories.map((category) => category.id)],
     (id) => count(
@@ -9149,7 +9824,7 @@ async function GET9(request) {
     return NextResponse.json(cached.counts);
   }
   try {
-    const counts = await fetchCounts(buildPicnicClient(token, countryCode));
+    const counts = await fetchCounts(buildPicnicClient(token, countryCode), countryCode);
     const total = Object.values(counts).reduce((sum, n) => sum + n, 0);
     if (total > 0) {
       cache2.set(cacheKey, { counts, expiresAt: Date.now() + CACHE_TTL_MS });
@@ -9168,7 +9843,6 @@ var route_exports18 = {};
 __export(route_exports18, {
   GET: () => GET10
 });
-var COOKING_TIME_PATTERN = /^(\d+)\s*min/;
 async function GET10(request) {
   const token = readAuthToken(request);
   if (!token) {
@@ -9185,15 +9859,12 @@ async function GET10(request) {
   try {
     const client = buildPicnicClient(token, countryCode);
     const results = await client.catalog.getSearchResults(q, { context: "MEALS" });
-    const recipes = results.recipes.map((recipe) => {
-      const minutes = recipe.tags.map((tag) => COOKING_TIME_PATTERN.exec(tag)?.[1]).find(Boolean);
-      return {
-        id: recipe.id,
-        name: recipe.name,
-        imageId: recipe.imageId,
-        cookingTimeMinutes: minutes ? Number(minutes) : null
-      };
-    });
+    const recipes = results.recipes.map((recipe) => ({
+      id: recipe.id,
+      name: recipe.name,
+      imageId: recipe.imageId,
+      cookingTimeMinutes: recipe.cookingTimeMinutes
+    }));
     return NextResponse.json({ categories: [], recipes });
   } catch (error2) {
     if (isApiAuthError(error2)) {
@@ -10063,613 +10734,6 @@ var route_exports30 = {};
 __export(route_exports30, {
   GET: () => GET17
 });
-
-// vendor/picnic-web/src/lib/pml/pml-helpers.ts
-function stripColorTags(md) {
-  return md.replace(/#\([^)]+\)/g, "").trim();
-}
-function cleanMarkdown(md) {
-  return stripColorTags(md).replace(/\*\*/g, "").replace(/__/g, "").trim();
-}
-function extractInnerColor(md) {
-  const colorRegex = /#\(([^)]+)\)/g;
-  const colors = [];
-  let match;
-  while ((match = colorRegex.exec(md)) !== null) {
-    colors.push(match[1]);
-  }
-  if (colors.length === 0) return null;
-  const DEFAULT_COLORS = /* @__PURE__ */ new Set(["#333333", "#5b534e", "#787570"]);
-  for (const color of colors) {
-    if (!DEFAULT_COLORS.has(color.toLowerCase())) {
-      return color;
-    }
-  }
-  return null;
-}
-function findSellingUnitContainers(obj) {
-  const results = [];
-  if (typeof obj !== "object" || obj === null) return results;
-  if (Array.isArray(obj)) {
-    for (const item of obj) {
-      results.push(...findSellingUnitContainers(item));
-    }
-    return results;
-  }
-  const record = obj;
-  if (record.type === "PML" && typeof record.id === "string" && record.id.includes("selling-unit") && record.id.includes("tile")) {
-    results.push(record);
-  }
-  for (const value of Object.values(record)) {
-    results.push(...findSellingUnitContainers(value));
-  }
-  return results;
-}
-function collectMarkdowns(node) {
-  const results = [];
-  if (typeof node !== "object" || node === null) return results;
-  if (Array.isArray(node)) {
-    for (const item of node) {
-      results.push(...collectMarkdowns(item));
-    }
-    return results;
-  }
-  const record = node;
-  if (typeof record.markdown === "string") {
-    results.push(record.markdown);
-  }
-  for (const value of Object.values(record)) {
-    if (typeof value === "object" && value !== null) {
-      results.push(...collectMarkdowns(value));
-    }
-  }
-  return results;
-}
-function findNodeById(obj, id) {
-  if (typeof obj !== "object" || obj === null) return null;
-  if (Array.isArray(obj)) {
-    for (const item of obj) {
-      const result = findNodeById(item, id);
-      if (result) return result;
-    }
-    return null;
-  }
-  const record = obj;
-  if (record.id === id) return record;
-  for (const value of Object.values(record)) {
-    const result = findNodeById(value, id);
-    if (result) return result;
-  }
-  return null;
-}
-function findNodeByIdPrefix(obj, prefix) {
-  if (typeof obj !== "object" || obj === null) return null;
-  if (Array.isArray(obj)) {
-    for (const item of obj) {
-      const result = findNodeByIdPrefix(item, prefix);
-      if (result) return result;
-    }
-    return null;
-  }
-  const record = obj;
-  if (typeof record.id === "string" && record.id.startsWith(prefix)) {
-    return record;
-  }
-  for (const value of Object.values(record)) {
-    const result = findNodeByIdPrefix(value, prefix);
-    if (result) return result;
-  }
-  return null;
-}
-function collectPropertyValues(node, key) {
-  const results = [];
-  if (typeof node !== "object" || node === null) return results;
-  if (Array.isArray(node)) {
-    for (const item of node) {
-      results.push(...collectPropertyValues(item, key));
-    }
-    return results;
-  }
-  const record = node;
-  if (key in record) {
-    results.push(record[key]);
-  }
-  for (const [k, value] of Object.entries(record)) {
-    if (k !== key && typeof value === "object" && value !== null) {
-      results.push(...collectPropertyValues(value, key));
-    }
-  }
-  return results;
-}
-function findIconNodes(node) {
-  const results = [];
-  if (typeof node !== "object" || node === null) return results;
-  if (Array.isArray(node)) {
-    for (const item of node) {
-      results.push(...findIconNodes(item));
-    }
-    return results;
-  }
-  const record = node;
-  if (record.type === "ICON" && typeof record.iconKey === "string") {
-    const fallback = record.fallback;
-    results.push({
-      iconKey: record.iconKey,
-      fallbackId: fallback?.id ?? null,
-      color: typeof record.color === "string" ? record.color : null
-    });
-  }
-  for (const value of Object.values(record)) {
-    if (typeof value === "object" && value !== null) {
-      results.push(...findIconNodes(value));
-    }
-  }
-  return results;
-}
-function extractPageTitle(rawPage) {
-  const page = asRecord(rawPage);
-  if (!page) return null;
-  const header = asRecord(asRecord(page.layout)?.header) ?? asRecord(page.header);
-  if (!header) return null;
-  const title = header.title;
-  return typeof title === "string" ? title : null;
-}
-function asRecord(value) {
-  return typeof value === "object" && value !== null ? value : null;
-}
-
-// vendor/picnic-web/src/lib/pml/pml-product-helpers.ts
-function collectLabels(node) {
-  const results = [];
-  if (typeof node !== "object" || node === null) return results;
-  if (Array.isArray(node)) {
-    for (const item of node) {
-      results.push(...collectLabels(item));
-    }
-    return results;
-  }
-  const record = node;
-  if (record.type === "CONTAINER" && typeof record.backgroundColor === "string" && typeof record.borderRadius === "number") {
-    const markdowns = collectMarkdowns(record);
-    if (markdowns.length > 0) {
-      const textColors = collectPropertyValues(record, "textAttributes").filter((a) => typeof a === "object" && a !== null).map((a) => a.color).filter((c) => typeof c === "string");
-      results.push({
-        text: stripColorTags(markdowns[0]),
-        textColor: textColors[0] ?? "#333333",
-        backgroundColor: record.backgroundColor
-      });
-      return results;
-    }
-  }
-  for (const value of Object.values(record)) {
-    if (typeof value === "object" && value !== null) {
-      results.push(...collectLabels(value));
-    }
-  }
-  return results;
-}
-
-// vendor/picnic-web/src/lib/product/extract-card-data.ts
-function extractPromotionLabel(contexts) {
-  if (!contexts) return null;
-  for (const ctx of contexts) {
-    if (ctx.schema?.includes("promotion")) {
-      const label = ctx.data?.promotion_label;
-      if (typeof label === "string" && label.trim() !== "") {
-        return label.trim();
-      }
-    }
-  }
-  return null;
-}
-function extractPromotionBadge(contexts, pml, stackChildren) {
-  const label = extractPromotionLabel(contexts);
-  if (!label) return null;
-  const matches = (l) => cleanMarkdown(l.text) === label;
-  const inline = collectLabels(stackChildren).find(matches);
-  const colored = inline ?? collectLabels(pml).find(matches);
-  return {
-    badge: {
-      text: label,
-      variant: "promo",
-      backgroundColor: colored?.backgroundColor,
-      textColor: colored?.textColor
-    },
-    placement: inline ? "inline" : "image"
-  };
-}
-function findTextStackChildren(pml) {
-  if (!pml) return null;
-  const component = pml.component;
-  if (!component) return null;
-  const topChildren = component.children;
-  if (!topChildren || topChildren.length < 2) return null;
-  function findVerticalStack(node, depth) {
-    if (depth > 5 || typeof node !== "object" || node === null) return null;
-    if (Array.isArray(node)) {
-      for (const item of node) {
-        const r = findVerticalStack(item, depth + 1);
-        if (r) return r;
-      }
-      return null;
-    }
-    const record = node;
-    if (record.type === "STACK" && record.axis === "VERTICAL" && typeof record.spacing === "number" && Array.isArray(record.children)) {
-      return record;
-    }
-    for (const value of Object.values(record)) {
-      const r = findVerticalStack(value, depth + 1);
-      if (r) return r;
-    }
-    return null;
-  }
-  const textArea = topChildren[1];
-  const stack = findVerticalStack(textArea, 0);
-  return stack?.children ?? null;
-}
-var SIZE_LABELS = /* @__PURE__ */ new Set(["Klein", "XL", "Groot"]);
-function splitFlankingIcons(row) {
-  const tokens = [];
-  const walk = (node) => {
-    if (Array.isArray(node)) {
-      for (const item of node) walk(item);
-      return;
-    }
-    if (typeof node !== "object" || node === null) return;
-    const record = node;
-    if (record.type === "ICON" && typeof record.iconKey === "string") {
-      const fallback = record.fallback;
-      if (fallback?.id) {
-        tokens.push({
-          kind: "icon",
-          icon: {
-            imageId: fallback.id,
-            color: typeof record.color === "string" ? record.color : null
-          }
-        });
-      }
-      return;
-    }
-    if (typeof record.markdown === "string" && cleanMarkdown(record.markdown) !== "") {
-      tokens.push({ kind: "text" });
-    }
-    for (const value of Object.values(record)) walk(value);
-  };
-  walk(row);
-  const firstTextIdx = tokens.findIndex((t) => t.kind === "text");
-  if (firstTextIdx === -1) {
-    const firstIcon = tokens.find(
-      (t) => t.kind === "icon"
-    );
-    return { leading: firstIcon?.icon ?? null, trailing: null };
-  }
-  const lastTextIdx = tokens.map((t) => t.kind).lastIndexOf("text");
-  let leading = null;
-  let trailing = null;
-  for (let i = 0; i < tokens.length; i++) {
-    const t = tokens[i];
-    if (t.kind !== "icon") continue;
-    if (i < firstTextIdx && !leading) leading = t.icon;
-    else if (i > lastTextIdx && !trailing) trailing = t.icon;
-  }
-  return { leading, trailing };
-}
-function extractTextStackInfo(stackChildren, suName, unitQuantity) {
-  const result = {
-    subtitle: null,
-    subtitleColor: null,
-    subtitleLeadingIcon: null,
-    subtitleTrailingIcon: null,
-    displayName: null,
-    namePrefix: null,
-    brand: null,
-    highlight: null,
-    flagIconKey: null,
-    flagFallbackImageId: null,
-    extraLabel: null
-  };
-  if (!stackChildren || stackChildren.length < 3) return result;
-  let nameRowIdx = -1;
-  for (let i = 0; i < stackChildren.length; i++) {
-    const json2 = JSON.stringify(stackChildren[i]);
-    if (json2.includes("PicnicSymbols")) {
-      nameRowIdx = i;
-      break;
-    }
-  }
-  if (nameRowIdx === -1) {
-    nameRowIdx = stackChildren.length >= 5 ? 1 : 0;
-  }
-  if (nameRowIdx > 0) {
-    const subtitleRow = stackChildren[0];
-    const markdowns = collectMarkdowns(subtitleRow);
-    const text3 = markdowns.map((m) => cleanMarkdown(m)).filter(Boolean).join(" ");
-    if (text3) {
-      result.subtitle = text3;
-      for (const md of markdowns) {
-        const color = extractInnerColor(md);
-        if (color) {
-          result.subtitleColor = color;
-          break;
-        }
-      }
-      const { leading, trailing } = splitFlankingIcons(subtitleRow);
-      result.subtitleLeadingIcon = leading;
-      result.subtitleTrailingIcon = trailing;
-    }
-  }
-  const nameRow = stackChildren[nameRowIdx];
-  const nameMarkdowns = collectMarkdowns(nameRow);
-  for (const md of nameMarkdowns) {
-    if (cleanMarkdown(md) === ">" || cleanMarkdown(md) === "") continue;
-    const stripped = stripColorTags(md);
-    const boldMatch = stripped.match(/\*\*([^*]+)\*\*\s+(.*)/);
-    if (boldMatch) {
-      result.namePrefix = boldMatch[1].trim();
-      const remaining = boldMatch[2].replace(/\s+$/, "").replace(/\u00a0/g, "").trim();
-      if (remaining) result.displayName = remaining;
-    } else {
-      const clean = cleanMarkdown(md);
-      if (clean && clean !== ">") {
-        result.displayName = clean;
-      }
-    }
-  }
-  const brandRowIdx = nameRowIdx + 1;
-  if (brandRowIdx < stackChildren.length - 2) {
-    const brandRow = stackChildren[brandRowIdx];
-    const icons = findIconNodes(brandRow);
-    for (const icon of icons) {
-      if (icon.iconKey.startsWith("flag")) {
-        result.flagIconKey = icon.iconKey;
-        result.flagFallbackImageId = icon.fallbackId;
-        break;
-      }
-    }
-    const markdowns = collectMarkdowns(brandRow);
-    for (const md of markdowns) {
-      const clean = cleanMarkdown(md);
-      if (!clean || clean === ">" || clean === "·") continue;
-      const highlightColor = extractInnerColor(md);
-      if (highlightColor) {
-        result.highlight = { text: clean, color: highlightColor };
-      } else if (!/^\d+[.,]\d{2}$/.test(clean) && !clean.startsWith("€")) {
-        result.brand = clean;
-      }
-    }
-  }
-  const lastChild = stackChildren[stackChildren.length - 1];
-  const lastMarkdowns = collectMarkdowns(lastChild);
-  const cleanTexts = lastMarkdowns.map((m) => cleanMarkdown(m)).filter((t) => t !== "" && t !== ">");
-  const UNIT_PATTERNS = /gram|liter|stuks|kilo|\bml\b|\bcl\b|\bkg\b/i;
-  for (const text3 of cleanTexts) {
-    if (text3 === unitQuantity || UNIT_PATTERNS.test(text3)) continue;
-    if (SIZE_LABELS.has(text3)) {
-      result.extraLabel = { text: text3, variant: "size" };
-    } else if (text3.startsWith("€") || text3.includes("/l") || text3.includes("/kg")) {
-      result.extraLabel = { text: text3, variant: "unit-price" };
-    } else {
-      result.extraLabel = { text: text3, variant: "info" };
-    }
-    break;
-  }
-  return result;
-}
-function extractUnavailabilityFromPml(pml) {
-  if (!pml) return { isUnavailable: false, reason: null };
-  const component = pml.component;
-  if (!component) return { isUnavailable: false, reason: null };
-  const topChildren = component.children;
-  if (!topChildren) return { isUnavailable: false, reason: null };
-  for (const child of topChildren) {
-    const a11yLabel = child.accessibilityLabel;
-    if (typeof a11yLabel === "string" && a11yLabel.includes(",")) {
-      const commaIdx = a11yLabel.indexOf(",");
-      const reason = a11yLabel.substring(commaIdx + 1).trim();
-      if (reason) {
-        return { isUnavailable: true, reason };
-      }
-    }
-  }
-  const allMarkdowns = collectMarkdowns(pml);
-  for (const md of allMarkdowns) {
-    const clean = cleanMarkdown(md);
-    if (clean === "Snel weer terug" || clean === "Tijdelijk niet leverbaar" || clean === "Niet meer leverbaar") {
-      return { isUnavailable: true, reason: clean };
-    }
-  }
-  return { isUnavailable: false, reason: null };
-}
-function extractOriginalPriceFromPml(stackChildren, displayPrice) {
-  if (!stackChildren) return null;
-  for (const child of stackChildren) {
-    const markdowns = collectMarkdowns(child);
-    const cleanTexts = markdowns.map((m) => cleanMarkdown(m)).filter((t) => t !== "" && t !== ">");
-    const prices = [];
-    for (const text3 of cleanTexts) {
-      const priceMatch = text3.match(/^(\d+[.,]\d{2})$/);
-      if (priceMatch) {
-        prices.push(Math.round(parseFloat(priceMatch[1].replace(",", ".")) * 100));
-      }
-    }
-    if (prices.length === 2) {
-      const original = Math.max(...prices);
-      if (original > displayPrice) {
-        return original;
-      }
-    }
-  }
-  return null;
-}
-var DEFAULT_PRICE_COLORS = /* @__PURE__ */ new Set(["#333333", "#5b534e", "#787570"]);
-function extractDisplayPriceColor(stackChildren, displayPrice) {
-  if (!stackChildren) return null;
-  let found = null;
-  const walk = (node) => {
-    if (found) return;
-    if (Array.isArray(node)) {
-      for (const item of node) walk(item);
-      return;
-    }
-    if (typeof node !== "object" || node === null) return;
-    const record = node;
-    const md = record.markdown;
-    if (typeof md === "string") {
-      const match = cleanMarkdown(md).match(/^€?\s*(\d+)[.,](\d{2})$/);
-      if (match) {
-        const cents = parseInt(match[1], 10) * 100 + parseInt(match[2], 10);
-        if (cents === displayPrice) {
-          const attrs = record.textAttributes;
-          const color = typeof attrs?.color === "string" ? attrs.color : null;
-          if (color && !DEFAULT_PRICE_COLORS.has(color.toLowerCase())) {
-            found = color;
-            return;
-          }
-        }
-      }
-    }
-    for (const value of Object.values(record)) walk(value);
-  };
-  walk(stackChildren);
-  return found;
-}
-
-// vendor/picnic-web/src/lib/product/parse-product-page.ts
-function parsePriceRangesFromRaw(raw) {
-  if (!raw || raw.length === 0) return null;
-  const thresholds = [];
-  for (const entry of raw) {
-    if (typeof entry === "object" && entry !== null && "price" in entry && typeof entry.price === "number" && "from_quantity" in entry && typeof entry.from_quantity === "number") {
-      const e = entry;
-      thresholds.push({ quantity: e.from_quantity, pricePerUnit: e.price });
-    }
-  }
-  if (thresholds.length === 0) return null;
-  thresholds.sort((a, b) => a.quantity - b.quantity);
-  return thresholds;
-}
-function containerToProduct(container) {
-  const su = container.content?.sellingUnit;
-  if (!su) return null;
-  const pml = container.pml?.component ? container.pml : void 0;
-  const contexts = container.analytics?.contexts;
-  const stackChildren = findTextStackChildren(pml);
-  const promotion = extractPromotionBadge(contexts, pml, stackChildren);
-  const textInfo = extractTextStackInfo(stackChildren, su.name, su.unit_quantity);
-  const { isUnavailable, reason } = extractUnavailabilityFromPml(pml);
-  const originalPrice = extractOriginalPriceFromPml(stackChildren, su.display_price);
-  const badges = [];
-  if (textInfo.extraLabel) {
-    badges.push(textInfo.extraLabel);
-  }
-  const hasDiscount = originalPrice !== null && originalPrice > su.display_price;
-  return {
-    id: su.id,
-    name: textInfo.displayName ?? su.name,
-    namePrefix: textInfo.namePrefix,
-    subtitle: textInfo.subtitle,
-    subtitleColor: textInfo.subtitleColor,
-    subtitleLeadingIcon: textInfo.subtitleLeadingIcon,
-    subtitleTrailingIcon: textInfo.subtitleTrailingIcon,
-    brand: textInfo.brand,
-    highlight: textInfo.highlight,
-    flagIconKey: textInfo.flagIconKey,
-    flagFallbackImageId: textInfo.flagFallbackImageId,
-    imageId: su.image_id,
-    displayPrice: su.display_price,
-    originalPrice: hasDiscount ? originalPrice : null,
-    displayPriceColor: extractDisplayPriceColor(stackChildren, su.display_price),
-    unitQuantity: su.unit_quantity,
-    maxCount: su.max_count,
-    priceRanges: parsePriceRangesFromRaw(su.price_ranges),
-    badges,
-    promoBadge: promotion?.badge ?? null,
-    promoPlacement: promotion?.placement ?? null,
-    isUnavailable,
-    unavailableReason: reason
-  };
-}
-function extractSectionTitle(headerNode) {
-  const markdowns = collectMarkdowns(headerNode);
-  const cleaned = markdowns.map((md) => stripColorTags(md)).filter(Boolean);
-  return cleaned.join(" / ");
-}
-function extractProductsFromWrappers(wrappers, seenIds) {
-  const products = [];
-  for (const wrapper of wrappers) {
-    const containers = findSellingUnitContainers(wrapper);
-    for (const container of containers) {
-      const product = containerToProduct(container);
-      if (!product || seenIds.has(product.id)) continue;
-      seenIds.add(product.id);
-      products.push(product);
-    }
-  }
-  return products;
-}
-function findAllByIdPrefix(obj, prefix, results = []) {
-  if (typeof obj !== "object" || obj === null) return results;
-  if (Array.isArray(obj)) {
-    for (const item of obj) findAllByIdPrefix(item, prefix, results);
-    return results;
-  }
-  const record = obj;
-  if (typeof record.id === "string" && record.id.startsWith(prefix)) {
-    results.push(record);
-    return results;
-  }
-  for (const value of Object.values(record)) {
-    findAllByIdPrefix(value, prefix, results);
-  }
-  return results;
-}
-var HORIZONTAL_SECTION_PREFIX = "core-horizontal-selling-unit-section-localized";
-var SUB_HEADER_PML_PREFIX = "horizontal-selling-unit-tiles-sub-header-pml";
-function parseHorizontalSellingSections(rawPage) {
-  const hSections = findAllByIdPrefix(rawPage, HORIZONTAL_SECTION_PREFIX);
-  if (hSections.length === 0) {
-    return fallbackFlatParse(rawPage);
-  }
-  const seenIds = /* @__PURE__ */ new Set();
-  const sections = [];
-  for (const section of hSections) {
-    const subHeader = findNodeByIdPrefix(section, SUB_HEADER_PML_PREFIX);
-    let title = "";
-    if (subHeader) {
-      title = extractSectionTitle(subHeader);
-    }
-    const products2 = extractProductsFromWrappers([section], seenIds);
-    if (products2.length === 0) continue;
-    if (!title) title = "Producten";
-    sections.push({ title, products: products2 });
-  }
-  const hasRealTitles = sections.some((s) => s.title !== "Producten");
-  if (!hasRealTitles) {
-    const allProducts = sections.flatMap((s) => s.products);
-    return { sections: [], products: allProducts };
-  }
-  const products = sections.flatMap((s) => s.products);
-  return { sections, products };
-}
-function fallbackFlatParse(rawPage) {
-  const containers = findSellingUnitContainers(rawPage);
-  const productMap = /* @__PURE__ */ new Map();
-  for (const container of containers) {
-    const product = containerToProduct(container);
-    if (!product) continue;
-    const existing = productMap.get(product.id);
-    if (!existing || product.badges.length > existing.badges.length || product.namePrefix || product.subtitle || product.brand) {
-      productMap.set(product.id, product);
-    }
-  }
-  const products = Array.from(productMap.values());
-  return { sections: [], products };
-}
-function parseProductPage(rawPage) {
-  return parseHorizontalSellingSections(rawPage);
-}
-
-// vendor/picnic-web/src/app/api/pages/products/route.ts
 async function GET17(request) {
   const pageId = request.nextUrl.searchParams.get("pageId");
   if (!pageId) {
@@ -10685,13 +10749,13 @@ async function GET17(request) {
   const countryCode = readCountryCode(request);
   try {
     const client = buildPicnicClient(token, countryCode);
-    const page = await client.app.getPage(pageId);
+    const page = await client.catalog.getProductPage(pageId);
     if (page.format === "rsc") {
       return NextResponse.json({ title: null, products: [], sections: [], rscPage: page.content });
     }
-    const title = extractPageTitle(page.page);
-    const { sections, products } = parseProductPage(page.page);
-    return NextResponse.json({ title, products, sections });
+    const { products, sections } = mapProductSections(page.sections);
+    const hasHeaders = sections.some((section) => section.title !== "");
+    return NextResponse.json({ title: page.title, products, sections: hasHeaders ? sections : [] });
   } catch (error2) {
     if (isApiAuthError(error2)) {
       return NextResponse.json(
@@ -10960,6 +11024,7 @@ function mapProductDetails(product) {
     quantityBadges: product.quantityBadges,
     unitQuantity: product.unitQuantity,
     unitPrice: product.unitPrice,
+    comparisonPrice: product.comparisonPrice,
     tags: product.tags,
     displayPrice: product.displayPrice,
     originalPrice: product.originalPrice,
@@ -10989,6 +11054,7 @@ function mapProductDetails(product) {
       imageId: similar.imageId,
       displayPrice: similar.displayPrice,
       unitQuantity: similar.unitQuantity,
+      comparisonPrice: similar.comparisonPrice,
       maxCount: similar.maxCount,
       ...similar.deposit !== void 0 ? { deposit: similar.deposit } : {}
     })),
@@ -11033,12 +11099,62 @@ async function GET20(request, { params }) {
   }
 }
 
-// vendor/picnic-web/src/app/api/promotions/route.ts
+// vendor/picnic-web/src/app/api/product/[id]/alternatives/route.ts
 var route_exports34 = {};
 __export(route_exports34, {
   GET: () => GET21
 });
-async function GET21(request) {
+async function GET21(request, { params }) {
+  const token = readAuthToken(request);
+  if (!token) {
+    return NextResponse.json(
+      { error: "Your token has expired", code: "TOKEN_EXPIRED" },
+      { status: 401 }
+    );
+  }
+  const countryCode = readCountryCode(request);
+  const { id: productId } = await params;
+  try {
+    const client = buildPicnicClient(token, countryCode);
+    const result = await client.catalog.getCheaperAlternatives(productId);
+    return NextResponse.json({
+      comparisonPrice: result.comparisonPrice,
+      alternatives: result.alternatives.map((alternative) => ({
+        id: alternative.id,
+        name: alternative.name,
+        imageId: alternative.imageId,
+        displayPrice: alternative.displayPrice,
+        unitQuantity: alternative.unitQuantity,
+        maxCount: alternative.maxCount,
+        comparisonPrice: alternative.comparisonPrice,
+        savingPerUnit: alternative.savingPerUnit
+      }))
+    });
+  } catch (error2) {
+    if (isProductNotFoundError(error2)) {
+      return NextResponse.json({ error: "Product not found" }, { status: 404 });
+    }
+    if (isApiAuthError(error2)) {
+      return NextResponse.json(
+        { error: "Your token has expired", code: "TOKEN_EXPIRED" },
+        { status: 401 }
+      );
+    }
+    const message = error2 instanceof Error ? error2.message : "Unknown error occurred";
+    console.error(`[/api/product/${productId}/alternatives] Failed to fetch:`, message);
+    return NextResponse.json(
+      { error: "Failed to fetch alternatives. Please try again later." },
+      { status: 502 }
+    );
+  }
+}
+
+// vendor/picnic-web/src/app/api/promotions/route.ts
+var route_exports35 = {};
+__export(route_exports35, {
+  GET: () => GET22
+});
+async function GET22(request) {
   const token = readAuthToken(request);
   if (!token) {
     return NextResponse.json(
@@ -11068,11 +11184,11 @@ async function GET21(request) {
 }
 
 // vendor/picnic-web/src/app/api/promotions/[groupId]/route.ts
-var route_exports35 = {};
-__export(route_exports35, {
-  GET: () => GET22
+var route_exports36 = {};
+__export(route_exports36, {
+  GET: () => GET23
 });
-async function GET22(request, { params }) {
+async function GET23(request, { params }) {
   const token = readAuthToken(request);
   if (!token) {
     return NextResponse.json(
@@ -11103,12 +11219,12 @@ async function GET22(request, { params }) {
 }
 
 // vendor/picnic-web/src/app/api/recipe/[id]/route.ts
-var route_exports36 = {};
-__export(route_exports36, {
-  GET: () => GET23
+var route_exports37 = {};
+__export(route_exports37, {
+  GET: () => GET24
 });
 var RECIPE_ID_RE3 = /^[0-9a-f]{24}$/;
-async function GET23(request, { params }) {
+async function GET24(request, { params }) {
   const token = readAuthToken(request);
   if (!token) {
     return NextResponse.json({ error: "Authentication required" }, { status: 401 });
@@ -11137,8 +11253,8 @@ async function GET23(request, { params }) {
 }
 
 // vendor/picnic-web/src/app/api/recipe/[id]/add-to-cart/route.ts
-var route_exports37 = {};
-__export(route_exports37, {
+var route_exports38 = {};
+__export(route_exports38, {
   POST: () => POST16
 });
 var RECIPE_ID_RE4 = /^[0-9a-f]{24}$/;
@@ -11189,9 +11305,9 @@ async function POST16(request, { params }) {
 }
 
 // vendor/picnic-web/src/app/api/recipe/[id]/ingredient/[ingredientId]/route.ts
-var route_exports38 = {};
-__export(route_exports38, {
-  GET: () => GET24,
+var route_exports39 = {};
+__export(route_exports39, {
+  GET: () => GET25,
   POST: () => POST17
 });
 
@@ -11339,7 +11455,7 @@ function validate(request, id, ingredientId) {
   }
   return { token };
 }
-async function GET24(request, { params }) {
+async function GET25(request, { params }) {
   const { id, ingredientId } = await params;
   const checked = validate(request, id, ingredientId);
   if ("error" in checked) return checked.error;
@@ -11425,8 +11541,8 @@ async function POST17(request, { params }) {
 }
 
 // vendor/picnic-web/src/app/api/recipe/[id]/save/route.ts
-var route_exports39 = {};
-__export(route_exports39, {
+var route_exports40 = {};
+__export(route_exports40, {
   POST: () => POST18
 });
 var RECIPE_ID_RE6 = /^[0-9a-f]{24}$/;
@@ -11473,11 +11589,11 @@ async function POST18(request, { params }) {
 }
 
 // vendor/picnic-web/src/app/api/recipe/saved/route.ts
-var route_exports40 = {};
-__export(route_exports40, {
-  GET: () => GET25
+var route_exports41 = {};
+__export(route_exports41, {
+  GET: () => GET26
 });
-async function GET25(request) {
+async function GET26(request) {
   const token = readAuthToken(request);
   if (!token) {
     return NextResponse.json(
@@ -11503,11 +11619,11 @@ async function GET25(request) {
 }
 
 // vendor/picnic-web/src/app/api/rsc-pages/route.ts
-var route_exports41 = {};
-__export(route_exports41, {
-  GET: () => GET26
+var route_exports42 = {};
+__export(route_exports42, {
+  GET: () => GET27
 });
-async function GET26(request) {
+async function GET27(request) {
   const token = readAuthToken(request);
   if (!token) {
     return NextResponse.json(
@@ -11540,11 +11656,11 @@ async function GET26(request) {
 }
 
 // vendor/picnic-web/src/app/api/search/route.ts
-var route_exports42 = {};
-__export(route_exports42, {
-  GET: () => GET27
+var route_exports43 = {};
+__export(route_exports43, {
+  GET: () => GET28
 });
-async function GET27(request) {
+async function GET28(request) {
   const token = readAuthToken(request);
   if (!token) {
     return NextResponse.json(
@@ -11579,11 +11695,11 @@ async function GET27(request) {
 }
 
 // vendor/picnic-web/src/app/api/suggestions/route.ts
-var route_exports43 = {};
-__export(route_exports43, {
-  GET: () => GET28
+var route_exports44 = {};
+__export(route_exports44, {
+  GET: () => GET29
 });
-async function GET28(request) {
+async function GET29(request) {
   const token = readAuthToken(request);
   if (!token) {
     return NextResponse.json(
@@ -11621,9 +11737,9 @@ async function GET28(request) {
 }
 
 // vendor/picnic-web/src/app/api/user/profile/route.ts
-var route_exports44 = {};
-__export(route_exports44, {
-  GET: () => GET29
+var route_exports45 = {};
+__export(route_exports45, {
+  GET: () => GET30
 });
 
 // vendor/picnic-web/src/lib/user/map-profile.ts
@@ -11642,7 +11758,7 @@ function mapProfile(profile) {
 }
 
 // vendor/picnic-web/src/app/api/user/profile/route.ts
-async function GET29(request) {
+async function GET30(request) {
   const token = readAuthToken(request);
   if (!token) {
     return NextResponse.json(
@@ -11704,17 +11820,18 @@ var VENDORED_ROUTES = [
   { path: "parcels", methods: ["GET"], module: route_exports31 },
   { path: "parcels/[parcelId]", methods: ["GET"], module: route_exports32 },
   { path: "product/[id]", methods: ["GET"], module: route_exports33 },
-  { path: "promotions", methods: ["GET"], module: route_exports34 },
-  { path: "promotions/[groupId]", methods: ["GET"], module: route_exports35 },
-  { path: "recipe/[id]", methods: ["GET"], module: route_exports36 },
-  { path: "recipe/[id]/add-to-cart", methods: ["POST"], module: route_exports37 },
-  { path: "recipe/[id]/ingredient/[ingredientId]", methods: ["GET", "POST"], module: route_exports38 },
-  { path: "recipe/[id]/save", methods: ["POST"], module: route_exports39 },
-  { path: "recipe/saved", methods: ["GET"], module: route_exports40 },
-  { path: "rsc-pages", methods: ["GET"], module: route_exports41 },
-  { path: "search", methods: ["GET"], module: route_exports42 },
-  { path: "suggestions", methods: ["GET"], module: route_exports43 },
-  { path: "user/profile", methods: ["GET"], module: route_exports44 }
+  { path: "product/[id]/alternatives", methods: ["GET"], module: route_exports34 },
+  { path: "promotions", methods: ["GET"], module: route_exports35 },
+  { path: "promotions/[groupId]", methods: ["GET"], module: route_exports36 },
+  { path: "recipe/[id]", methods: ["GET"], module: route_exports37 },
+  { path: "recipe/[id]/add-to-cart", methods: ["POST"], module: route_exports38 },
+  { path: "recipe/[id]/ingredient/[ingredientId]", methods: ["GET", "POST"], module: route_exports39 },
+  { path: "recipe/[id]/save", methods: ["POST"], module: route_exports40 },
+  { path: "recipe/saved", methods: ["GET"], module: route_exports41 },
+  { path: "rsc-pages", methods: ["GET"], module: route_exports42 },
+  { path: "search", methods: ["GET"], module: route_exports43 },
+  { path: "suggestions", methods: ["GET"], module: route_exports44 },
+  { path: "user/profile", methods: ["GET"], module: route_exports45 }
 ];
 
 // src/server/main.ts
@@ -11752,7 +11869,7 @@ function startDesk(env = process.env) {
     pictureCacheMb,
     allowedUsers,
     ingressOnly: env.INGRESS_ONLY === "1",
-    version: true ? "1.0.7" : "dev",
+    version: true ? "1.0.8" : "dev",
     routes: VENDORED_ROUTES,
     demo: demo ? demoShop() : void 0
   });
