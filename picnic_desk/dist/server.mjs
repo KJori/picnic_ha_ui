@@ -248,11 +248,11 @@ var require_service = __commonJS({
        * `category-product-overview?category_id=<id>`, `promotion-category-page?category_id=<id>`,
        * `profile-root`, `promo-page-root`, `promo-group-deep-dive?promo_group_id=<id>`,
        * `search-page-results?search_term=<term>`, `search-page-index`, `meals-category-page`,
-       * `meals-category-group-page` and `unavailability-replacements-page-root`.
+       * `meals-category-group-page`, `unavailability-replacements-page-root`,
+       * `product-details-page-root?id=<selling_unit_id>` and some theme pages.
        *
        * Pages known to be Fusion: `home_page_root`, `purchases-page-root`, `meals-page-root`,
        * `slot-selector-root`, `parcels-overview-page-root`,
-       * `product-details-page-root?id=<selling_unit_id>`,
        * `selling-group-details-page?selling_group_id=<id>` and
        * `parcel-tracking-page-root?parcel_id=<id>`.
        * @param {string} pageId The page id, optionally with query params, e.g. `home_page_root`.
@@ -835,6 +835,7 @@ var require_tiles = __commonJS({
       });
       const promotionLabel = asString(promotion.promotion_label);
       const displayPrice = asNumber(unit.display_price) ?? 0;
+      const deposit = asNumber(unit.deposit);
       return {
         id,
         name: info.name ?? catalogName,
@@ -852,7 +853,8 @@ var require_tiles = __commonJS({
         labels: promotionLabel ? [{ position: labelPosition(tile.pml, promotionLabel), type: "PROMO", text: promotionLabel }] : [],
         // Search tiles have no decorator; they carry an unavailability context instead.
         isUnavailable: asArray(unit.decorators).some((decorator) => asRecord(decorator).type === "UNAVAILABLE") || (0, pml_1.analyticsContexts)(tile).some((context) => UNAVAILABILITY_SCHEMA.test(context.schema ?? "")),
-        numberOfOrders: null
+        numberOfOrders: null,
+        ...deposit !== null && { deposit }
       };
     }
     function collectFusionProductTiles(node, skip = () => false) {
@@ -918,8 +920,11 @@ var require_search = __commonJS({
   "node_modules/picnic-api/lib/domains/catalog/search.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
+    exports.toCents = void 0;
+    exports.readRscPriceRanges = readRscPriceRanges;
     exports.extractSearchResults = extractSearchResults;
     exports.extractProductTile = extractProductTile;
+    exports.tileQuantity = tileQuantity;
     exports.readSellableTile = readSellableTile;
     exports.extractFilters = extractFilters;
     exports.extractFusionSearchResults = extractFusionSearchResults;
@@ -933,6 +938,15 @@ var require_search = __commonJS({
     var asString = (value) => typeof value === "string" && value !== "" ? value : null;
     var asNumber = (value) => typeof value === "number" ? value : null;
     var toCents2 = (value) => typeof value === "number" ? Math.round(value * 100) : null;
+    exports.toCents = toCents2;
+    function readRscPriceRanges(priceRanges) {
+      return asArray(priceRanges).flatMap((value) => {
+        const range = asRecord(value);
+        const price = asNumber(range.price);
+        const fromQuantity = asNumber(range.fromQuantity);
+        return price !== null && fromQuantity !== null ? [{ price, from_quantity: fromQuantity }] : [];
+      }).sort((a, b) => a.from_quantity - b.from_quantity);
+    }
     function extractSearchResults(props) {
       const stores = asRecord(props.storeResults);
       const supermarket = stores.SUPERMARKET ? asRecord(stores.SUPERMARKET) : null;
@@ -980,6 +994,10 @@ var require_search = __commonJS({
     function extractProductTile(tile) {
       return tile.type === "sellable" ? readSellableTile(tile) : null;
     }
+    var TILE_SUFFIX_SEPARATOR = ", ";
+    function tileQuantity(tile) {
+      return tile.unitQuantity.split(TILE_SUFFIX_SEPARATOR)[0];
+    }
     function readSellableTile(tile) {
       const id = asString(tile.id);
       const title = asRecord(tile.title);
@@ -988,15 +1006,11 @@ var require_search = __commonJS({
         return null;
       const images = asRecord(tile.images);
       const price = asRecord(tile.price);
-      const priceRanges = asArray(price.priceRanges).flatMap((value) => {
-        const range = asRecord(value);
-        const rangePrice = asNumber(range.price);
-        const fromQuantity = asNumber(range.fromQuantity);
-        return rangePrice !== null && fromQuantity !== null ? [{ price: rangePrice, from_quantity: fromQuantity }] : [];
-      });
+      const priceRanges = readRscPriceRanges(price.priceRanges);
       const labels = asRecord(tile.labels);
-      const displayPrice = toCents2(price.priceValue) ?? [...priceRanges].sort((x, y) => x.from_quantity - y.from_quantity)[0]?.price ?? 0;
-      const unitQuantity = asArray(tile.suffixes).map(asRecord).filter((suffix) => suffix.type === "TEXT").flatMap((suffix) => asString(suffix.text) ?? []).join(", ");
+      const displayPrice = (0, exports.toCents)(price.priceValue) ?? priceRanges[0]?.price ?? 0;
+      const unitQuantity = asArray(tile.suffixes).map(asRecord).filter((suffix) => suffix.type === "TEXT").flatMap((suffix) => asString(suffix.text) ?? []).join(TILE_SUFFIX_SEPARATOR);
+      const deposit = asNumber(asRecord(asRecord(tile.interaction).context).deposit);
       return {
         id,
         name,
@@ -1005,7 +1019,7 @@ var require_search = __commonJS({
         qualityCue: asString(asRecord(tile.qualityCue).text),
         imageId: asString(asRecord(images.primaryImage).imageId) ?? asString(asRecord(images.sellingUnitImage).imageId),
         displayPrice,
-        originalPrice: toCents2(price.referencePriceValue),
+        originalPrice: (0, exports.toCents)(price.referencePriceValue),
         unitPrice: asString(price.unitPrice),
         comparisonPrice: (0, comparison_price_1.getComparisonPrice)(displayPrice, unitQuantity, priceRanges),
         priceRanges: priceRanges.length > 0 ? priceRanges : null,
@@ -1015,7 +1029,8 @@ var require_search = __commonJS({
           return { position, type: asString(label.type), text: asString(label.labelText) };
         })),
         isUnavailable: tile.unavailability !== null && tile.unavailability !== void 0,
-        numberOfOrders: asNumber(tile.numberOfOrders)
+        numberOfOrders: asNumber(tile.numberOfOrders),
+        ...deposit !== null && { deposit }
       };
     }
     function extractSearchRecipe(tile) {
@@ -1151,8 +1166,10 @@ var require_rsc = __commonJS({
     exports.findRscModuleChunks = findRscModuleChunks;
     exports.parseRscPayload = parseRscPayload;
     exports.parseRscPageContent = parseRscPageContent;
+    exports.findRscNode = findRscNode;
     var search_1 = require_search();
     var ROW_PATTERN = /^([0-9a-f]+):(I?)(.*)$/;
+    var TEXT_ROW_PATTERN = /([0-9a-f]+):T([0-9a-f]+),/y;
     var ROW_REFERENCE_PATTERN = /^\$L?([0-9a-f]+)$/;
     var PATH_REFERENCE_PATTERN = /^\$([0-9a-f]+):(.+)$/;
     var isElement = (value) => Array.isArray(value) && value[0] === "$" && typeof value[1] === "string";
@@ -1177,6 +1194,8 @@ var require_rsc = __commonJS({
           if (item.startsWith("$$"))
             return item.slice(1);
           const rowId = ROW_REFERENCE_PATTERN.exec(item)?.[1];
+          if (rowId !== void 0 && rowId in page.texts)
+            return page.texts[rowId];
           if (rowId !== void 0 && rowId in page.rows)
             return resolveReference(`$${rowId}`, () => page.rows[rowId]);
           const pathReference = PATH_REFERENCE_PATTERN.exec(item);
@@ -1245,8 +1264,20 @@ var require_rsc = __commonJS({
       return [];
     }
     function parseRscPayload(payload) {
-      const page = { rows: {}, modules: {} };
-      for (const line of payload.split("\n")) {
+      const page = { rows: {}, modules: {}, texts: {} };
+      for (let position = 0; position < payload.length; ) {
+        TEXT_ROW_PATTERN.lastIndex = position;
+        const text3 = TEXT_ROW_PATTERN.exec(payload);
+        if (text3) {
+          const start = TEXT_ROW_PATTERN.lastIndex;
+          const end = skipUtf8Bytes(payload, start, parseInt(text3[2], 16));
+          page.texts[text3[1]] = payload.slice(start, end);
+          position = end;
+          continue;
+        }
+        const lineEnd = payload.indexOf("\n", position);
+        const line = payload.slice(position, lineEnd === -1 ? payload.length : lineEnd);
+        position = lineEnd === -1 ? payload.length : lineEnd + 1;
         const match = ROW_PATTERN.exec(line);
         if (!match)
           continue;
@@ -1262,6 +1293,15 @@ var require_rsc = __commonJS({
         }
       }
       return page;
+    }
+    function skipUtf8Bytes(text3, start, bytes) {
+      let index = start;
+      for (let remaining = bytes; remaining > 0 && index < text3.length; ) {
+        const codePoint = text3.codePointAt(index);
+        remaining -= codePoint < 128 ? 1 : codePoint < 2048 ? 2 : codePoint < 65536 ? 3 : 4;
+        index += codePoint > 65535 ? 2 : 1;
+      }
+      return index;
     }
     var MODULE_REFERENCE_PATTERN = /^\$L?([0-9a-f]+)$/;
     var MODULE_NAME_PATTERN = /([^/]+)\.[jt]sx?$/;
@@ -1310,6 +1350,16 @@ var require_rsc = __commonJS({
       const nodes = [];
       convert(decodeRscValue(page, page.rows["0"]), nodes);
       return { pageId, tokens, nodes };
+    }
+    function findRscNode(nodes, component) {
+      for (const node of nodes) {
+        if (node.component === component)
+          return node;
+        const found = findRscNode(node.children, component);
+        if (found)
+          return found;
+      }
+      return null;
     }
     function readStrings(value) {
       if (typeof value !== "object" || value === null)
@@ -1533,11 +1583,12 @@ var require_profile = __commonJS({
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.extractProfile = extractProfile;
+    var rsc_1 = require_rsc();
     var asRecord = (value) => typeof value === "object" && value !== null && !Array.isArray(value) ? value : null;
     var asString = (value) => typeof value === "string" && value !== "" ? value : null;
     function extractProfile(content) {
-      const user = asRecord(findNode(content.nodes, "user-info")?.props.user) ?? {};
-      const items = findNode(content.nodes, "menu-list")?.props.items;
+      const user = asRecord((0, rsc_1.findRscNode)(content.nodes, "user-info")?.props.user) ?? {};
+      const items = (0, rsc_1.findRscNode)(content.nodes, "menu-list")?.props.items;
       const address = asRecord(user.preferredAddress);
       return {
         firstName: asString(user.firstName) ?? "",
@@ -1560,16 +1611,6 @@ var require_profile = __commonJS({
         postcode: asString(address.postcode) ?? "",
         city: asString(address.city) ?? ""
       };
-    }
-    function findNode(nodes, component) {
-      for (const node of nodes) {
-        if (node.component === component)
-          return node;
-        const found = findNode(node.children, component);
-        if (found)
-          return found;
-      }
-      return null;
     }
   }
 });
@@ -1917,11 +1958,15 @@ var require_product = __commonJS({
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.extractProductDetails = extractProductDetails;
+    exports.extractRscProductDetails = extractRscProductDetails;
     exports.productDetailsPageId = productDetailsPageId;
+    var rsc_1 = require_rsc();
     var product_not_found_error_1 = require_product_not_found_error();
     var comparison_price_1 = require_comparison_price();
     var nutrition_1 = require_nutrition();
+    var search_1 = require_search();
     var pml_1 = require_pml();
+    var DEFAULT_MAX_COUNT3 = 99;
     var MAIN_CONTAINER_ID = "product-details-page-root-main-container";
     var GALLERY_ID = "product-page-image-gallery-main-image-container";
     var LABELS_PREFIX = "product-page-labels-";
@@ -1948,7 +1993,7 @@ var require_product = __commonJS({
         ...header,
         ...prices,
         comparisonPrice: (0, comparison_price_1.getComparisonPrice)(prices.displayPrice, header.unitQuantity, prices.priceRanges),
-        maxCount: typeof mainUnit?.max_count === "number" ? mainUnit.max_count : 99,
+        maxCount: typeof mainUnit?.max_count === "number" ? mainUnit.max_count : DEFAULT_MAX_COUNT3,
         imageIds: extractImageIds(page, mainUnit),
         labels,
         description: extractDescription(page),
@@ -2116,6 +2161,179 @@ var require_product = __commonJS({
         ...Array.isArray(u.price_ranges) ? { priceRanges: u.price_ranges } : {}
       }));
     }
+    var asRecord = (value) => typeof value === "object" && value !== null && !Array.isArray(value) ? value : {};
+    var asArray = (value) => Array.isArray(value) ? value : [];
+    var asString = (value) => typeof value === "string" && value !== "" ? value : null;
+    var asNumber = (value) => typeof value === "number" ? value : null;
+    var RSC_COPY = {
+      NL: { organic: "Biologisch", new: "Nieuw", per: "Per" },
+      DE: { organic: "Bio", new: "Neu", per: "Pro" },
+      FR: { organic: "Biologique", new: "Nouveau", per: "Pour" }
+    };
+    var RSC_LABEL_ORDER = { PROMO: 6, PROMOBOX_PROMO: 7 };
+    var LABEL_POSITIONS = ["topLeft", "middleLeft", "bottomLeft", "topRight"];
+    var NOTE_SUFFIXES = ["TEXT", "NOTICE_LABEL", "TEXT_ICON"];
+    var RSC_COLORS = {
+      white: ["Text/Negative/primary", "#FFFFFF"],
+      text: ["Text/Default/primary", "#333333"],
+      promoText: ["Colour/Neutral/neutral-800", "#333333"],
+      promoBackground: ["Background/Brand/bg-promo-primary", "#FBD92B"],
+      green: ["Colour/Green/green-700", "#295813"],
+      sizeText: ["Colour/Neutral/neutral-white", "#FFFFFF"],
+      nutritionStripe: ["Colour/Neutral/neutral-50", "#FCFAF9"],
+      promoPrice: ["Text/Brand/price", "#B40117"],
+      familyPrice: ["Colour/Green/green-500", "#3F7326"]
+    };
+    function extractRscProductDetails(productId, content, countryCode) {
+      const viewModel = (0, rsc_1.findRscNode)(content.nodes, "product-details-content")?.props.viewModel;
+      if (typeof viewModel !== "object" || viewModel === null || Array.isArray(viewModel)) {
+        if ((0, rsc_1.findRscNode)(content.nodes, "product-details-fallback-content"))
+          throw new product_not_found_error_1.ProductNotFoundError(productId);
+        throw new Error(`The product page "${content.pageId}" has no product-details-content or product-details-fallback-content component.`);
+      }
+      const vm = asRecord(viewModel);
+      const copy = RSC_COPY[countryCode] ?? RSC_COPY.NL;
+      const color = (name) => content.tokens[RSC_COLORS[name][0]] ?? RSC_COLORS[name][1];
+      const suffixes = asArray(vm.suffixes).map(asRecord);
+      const suffixTexts = (...types) => suffixes.filter((s) => types.includes(String(s.type))).flatMap((s) => asString(s.text) ?? []);
+      const quantitySuffix = suffixes.find((s) => s.type === "TEXT" && asString(s.text) !== null);
+      const unitQuantity = asString(quantitySuffix?.text) ?? "";
+      const notes = suffixes.filter((s) => s !== quantitySuffix && NOTE_SUFFIXES.includes(String(s.type))).flatMap((s) => asString(s.text) ?? []);
+      const productColor = asString(asRecord(vm.color).primary);
+      const price = asRecord(vm.price);
+      const ranges = (0, search_1.readRscPriceRanges)(price.priceRanges);
+      const priceRanges = ranges.length > 1 ? ranges : null;
+      const displayPrice = (0, search_1.toCents)(price.priceValue) ?? asNumber(price.basePrice) ?? ranges[0]?.price ?? 0;
+      const priceColor = price.priceColor === "promo" ? color("promoPrice") : price.priceColor === "family" ? color("familyPrice") : null;
+      const accordions = asArray(vm.accordions).map(asRecord);
+      const readNutrition = (section) => readRscNutritionRows(section, copy.per, color("nutritionStripe"));
+      const nutritionContent = accordions.map((a) => asRecord(a.content)).find((c) => c.type === "nutrition");
+      return {
+        id: productId,
+        name: asString(vm.headerTitle) ?? asString(vm.title) ?? "",
+        brand: asString(vm.subtitle),
+        unitQuantity,
+        unitPrice: suffixTexts("UNIT_PRICE")[0] ?? null,
+        quantityBadges: suffixTexts("SIZE").map((text3) => ({ text: text3, textColor: color("sizeText"), backgroundColor: productColor ?? color("text") })),
+        tags: notes.map((text3) => ({ text: text3, color: null })),
+        displayPrice,
+        originalPrice: (0, search_1.toCents)(price.referencePriceValue),
+        displayPriceColor: priceColor,
+        priceRanges,
+        comparisonPrice: (0, comparison_price_1.getComparisonPrice)(displayPrice, unitQuantity, priceRanges),
+        maxCount: DEFAULT_MAX_COUNT3,
+        imageIds: [...new Set(asArray(vm.images).flatMap((image) => asString(asRecord(image).id) ?? []))],
+        labels: readRscLabels(vm, copy, color),
+        description: asString(asRecord(vm.description).main),
+        highlightItems: asArray(vm.highlights).flatMap((value) => {
+          const highlight = asRecord(value);
+          const text3 = asString(highlight.titleMarkdown) ?? asString(highlight.title);
+          return text3 ? [{ text: text3, iconKey: asString(highlight.icon), linkTarget: asString(highlight.deeplink) }] : [];
+        }),
+        allergenGroups: readRscAllergens(asRecord(vm.allergies), color),
+        infoSections: accordions.flatMap((accordion) => {
+          const title = asString(accordion.title);
+          const section = asRecord(accordion.content);
+          const text3 = section.type === "nutrition" ? nutritionText(readNutrition(section)) : accordionText(section);
+          return title && text3 ? [{ title, content: text3 }] : [];
+        }),
+        nutritionRows: nutritionContent ? readNutrition(nutritionContent) : [],
+        promotion: readRscPromotion(vm),
+        similarProducts: asArray(vm.related).filter(isProductTile2).map(toSimilarProduct)
+      };
+    }
+    function readRscLabels(vm, copy, color) {
+      const badges = [];
+      if (vm.isOrganic === true)
+        badges.push({ text: copy.organic, textColor: "#4B8505", backgroundColor: "#FFFFFF" });
+      const labels = asRecord(vm.labels);
+      const shown = LABEL_POSITIONS.flatMap((position) => asArray(labels[position]).map(asRecord)).filter((label) => RSC_LABEL_ORDER[String(label.type)] !== void 0).sort((a, b) => RSC_LABEL_ORDER[String(a.type)] - RSC_LABEL_ORDER[String(b.type)]);
+      for (const label of shown) {
+        const text3 = asString(label.labelText);
+        if (!text3)
+          continue;
+        badges.push(label.type === "PROMOBOX_PROMO" ? { text: text3, textColor: color("white"), backgroundColor: color("green") } : { text: text3, textColor: color("promoText"), backgroundColor: color("promoBackground") });
+      }
+      if (asRecord(vm.price).label === "FAMILY")
+        badges.push({ text: "Family", textColor: color("white"), backgroundColor: color("green") });
+      if (vm.isNew === true)
+        badges.push({ text: copy.new, textColor: "#4B8505", backgroundColor: "#F3F6E9" });
+      return badges;
+    }
+    function readRscAllergens(allergies, color) {
+      return {
+        contains: asArray(allergies.contains).flatMap((value) => {
+          const allergen = asRecord(value);
+          const text3 = asString(allergen.name);
+          return text3 ? [{ text: text3, textColor: color("white"), backgroundColor: asString(allergen.color) ?? color("text") }] : [];
+        }),
+        mayContain: asArray(allergies.mayContain).flatMap((value) => {
+          const text3 = asString(value);
+          return text3 ? [{ text: text3, textColor: color("text"), backgroundColor: "transparent" }] : [];
+        })
+      };
+    }
+    function readRscNutritionRows(content, per, stripe) {
+      const unit = asString(content.unit);
+      const heading = unit ? [{ label: `${per} ${unit.replace(new RegExp(`^${per}\\s+`, "i"), "")}`, value: null, isCategory: true, backgroundColor: null }] : [];
+      const rows = asArray(content.rows).flatMap((value, index) => {
+        const row = asRecord(value);
+        const label = asString(row.label);
+        return label ? [{ label, value: asString(row.value), isCategory: row.isSubValue !== true, backgroundColor: index % 2 === 0 ? stripe : null }] : [];
+      });
+      return (0, nutrition_1.readNutritionRows)([...heading, ...rows]);
+    }
+    function accordionText(content) {
+      if (typeof content.text === "string")
+        return content.text;
+      if (Array.isArray(content.text))
+        return content.text.flatMap((text3) => asString(text3) ?? []).join("\n");
+      return collectTexts(content).join("\n");
+    }
+    function collectTexts(value) {
+      if (typeof value === "string")
+        return value.trim() ? [value] : [];
+      if (Array.isArray(value))
+        return value.flatMap(collectTexts);
+      if (typeof value !== "object" || value === null)
+        return [];
+      return Object.entries(value).flatMap(([key, item]) => key === "type" ? [] : collectTexts(item));
+    }
+    function nutritionText(rows) {
+      return rows.flatMap((row) => row.value === null ? [row.label] : [row.label, row.value]).join("\n");
+    }
+    function readRscPromotion(vm) {
+      for (const slot2 of Object.values(asRecord(asRecord(vm.sellableInteraction).slots))) {
+        for (const action of asArray(asRecord(slot2).actions)) {
+          for (const value of asArray(asRecord(asRecord(action).payload).enrichments)) {
+            const enrichment = asRecord(value);
+            const payload = asRecord(enrichment.payload);
+            const id = asString(payload.promotion_id);
+            const label = asString(payload.promotion_label);
+            if (enrichment.type === "PROMOTION" && id && label)
+              return { id, label };
+          }
+        }
+      }
+      return null;
+    }
+    function isProductTile2(value) {
+      const tile = asRecord(value);
+      return typeof tile.id === "string" && typeof tile.name === "string" && typeof tile.displayPrice === "number";
+    }
+    function toSimilarProduct(tile) {
+      return {
+        id: tile.id,
+        name: [tile.namePrefix, tile.brand, tile.name].filter(Boolean).join(" "),
+        imageId: tile.imageId ?? "",
+        displayPrice: tile.displayPrice,
+        unitQuantity: (0, search_1.tileQuantity)(tile),
+        comparisonPrice: tile.comparisonPrice,
+        maxCount: DEFAULT_MAX_COUNT3,
+        ...tile.deposit !== void 0 && { deposit: tile.deposit },
+        ...tile.priceRanges && { priceRanges: tile.priceRanges }
+      };
+    }
     function productDetailsPageId(productId) {
       return `product-details-page-root?id=${encodeURIComponent(productId)}&show_category_action=true&show_remove_from_purchases_page_action=true`;
     }
@@ -2130,6 +2348,7 @@ var require_categories = __commonJS({
     exports.extractCategoryTree = extractCategoryTree;
     exports.extractSubcategories = extractSubcategories;
     exports.extractCategoryProducts = extractCategoryProducts;
+    var rsc_1 = require_rsc();
     var search_1 = require_search();
     var asRecord = (value) => typeof value === "object" && value !== null && !Array.isArray(value) ? value : null;
     var asArray = (value) => Array.isArray(value) ? value : [];
@@ -2139,16 +2358,6 @@ var require_categories = __commonJS({
       "category-product-overview": "products",
       "promotion-category-page": "promotions"
     };
-    function findNode(nodes, component) {
-      for (const node of nodes) {
-        if (node.component === component)
-          return node;
-        const found = findNode(node.children, component);
-        if (found)
-          return found;
-      }
-      return null;
-    }
     function readTarget(deeplink) {
       const [pageId, ...params] = (deeplink.split(";id=")[1] ?? "").split(",");
       const type = TARGET_TYPES[pageId];
@@ -2171,7 +2380,7 @@ var require_categories = __commonJS({
     }
     function extractCategoryTree(content) {
       const sections = [{ title: null, links: [] }];
-      for (const item of asArray(findNode(content.nodes, "vertical-list")?.props.items)) {
+      for (const item of asArray((0, rsc_1.findRscNode)(content.nodes, "vertical-list")?.props.items)) {
         const entry = asRecord(item);
         if (entry?.type === "section-title") {
           sections.push({ title: asString(entry.title), links: [] });
@@ -2184,7 +2393,7 @@ var require_categories = __commonJS({
       return sections.filter((section) => section.links.length > 0);
     }
     function extractSubcategories(categoryId, content) {
-      const list = findNode(content.nodes, "category-list");
+      const list = (0, rsc_1.findRscNode)(content.nodes, "category-list");
       return {
         categoryId,
         title: asString(list?.props.title) ?? "",
@@ -2193,10 +2402,10 @@ var require_categories = __commonJS({
     }
     var isProductTile2 = (item) => typeof asRecord(item)?.id === "string" && typeof asRecord(item)?.name === "string" && typeof asRecord(item)?.displayPrice === "number";
     function extractCategoryProducts(categoryId, content) {
-      const items = findNode(content.nodes, "items")?.props;
-      const filterBar = findNode(content.nodes, "filter-bar")?.props;
+      const items = (0, rsc_1.findRscNode)(content.nodes, "items")?.props;
+      const filterBar = (0, rsc_1.findRscNode)(content.nodes, "filter-bar")?.props;
       const productIdsByFacetId = {};
-      for (const [facetId, ids] of Object.entries(asRecord(findNode(content.nodes, "context")?.props.entityIdsByFacetId) ?? {})) {
+      for (const [facetId, ids] of Object.entries(asRecord((0, rsc_1.findRscNode)(content.nodes, "context")?.props.entityIdsByFacetId) ?? {})) {
         productIdsByFacetId[facetId] = asArray(ids).filter((id) => typeof id === "string");
       }
       const sections = asArray(items?.sections).map((value) => {
@@ -2210,7 +2419,7 @@ var require_categories = __commonJS({
       });
       return {
         categoryId,
-        title: asString(findNode(content.nodes, "page-header")?.props.title) ?? "",
+        title: asString((0, rsc_1.findRscNode)(content.nodes, "page-header")?.props.title) ?? "",
         results: {
           sections,
           visualFilters: (0, search_1.extractFilters)(filterBar?.visualFilters),
@@ -2412,20 +2621,17 @@ var require_service4 = __commonJS({
       getSuggestions(query) {
         return this.http.sendRequest("GET", `/suggest?search_term=${encodeURIComponent(query)}`);
       }
-      /** Fetches the product details page (Fusion). */
-      getProductDetailsPage(productId) {
-        return this.pages.getFusionPage((0, product_1.productDetailsPageId)(productId));
-      }
       /**
        * Returns a product as the app's product page shows it (`product-details-page-root`): name,
        * prices, price tiers, promotions, images, the information sections, nutrition and allergens.
+       * Picnic serves the page as RSC; the Fusion reader stays while older agents still get a Fusion page.
        *
        * @param {string} productId The product ID to fetch details for.
        * @throws {ProductNotFoundError} When the product doesn't exist or isn't available at the user's location.
        */
       async getProduct(productId) {
-        const page = await this.getProductDetailsPage(productId);
-        return (0, product_1.extractProductDetails)(productId, page);
+        const page = await this.pages.getPage((0, product_1.productDetailsPageId)(productId));
+        return page.format === "rsc" ? (0, product_1.extractRscProductDetails)(productId, page.content, this.http.countryCode) : (0, product_1.extractProductDetails)(productId, page.page);
       }
       /**
        * Returns the similar products of a product that cost less per kilogram, litre or piece, the way a
@@ -2798,10 +3004,11 @@ var require_replacements = __commonJS({
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.extractCartReplacements = extractCartReplacements;
+    var rsc_1 = require_rsc();
     var search_1 = require_search();
     var CONTENT_COMPONENT = "unavailability-replacements-content";
     function extractCartReplacements(content, productId) {
-      const props = findNode(content.nodes, CONTENT_COMPONENT)?.props ?? {};
+      const props = (0, rsc_1.findRscNode)(content.nodes, CONTENT_COMPONENT)?.props ?? {};
       const alternatives = Array.isArray(props.alternativeViewModels) ? props.alternativeViewModels : [];
       return {
         productId,
@@ -2811,16 +3018,6 @@ var require_replacements = __commonJS({
           return product ? [product] : [];
         })
       };
-    }
-    function findNode(nodes, component) {
-      for (const node of nodes) {
-        if (node.component === component)
-          return node;
-        const found = findNode(node.children, component);
-        if (found)
-          return found;
-      }
-      return null;
     }
   }
 });
@@ -4647,8 +4844,8 @@ function productDetail(id) {
     labels: product.namePrefix ? [{ text: "Biologisch", textColor: "#ffffff", backgroundColor: "#4B8505" }] : [],
     description: `**${product.name}** uit de demowinkel. Alles op deze pagina is verzonnen om Picnic Desk te laten zien.`,
     highlights: [
-      { text: "**Nederlands** product", iconKey: "pin", linkTarget: null },
-      { text: "Lang houdbaar", iconKey: "starsOutlined", linkTarget: null }
+      { text: "**Nederlands** product", iconKey: "PIN", linkTarget: null },
+      { text: "Lang houdbaar", iconKey: "STARS", linkTarget: null }
     ],
     allergens: ALLERGENS[product.category] ?? { confirmed: [], mayContain: [] },
     infoSections: [
@@ -11869,7 +12066,7 @@ function startDesk(env = process.env) {
     pictureCacheMb,
     allowedUsers,
     ingressOnly: env.INGRESS_ONLY === "1",
-    version: true ? "1.0.8" : "dev",
+    version: true ? "1.0.9" : "dev",
     routes: VENDORED_ROUTES,
     demo: demo ? demoShop() : void 0
   });

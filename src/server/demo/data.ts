@@ -158,8 +158,8 @@ export function productDetail(id: string): ProductDetail | null {
     labels: product.namePrefix ? [{ text: "Biologisch", textColor: "#ffffff", backgroundColor: "#4B8505" }] : [],
     description: `**${product.name}** uit de demowinkel. Alles op deze pagina is verzonnen om Picnic Desk te laten zien.`,
     highlights: [
-      { text: "**Nederlands** product", iconKey: "pin", linkTarget: null },
-      { text: "Lang houdbaar", iconKey: "starsOutlined", linkTarget: null },
+      { text: "**Nederlands** product", iconKey: "PIN", linkTarget: null },
+      { text: "Lang houdbaar", iconKey: "STARS", linkTarget: null },
     ],
     allergens: ALLERGENS[product.category] ?? { confirmed: [], mayContain: [] },
     infoSections: [

@@ -286,6 +286,41 @@ describe("picnic-web's parsers on Picnic's real answers", () => {
     assert.ok(Array.isArray(product.body.infoSections));
   });
 
+  // Since November 2026 Picnic serves the product page as RSC (picnic-api 5.6.0): one
+  // product-details-content component whose view model holds the product.
+  test("product page served as RSC", async () => {
+    const description = "Romige melk van **Nederlandse** koeien.\n\nLekker bij je ontbijt";
+    const viewModel = {
+      id: "s1",
+      headerTitle: "Halfvolle melk",
+      subtitle: "Merk",
+      suffixes: [{ type: "TEXT", text: "1.5 liter" }, { type: "UNIT_PRICE", text: "€1.26/l" }],
+      price: { basePrice: 189, priceValue: 1.89, priceRanges: [{ fromQuantity: 1, price: 189 }] },
+      labels: { topLeft: [], middleLeft: [], bottomLeft: [], topRight: [] },
+      images: [{ id: "img-1" }],
+      description: { main: "$9" },
+      highlights: [{ title: "Romig van smaak", titleMarkdown: "**Romig** van smaak", icon: "STARS", deeplink: "" }],
+      allergies: { contains: [{ name: "Melk", color: "#6E8DB6" }], mayContain: ["Noten"] },
+      accordions: [{ id: "ingredients", icon: "list", title: "Ingrediënten", content: { type: "text", text: "Ingrediënten: melk." } }],
+    };
+    const payload = [
+      '1:I["./presentational-components/page/page-hydrator.tsx",["c"],"PageHydrator"]',
+      '2:I["./pages/product-details/product-details-content.tsx",["c"],"ProductDetailsContent"]',
+      `0:["$","$L1",null,${JSON.stringify({ theme: { tokenRegistry: {} }, children: ["$", "$L2", null, { viewModel }] })}]`,
+      `9:T${Buffer.byteLength(description).toString(16)},${description}`,
+    ].join("\n");
+    picnic.on("GET", /^\/pages\/product-details-page-root\?id=s1&/, new Response(payload, { headers: { "content-type": "text/x-component" } }));
+    const product = await desk.get("/api/product/s1");
+    assert.equal(product.status, 200, JSON.stringify(product.body));
+    assert.deepEqual(
+      [product.body.name, product.body.brand, product.body.unitQuantity, product.body.displayPrice, product.body.maxCount, product.body.description],
+      ["Halfvolle melk", "Merk", "1.5 liter", 189, 99, description]
+    );
+    // The desk's product sheet knows the app's icon names ("STARS", not "starsOutlined").
+    assert.deepEqual(product.body.highlights, [{ text: "**Romig** van smaak", iconKey: "STARS", linkTarget: null }]);
+    assert.deepEqual(product.body.infoSections, [{ title: "Ingrediënten", content: "Ingrediënten: melk." }]);
+  });
+
   test("basket", async () => {
     picnic.on("GET", "/cart", json(fixture("cart_de.json")));
     const cart = await desk.get("/api/cart");

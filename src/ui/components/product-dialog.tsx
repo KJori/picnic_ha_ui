@@ -14,8 +14,38 @@ import { Boundary } from "./boundary";
 import { Dialog, Img, Loaded, PicnicLabel, Price, Stepper, useLoad, useMoney } from "./common";
 import { fromSlider, ProductGrid, StarButton, useTakeOut } from "./products";
 
-/** Icons Picnic names for highlights, as picnic-web shows them. */
+/**
+ * Icons Picnic names for highlights, as picnic-web shows them: the app's icon names of the RSC
+ * product page (`STARS`), then the PML icon keys of the older Fusion page (`starsOutlined`).
+ */
 const HIGHLIGHT_ICONS: Record<string, string> = {
+  ALCOHOL: "🍷",
+  APPLE: "🍎",
+  AWARD: "🏆",
+  BABY_BOTTLE: "🍼",
+  CHECKBOX: "✅",
+  CHECKLIST: "📋",
+  CHEF_HAT: "🍳",
+  CLOCK: "🕒",
+  COFFEE_BEAN: "☕",
+  FLAG_DE: "🇩🇪",
+  GRAIN: "🌾",
+  GRAIN_CROP: "🌾",
+  GREEN_LEAF: "🌿",
+  HEART: "❤️",
+  INFO: "ℹ️",
+  LAUREL_LEAVES: "🏅",
+  LEAF: "🌿",
+  LIST: "📋",
+  OVEN: "🔥",
+  PAIR: "🍽️",
+  PEOPLE: "👥",
+  PIN: "📌",
+  STARS: "✨",
+  STORAGE: "📦",
+  SUSTAINABLE: "♻️",
+  WHISK: "🍵",
+  WINDMILL: "🌬️",
   starsOutlined: "✨",
   pin: "📌",
   snowflake: "❄️",
