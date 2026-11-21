@@ -4,6 +4,17 @@ All notable changes to Picnic Desk. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the version
 numbers [Semantic Versioning](https://semver.org/).
 
+## [1.0.9]
+
+### Fixed
+
+- Product pages open again. Picnic changed the format of its product pages
+  on 17 November, after which opening a product showed an error instead of
+  its details. The page shows the price, price tiers, description,
+  ingredients, nutrition and allergens as before.
+- The small icons in front of a product's highlights (such as ✨ and 📌)
+  show again, instead of a plain dot.
+
 ## [1.0.8]
 
 ### Fixed

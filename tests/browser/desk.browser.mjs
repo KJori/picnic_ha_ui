@@ -253,6 +253,8 @@ describe("Picnic Desk in a browser", () => {
     const sheet = page.getByRole("dialog");
     await sheet.locator("h2.name").filter({ hasText: "Tofu naturel" }).waitFor();
     await sheet.getByText("Contains:").waitFor();
+    // Picnic's RSC product page names highlight icons as the app does ("PIN", "STARS").
+    assert.deepEqual(await sheet.locator(".highlights li > span[aria-hidden]").allTextContents(), ["📌 ", "✨ "]);
     await sheet.getByText("Voedingswaarde").click();
     await sheet.locator("table.nutrition").first().waitFor();
     const before = await amount(line(page, "s1004").locator("output"));
