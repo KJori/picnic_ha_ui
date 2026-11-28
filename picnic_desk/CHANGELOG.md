@@ -4,6 +4,21 @@ All notable changes to Picnic Desk. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the version
 numbers [Semantic Versioning](https://semver.org/).
 
+## [1.0.10]
+
+### Changed
+
+- The desk now talks to Picnic with picnic-api 5.7, which presents itself
+  to Picnic as the current Picnic app (version 1.252) and copes with
+  Picnic answering a request with an empty reply. You should see no
+  difference.
+
+### Fixed
+
+- A request Picnic never answers still gives up after 25 seconds, so a
+  page shows an error instead of waiting longer. picnic-api 5.7 brings its
+  own 30 second limit; the desk keeps its shorter one on top of it.
+
 ## [1.0.9]
 
 ### Fixed
