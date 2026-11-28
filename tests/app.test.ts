@@ -774,7 +774,7 @@ describe("calls to Picnic cannot hang", () => {
   after(() => {
     globalThis.fetch = original;
   });
-  test("a call without its own time limit gets one", async () => {
+  test("every call gets the desk's time limit, also one with its own signal", async () => {
     let signal: AbortSignal | undefined;
     globalThis.fetch = (async (_: unknown, init?: RequestInit) => {
       signal = init?.signal ?? undefined;
@@ -785,6 +785,15 @@ describe("calls to Picnic cannot hang", () => {
     assert.ok(signal instanceof AbortSignal);
     const own = new AbortController();
     await fetch("https://example.invalid/", { signal: own.signal });
-    assert.equal(signal, own.signal, "a caller's own signal is kept");
+    assert.ok(signal && !signal.aborted);
+    own.abort();
+    assert.ok(signal.aborted, "a caller's own signal still aborts the call");
+    // picnic-api 5.7 passes its own 30 s signal; the desk's shorter limit must still end the call.
+    const later = new AbortController();
+    await fetch("https://example.invalid/", { signal: later.signal });
+    const limited = signal;
+    await new Promise((resolve) => setTimeout(resolve, 1100));
+    assert.ok(limited?.aborted, "the desk's limit ends a call whose own signal has a longer limit");
+    assert.equal(later.signal.aborted, false);
   });
 });

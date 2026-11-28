@@ -1,8 +1,9 @@
 /**
  * Rules for every request this app makes to the internet.
  *
- * - A time limit: picnic-api sets none of its own, and no call to Picnic may
- *   hang a request forever.
+ * - A time limit: no call to Picnic may hang a request forever. picnic-api
+ *   (since 5.7.0) passes its own 30 second signal; the desk's shorter limit
+ *   applies as well, so whichever ends first wins.
  * - Only Picnic: the app talks to Picnic's servers and nothing else, so no
  *   part of it (a dependency included) can send anything elsewhere.
  */
@@ -21,10 +22,16 @@ export function installFetchTimeout(timeoutMs = UPSTREAM_TIMEOUT_MS): void {
   const original = globalThis.fetch as Marked;
   if (original.deskTimeout) return;
   const wrapped = ((input: Parameters<typeof fetch>[0], init?: RequestInit) =>
-    original(input, { ...init, signal: init?.signal ?? AbortSignal.timeout(timeoutMs) })) as Marked;
+    original(input, { ...init, signal: withLimit(init?.signal, timeoutMs) })) as Marked;
   wrapped.deskTimeout = true;
   wrapped.deskOnlyPicnic = original.deskOnlyPicnic;
   globalThis.fetch = wrapped;
+}
+
+/** The caller's own signal (if any) and the desk's time limit: whichever aborts first. */
+function withLimit(own: AbortSignal | null | undefined, timeoutMs: number): AbortSignal {
+  const limit = AbortSignal.timeout(timeoutMs);
+  return own ? AbortSignal.any([own, limit]) : limit;
 }
 
 /** Refuse, before anything is sent, a request to anywhere but Picnic. */

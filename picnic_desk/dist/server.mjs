@@ -127,7 +127,8 @@ var require_http_client = __commonJS({
         this.authKey = options?.authKey || null;
         this.url = options?.url || `https://storefront-prod.${this.countryCode.toLowerCase()}.picnicinternational.com/api/${this.apiVersion}`;
         this.deviceId = options?.deviceId || "3C417201548B2E3B";
-        this.agent = options?.agent || "30100;1.251.0-15611;";
+        this.agent = options?.agent || "30100;1.252.0-15626;";
+        this.timeout = options?.timeout ?? 3e4;
       }
       get baseHeaders() {
         return {
@@ -192,7 +193,8 @@ var require_http_client = __commonJS({
         const response = await fetch(requestUrl, {
           method,
           headers,
-          body
+          body,
+          signal: AbortSignal.timeout(this.timeout)
         });
         if (!response.ok) {
           const responseBody = await response.text();
@@ -203,18 +205,16 @@ var require_http_client = __commonJS({
         }
         return response;
       }
-      /** Reads the body as an ArrayBuffer (image and other binary requests), RSC text or JSON. */
+      /** Reads the body as an ArrayBuffer (image and other binary requests), RSC text, JSON, or `undefined` when it is empty. */
       async readResponseBody(response, binary) {
         if (binary) {
           return response.arrayBuffer();
         }
-        if (response.headers?.get("content-type")?.includes("text/x-component")) {
-          return response.text();
-        }
-        if (response.body !== null) {
-          return response.json();
-        }
-        return void 0;
+        const text3 = await response.text();
+        if (!text3)
+          return void 0;
+        const isRsc = response.headers?.get("content-type")?.includes("text/x-component");
+        return isRsc ? text3 : JSON.parse(text3);
       }
     };
     exports.default = HttpClient;
@@ -305,6 +305,27 @@ var require_page_format_error = __commonJS({
   }
 });
 
+// node_modules/picnic-api/lib/raw.js
+var require_raw = __commonJS({
+  "node_modules/picnic-api/lib/raw.js"(exports) {
+    "use strict";
+    Object.defineProperty(exports, "__esModule", { value: true });
+    exports.asString = exports.asRecords = exports.asArray = exports.recordOf = exports.asRecord = exports.isRecord = void 0;
+    var isRecord = (value) => typeof value === "object" && value !== null && !Array.isArray(value);
+    exports.isRecord = isRecord;
+    var asRecord = (value) => (0, exports.isRecord)(value) ? value : null;
+    exports.asRecord = asRecord;
+    var recordOf = (value) => (0, exports.isRecord)(value) ? value : {};
+    exports.recordOf = recordOf;
+    var asArray = (value) => Array.isArray(value) ? value : [];
+    exports.asArray = asArray;
+    var asRecords = (value) => (0, exports.asArray)(value).filter(exports.isRecord);
+    exports.asRecords = asRecords;
+    var asString = (value) => typeof value === "string" && value !== "" ? value : null;
+    exports.asString = asString;
+  }
+});
+
 // node_modules/picnic-api/lib/pages/pml.js
 var require_pml = __commonJS({
   "node_modules/picnic-api/lib/pages/pml.js"(exports) {
@@ -327,8 +348,8 @@ var require_pml = __commonJS({
     exports.accordionItems = accordionItems;
     exports.findPmlComponent = findPmlComponent;
     exports.analyticsContexts = analyticsContexts;
+    var raw_1 = require_raw();
     var DEFAULT_TEXT_COLORS = /* @__PURE__ */ new Set(["#333333", "#5b534e", "#787570"]);
-    var isNode = (value) => typeof value === "object" && value !== null && !Array.isArray(value);
     function stripColorTags2(markdown) {
       return markdown.replace(/#\([^)]+\)/g, "").trim();
     }
@@ -347,7 +368,7 @@ var require_pml = __commonJS({
     function walkNodes(node, visit) {
       if (Array.isArray(node)) {
         node.forEach((child) => walkNodes(child, visit));
-      } else if (isNode(node)) {
+      } else if ((0, raw_1.isRecord)(node)) {
         visit(node);
         Object.values(node).forEach((child) => walkNodes(child, visit));
       }
@@ -361,7 +382,7 @@ var require_pml = __commonJS({
         }
         return null;
       }
-      if (!isNode(node))
+      if (!(0, raw_1.isRecord)(node))
         return null;
       if (predicate(node))
         return node;
@@ -379,7 +400,7 @@ var require_pml = __commonJS({
           return true;
         if (Array.isArray(node))
           return node.some(visit);
-        if (!isNode(node))
+        if (!(0, raw_1.isRecord)(node))
           return false;
         path.push(node);
         if (Object.values(node).some(visit))
@@ -390,11 +411,11 @@ var require_pml = __commonJS({
       return visit(root) ? path.reverse() : [];
     }
     function findSuspensePageId(node) {
-      const suspense = findNode(node, (n) => n.type === "SUSPENSE" && isNode(n.pageConfig) && typeof n.pageConfig.id === "string");
+      const suspense = findNode(node, (n) => n.type === "SUSPENSE" && (0, raw_1.isRecord)(n.pageConfig) && typeof n.pageConfig.id === "string");
       if (!suspense)
         return null;
       const { id, parameters } = suspense.pageConfig;
-      const query = Object.entries(isNode(parameters) ? parameters : {}).filter(([, value]) => value !== null && value !== void 0).map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(String(value))}`).join("&");
+      const query = Object.entries((0, raw_1.isRecord)(parameters) ? parameters : {}).filter(([, value]) => value !== null && value !== void 0).map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(String(value))}`).join("&");
       return query ? `${id}?${query}` : id;
     }
     var findNodeById2 = (node, id) => findNode(node, (n) => n.id === id);
@@ -415,8 +436,8 @@ var require_pml = __commonJS({
     function childrenOf(node) {
       const children = node.children ?? node.child;
       if (Array.isArray(children))
-        return children.filter(isNode);
-      return isNode(children) ? [children] : [];
+        return children.filter(raw_1.isRecord);
+      return (0, raw_1.isRecord)(children) ? [children] : [];
     }
     function collectPriceNodes(node) {
       const prices = [];
@@ -432,12 +453,12 @@ var require_pml = __commonJS({
       const visit = (n) => {
         if (Array.isArray(n))
           return n.forEach(visit);
-        if (!isNode(n))
+        if (!(0, raw_1.isRecord)(n))
           return;
         if (n.type === "CONTAINER" && typeof n.backgroundColor === "string" && typeof n.borderRadius === "number") {
           const markdown = collectMarkdowns2(n)[0];
           if (markdown) {
-            const textColor = extractHighlightColor(markdown) ?? collectPropertyValues2(n, "textAttributes").map((attributes) => isNode(attributes) ? attributes.color : void 0).find((color) => typeof color === "string");
+            const textColor = extractHighlightColor(markdown) ?? collectPropertyValues2(n, "textAttributes").map((attributes) => (0, raw_1.isRecord)(attributes) ? attributes.color : void 0).find((color) => typeof color === "string");
             badges.push({ text: cleanMarkdown2(markdown), textColor: textColor ?? "#333333", backgroundColor: n.backgroundColor });
             return;
           }
@@ -452,7 +473,7 @@ var require_pml = __commonJS({
       const visit = (n) => {
         if (Array.isArray(n))
           return n.forEach(visit);
-        if (!isNode(n))
+        if (!(0, raw_1.isRecord)(n))
           return;
         if (n.type === "STACK" && n.axis === "HORIZONTAL" && (n.distribution === "SPACE_BETWEEN" || n.distribution === "END")) {
           const texts = childrenOf(n).filter((c) => c.type === "RICH_TEXT" && typeof c.markdown === "string");
@@ -473,16 +494,16 @@ var require_pml = __commonJS({
     }
     function accordionItems(accordion) {
       const items = collectPropertyValues2(accordion, "items")[0];
-      return Array.isArray(items) ? items.filter(isNode) : [];
+      return Array.isArray(items) ? items.filter(raw_1.isRecord) : [];
     }
     function findPmlComponent(node) {
-      const found = findNode(node, (n) => isNode(n.pml) && isNode(n.pml.component));
+      const found = findNode(node, (n) => (0, raw_1.isRecord)(n.pml) && (0, raw_1.isRecord)(n.pml.component));
       return found ? found.pml.component : null;
     }
     function analyticsContexts(node) {
       const analytics = node.analytics;
-      const contexts = isNode(analytics) ? analytics.contexts : void 0;
-      return Array.isArray(contexts) ? contexts.filter(isNode) : [];
+      const contexts = (0, raw_1.isRecord)(analytics) ? analytics.contexts : void 0;
+      return Array.isArray(contexts) ? contexts.filter(raw_1.isRecord) : [];
     }
   }
 });
@@ -501,6 +522,7 @@ var require_lists = __commonJS({
     exports.extractFusionRecipeCategoryGroup = extractFusionRecipeCategoryGroup;
     exports.extractRecipeCategory = extractRecipeCategory;
     exports.extractRecipeCategoryGroup = extractRecipeCategoryGroup;
+    var raw_1 = require_raw();
     var pml_1 = require_pml();
     var RECIPE_SCHEMA2 = "iglu:tech.picnic.snowplow.analytics/recipe/jsonschema/";
     var AISLE_SCHEMA = "iglu:tech.picnic.snowplow.analytics/aisle/jsonschema/";
@@ -656,8 +678,6 @@ var require_lists = __commonJS({
       });
       return { name, title: headerTitle(page) ?? name, categories };
     }
-    var asRecord = (value) => typeof value === "object" && value !== null && !Array.isArray(value) ? value : null;
-    var asString = (value) => typeof value === "string" && value !== "" ? value : null;
     function findRscNode(nodes, component) {
       for (const node of nodes) {
         if (node.component === component)
@@ -669,18 +689,18 @@ var require_lists = __commonJS({
       return null;
     }
     function readRscRecipeTile(item) {
-      const tile = asRecord(item);
-      const id = asString(tile?.id);
+      const tile = (0, raw_1.asRecord)(item);
+      const id = (0, raw_1.asString)(tile?.id);
       if (!tile || !id || tile.sellableType !== "SELLING_GROUP")
         return null;
-      const text3 = asRecord(tile.text);
-      const tags = (Array.isArray(text3?.tags) ? text3.tags : []).flatMap((tag) => asString(asRecord(tag)?.text) ?? []);
+      const text3 = (0, raw_1.asRecord)(tile.text);
+      const tags = (Array.isArray(text3?.tags) ? text3.tags : []).flatMap((tag) => (0, raw_1.asString)((0, raw_1.asRecord)(tag)?.text) ?? []);
       return {
         id,
-        name: asString(asRecord(text3?.title)?.text) ?? "",
+        name: (0, raw_1.asString)((0, raw_1.asRecord)(text3?.title)?.text) ?? "",
         imageType: null,
-        imageId: asString(asRecord(tile.image)?.imageId),
-        subtitle: asString(asRecord(text3?.subtitle)?.text),
+        imageId: (0, raw_1.asString)((0, raw_1.asRecord)(tile.image)?.imageId),
+        subtitle: (0, raw_1.asString)((0, raw_1.asRecord)(text3?.subtitle)?.text),
         tags,
         cookingTimeMinutes: (0, exports.firstMinutes)(tags)
       };
@@ -689,7 +709,7 @@ var require_lists = __commonJS({
       const items = findRscNode(content.nodes, "vertical-list")?.props.items;
       return {
         id: categoryId,
-        title: asString(findRscNode(content.nodes, "page-header")?.props.title) ?? "",
+        title: (0, raw_1.asString)(findRscNode(content.nodes, "page-header")?.props.title) ?? "",
         recipes: (Array.isArray(items) ? items : []).flatMap((item) => readRscRecipeTile(item) ?? [])
       };
     }
@@ -698,11 +718,11 @@ var require_lists = __commonJS({
       const items = list?.props.items;
       return {
         name,
-        title: asString(list?.props.title) ?? name,
+        title: (0, raw_1.asString)(list?.props.title) ?? name,
         categories: (Array.isArray(items) ? items : []).flatMap((item) => {
-          const entry = asRecord(item);
-          const deeplink = asString(entry?.deeplink);
-          const link = deeplink ? categoryLink(deeplink, asString(entry?.title) ?? "", asString(entry?.image)) : null;
+          const entry = (0, raw_1.asRecord)(item);
+          const deeplink = (0, raw_1.asString)(entry?.deeplink);
+          const link = deeplink ? categoryLink(deeplink, (0, raw_1.asString)(entry?.title) ?? "", (0, raw_1.asString)(entry?.image)) : null;
           return link ? [link] : [];
         })
       };
@@ -806,34 +826,32 @@ var require_tiles = __commonJS({
     exports.isFusionProductTile = void 0;
     exports.readFusionProductTile = readFusionProductTile;
     exports.collectFusionProductTiles = collectFusionProductTiles;
+    var raw_1 = require_raw();
     var pml_1 = require_pml();
     var comparison_price_1 = require_comparison_price();
-    var asRecord = (value) => typeof value === "object" && value !== null && !Array.isArray(value) ? value : {};
-    var asArray = (value) => Array.isArray(value) ? value : [];
-    var asString = (value) => typeof value === "string" && value !== "" ? value : null;
     var asNumber = (value) => typeof value === "number" ? value : null;
     var PROMOTION_SCHEMA = "iglu:tech.picnic.snowplow.analytics/promotion/";
     var UNAVAILABILITY_SCHEMA = /\/unavailability\/jsonschema\//;
     var LABEL_CONTAINER_ID = "selling-unit-label-container";
     var SYMBOL_FONT = "PicnicSymbols";
-    var isFusionProductTile = (node) => node.type === "PML" && asRecord(node.content).type === "SELLING_UNIT_TILE";
+    var isFusionProductTile = (node) => node.type === "PML" && (0, raw_1.recordOf)(node.content).type === "SELLING_UNIT_TILE";
     exports.isFusionProductTile = isFusionProductTile;
     function readFusionProductTile(tile) {
-      const unit = asRecord(asRecord(tile.content).sellingUnit);
-      const id = asString(unit.id);
-      const catalogName = asString(unit.name);
+      const unit = (0, raw_1.recordOf)((0, raw_1.recordOf)(tile.content).sellingUnit);
+      const id = (0, raw_1.asString)(unit.id);
+      const catalogName = (0, raw_1.asString)(unit.name);
       if (!id || !catalogName)
         return null;
-      const promotion = asRecord((0, pml_1.analyticsContexts)(tile).find((context) => context.schema?.startsWith(PROMOTION_SCHEMA))?.data);
-      const unitQuantity = asString(unit.unit_quantity) ?? "";
+      const promotion = (0, raw_1.recordOf)((0, pml_1.analyticsContexts)(tile).find((context) => context.schema?.startsWith(PROMOTION_SCHEMA))?.data);
+      const unitQuantity = (0, raw_1.asString)(unit.unit_quantity) ?? "";
       const info = readInfoColumn(tile.pml, unitQuantity);
-      const priceRanges = asArray(unit.price_ranges).flatMap((value) => {
-        const range = asRecord(value);
+      const priceRanges = (0, raw_1.asArray)(unit.price_ranges).flatMap((value) => {
+        const range = (0, raw_1.recordOf)(value);
         const price = asNumber(range.price);
         const fromQuantity = asNumber(range.from_quantity);
         return price !== null && fromQuantity !== null ? [{ price, from_quantity: fromQuantity }] : [];
       });
-      const promotionLabel = asString(promotion.promotion_label);
+      const promotionLabel = (0, raw_1.asString)(promotion.promotion_label);
       const displayPrice = asNumber(unit.display_price) ?? 0;
       const deposit = asNumber(unit.deposit);
       return {
@@ -842,7 +860,7 @@ var require_tiles = __commonJS({
         namePrefix: info.namePrefix,
         brand: info.brand,
         qualityCue: info.qualityCue,
-        imageId: asString(unit.image_id),
+        imageId: (0, raw_1.asString)(unit.image_id),
         displayPrice,
         originalPrice: promotion.show_strikethrough_price === true ? asNumber(promotion.strikethrough_price) : null,
         unitPrice: null,
@@ -852,7 +870,7 @@ var require_tiles = __commonJS({
         unitQuantity,
         labels: promotionLabel ? [{ position: labelPosition(tile.pml, promotionLabel), type: "PROMO", text: promotionLabel }] : [],
         // Search tiles have no decorator; they carry an unavailability context instead.
-        isUnavailable: asArray(unit.decorators).some((decorator) => asRecord(decorator).type === "UNAVAILABLE") || (0, pml_1.analyticsContexts)(tile).some((context) => UNAVAILABILITY_SCHEMA.test(context.schema ?? "")),
+        isUnavailable: (0, raw_1.asArray)(unit.decorators).some((decorator) => (0, raw_1.recordOf)(decorator).type === "UNAVAILABLE") || (0, pml_1.analyticsContexts)(tile).some((context) => UNAVAILABILITY_SCHEMA.test(context.schema ?? "")),
         numberOfOrders: null,
         ...deposit !== null && { deposit }
       };
@@ -879,13 +897,13 @@ var require_tiles = __commonJS({
       return [...tiles.values()];
     }
     function readInfoColumn(pml, unitQuantity) {
-      const opensProduct = (0, pml_1.findNode)(pml, (n) => n.type === "TOUCHABLE" && asRecord(n.onPress).actionType === "OPEN");
+      const opensProduct = (0, pml_1.findNode)(pml, (n) => n.type === "TOUCHABLE" && (0, raw_1.recordOf)(n.onPress).actionType === "OPEN");
       const column = opensProduct ? (0, pml_1.findNode)(opensProduct.child, (n) => n.type === "STACK") : null;
       const rows = column ? (0, pml_1.childrenOf)(column) : [];
       const nameIndex = rows.findIndex((row) => row.type === "RICH_TEXT");
       if (nameIndex < 0)
         return { name: null, namePrefix: null, brand: null, qualityCue: null };
-      const spans = (0, pml_1.childrenOf)(rows[nameIndex]).filter((span) => typeof span.markdown === "string" && asRecord(span.textAttributes).family !== SYMBOL_FONT);
+      const spans = (0, pml_1.childrenOf)(rows[nameIndex]).filter((span) => typeof span.markdown === "string" && (0, raw_1.recordOf)(span.textAttributes).family !== SYMBOL_FONT);
       const spanPrefix = spans.length > 1 ? highlightedText(spans[0].markdown) : null;
       const nameSpans = spanPrefix ? spans.slice(1) : spans;
       const shownName = nameSpans.length > 0 ? nameSpans.map((span) => (0, pml_1.stripColorTags)(span.markdown)).join(" ") : (0, pml_1.stripColorTags)((0, pml_1.collectMarkdowns)(rows[nameIndex])[0] ?? "");
@@ -909,7 +927,7 @@ var require_tiles = __commonJS({
       const placed = (0, pml_1.findNode)((0, pml_1.findNodeById)(pml, LABEL_CONTAINER_ID), (n) => typeof n.absolutePosition === "object" && (0, pml_1.collectMarkdowns)(n).some((text3) => (0, pml_1.cleanMarkdown)(text3) === label));
       if (!placed)
         return "bottomLeft";
-      const position = asRecord(placed.absolutePosition);
+      const position = (0, raw_1.recordOf)(placed.absolutePosition);
       return `${"top" in position ? "top" : "bottom"}${"right" in position && !("left" in position) ? "Right" : "Left"}`;
     }
   }
@@ -928,53 +946,51 @@ var require_search = __commonJS({
     exports.readSellableTile = readSellableTile;
     exports.extractFilters = extractFilters;
     exports.extractFusionSearchResults = extractFusionSearchResults;
+    var raw_1 = require_raw();
     var pml_1 = require_pml();
     var lists_1 = require_lists();
     var tiles_1 = require_tiles();
     var comparison_price_1 = require_comparison_price();
     var LABEL_POSITIONS = ["topLeft", "topRight", "middleLeft", "bottomLeft"];
-    var asRecord = (value) => typeof value === "object" && value !== null && !Array.isArray(value) ? value : {};
-    var asArray = (value) => Array.isArray(value) ? value : [];
-    var asString = (value) => typeof value === "string" && value !== "" ? value : null;
     var asNumber = (value) => typeof value === "number" ? value : null;
     var toCents2 = (value) => typeof value === "number" ? Math.round(value * 100) : null;
     exports.toCents = toCents2;
     function readRscPriceRanges(priceRanges) {
-      return asArray(priceRanges).flatMap((value) => {
-        const range = asRecord(value);
+      return (0, raw_1.asArray)(priceRanges).flatMap((value) => {
+        const range = (0, raw_1.recordOf)(value);
         const price = asNumber(range.price);
         const fromQuantity = asNumber(range.fromQuantity);
         return price !== null && fromQuantity !== null ? [{ price, from_quantity: fromQuantity }] : [];
       }).sort((a, b) => a.from_quantity - b.from_quantity);
     }
     function extractSearchResults(props) {
-      const stores = asRecord(props.storeResults);
-      const supermarket = stores.SUPERMARKET ? asRecord(stores.SUPERMARKET) : null;
-      const meals = asRecord(stores.MEALS);
+      const stores = (0, raw_1.recordOf)(props.storeResults);
+      const supermarket = stores.SUPERMARKET ? (0, raw_1.recordOf)(stores.SUPERMARKET) : null;
+      const meals = (0, raw_1.recordOf)(stores.MEALS);
       return {
-        query: asString(props.searchQuery) ?? "",
-        correctedQuery: asString(supermarket?.correctedSearchTerm) ?? asString(meals.correctedSearchTerm),
+        query: (0, raw_1.asString)(props.searchQuery) ?? "",
+        correctedQuery: (0, raw_1.asString)(supermarket?.correctedSearchTerm) ?? (0, raw_1.asString)(meals.correctedSearchTerm),
         products: supermarket ? extractProductResults(supermarket) : null,
-        recipes: asArray(meals.sections).flatMap((section) => asArray(asRecord(section).items)).flatMap((item) => {
-          const recipe = extractSearchRecipe(asRecord(item));
+        recipes: (0, raw_1.asArray)(meals.sections).flatMap((section) => (0, raw_1.asArray)((0, raw_1.recordOf)(section).items)).flatMap((item) => {
+          const recipe = extractSearchRecipe((0, raw_1.recordOf)(item));
           return recipe ? [recipe] : [];
         })
       };
     }
     function extractProductResults(store) {
       const productIdsByFacetId = {};
-      for (const [facetId, ids] of Object.entries(asRecord(store.entityIdsByFacetId))) {
-        productIdsByFacetId[facetId] = asArray(ids).filter((id) => typeof id === "string");
+      for (const [facetId, ids] of Object.entries((0, raw_1.recordOf)(store.entityIdsByFacetId))) {
+        productIdsByFacetId[facetId] = (0, raw_1.asArray)(ids).filter((id) => typeof id === "string");
       }
       return {
-        sections: asArray(store.sections).map((value) => {
-          const section = asRecord(value);
+        sections: (0, raw_1.asArray)(store.sections).map((value) => {
+          const section = (0, raw_1.recordOf)(value);
           return {
-            id: asString(section.id) ?? "",
-            type: asString(section.type) ?? "",
-            title: section.shouldShowHeader ? asString(section.headerName) : null,
-            products: asArray(section.items).flatMap((item) => {
-              const product = extractProductTile(asRecord(item));
+            id: (0, raw_1.asString)(section.id) ?? "",
+            type: (0, raw_1.asString)(section.type) ?? "",
+            title: section.shouldShowHeader ? (0, raw_1.asString)(section.headerName) : null,
+            products: (0, raw_1.asArray)(section.items).flatMap((item) => {
+              const product = extractProductTile((0, raw_1.recordOf)(item));
               return product ? [product] : [];
             })
           };
@@ -983,12 +999,12 @@ var require_search = __commonJS({
         powerFilters: extractFilters(store.powerFilters),
         textualFilters: extractFilters(store.textualFilters),
         productIdsByFacetId,
-        sortingOptions: asArray(store.sortingOptions).flatMap((value) => {
-          const option = asRecord(value);
-          const name = asString(option.name);
-          return name ? [{ name, title: asString(option.localizedTitle) ?? name }] : [];
+        sortingOptions: (0, raw_1.asArray)(store.sortingOptions).flatMap((value) => {
+          const option = (0, raw_1.recordOf)(value);
+          const name = (0, raw_1.asString)(option.name);
+          return name ? [{ name, title: (0, raw_1.asString)(option.localizedTitle) ?? name }] : [];
         }),
-        selectedSorting: asString(store.selectedSorting) ?? "RELEVANCE"
+        selectedSorting: (0, raw_1.asString)(store.selectedSorting) ?? "RELEVANCE"
       };
     }
     function extractProductTile(tile) {
@@ -999,34 +1015,34 @@ var require_search = __commonJS({
       return tile.unitQuantity.split(TILE_SUFFIX_SEPARATOR)[0];
     }
     function readSellableTile(tile) {
-      const id = asString(tile.id);
-      const title = asRecord(tile.title);
-      const name = asString(title.title);
+      const id = (0, raw_1.asString)(tile.id);
+      const title = (0, raw_1.recordOf)(tile.title);
+      const name = (0, raw_1.asString)(title.title);
       if (!id || !name)
         return null;
-      const images = asRecord(tile.images);
-      const price = asRecord(tile.price);
+      const images = (0, raw_1.recordOf)(tile.images);
+      const price = (0, raw_1.recordOf)(tile.price);
       const priceRanges = readRscPriceRanges(price.priceRanges);
-      const labels = asRecord(tile.labels);
+      const labels = (0, raw_1.recordOf)(tile.labels);
       const displayPrice = (0, exports.toCents)(price.priceValue) ?? priceRanges[0]?.price ?? 0;
-      const unitQuantity = asArray(tile.suffixes).map(asRecord).filter((suffix) => suffix.type === "TEXT").flatMap((suffix) => asString(suffix.text) ?? []).join(TILE_SUFFIX_SEPARATOR);
-      const deposit = asNumber(asRecord(asRecord(tile.interaction).context).deposit);
+      const unitQuantity = (0, raw_1.asArray)(tile.suffixes).map(raw_1.recordOf).filter((suffix) => suffix.type === "TEXT").flatMap((suffix) => (0, raw_1.asString)(suffix.text) ?? []).join(TILE_SUFFIX_SEPARATOR);
+      const deposit = asNumber((0, raw_1.recordOf)((0, raw_1.recordOf)(tile.interaction).context).deposit);
       return {
         id,
         name,
-        namePrefix: asString(title.prefix)?.trim() || null,
-        brand: asString(asRecord(tile.subtitle).text),
-        qualityCue: asString(asRecord(tile.qualityCue).text),
-        imageId: asString(asRecord(images.primaryImage).imageId) ?? asString(asRecord(images.sellingUnitImage).imageId),
+        namePrefix: (0, raw_1.asString)(title.prefix)?.trim() || null,
+        brand: (0, raw_1.asString)((0, raw_1.recordOf)(tile.subtitle).text),
+        qualityCue: (0, raw_1.asString)((0, raw_1.recordOf)(tile.qualityCue).text),
+        imageId: (0, raw_1.asString)((0, raw_1.recordOf)(images.primaryImage).imageId) ?? (0, raw_1.asString)((0, raw_1.recordOf)(images.sellingUnitImage).imageId),
         displayPrice,
         originalPrice: (0, exports.toCents)(price.referencePriceValue),
-        unitPrice: asString(price.unitPrice),
+        unitPrice: (0, raw_1.asString)(price.unitPrice),
         comparisonPrice: (0, comparison_price_1.getComparisonPrice)(displayPrice, unitQuantity, priceRanges),
         priceRanges: priceRanges.length > 0 ? priceRanges : null,
         unitQuantity,
-        labels: LABEL_POSITIONS.flatMap((position) => asArray(labels[position]).map((value) => {
-          const label = asRecord(value);
-          return { position, type: asString(label.type), text: asString(label.labelText) };
+        labels: LABEL_POSITIONS.flatMap((position) => (0, raw_1.asArray)(labels[position]).map((value) => {
+          const label = (0, raw_1.recordOf)(value);
+          return { position, type: (0, raw_1.asString)(label.type), text: (0, raw_1.asString)(label.labelText) };
         })),
         isUnavailable: tile.unavailability !== null && tile.unavailability !== void 0,
         numberOfOrders: asNumber(tile.numberOfOrders),
@@ -1034,27 +1050,27 @@ var require_search = __commonJS({
       };
     }
     function extractSearchRecipe(tile) {
-      const id = asString(tile.id);
-      const text3 = asRecord(tile.text);
-      const name = asString(asRecord(text3.title).text);
+      const id = (0, raw_1.asString)(tile.id);
+      const text3 = (0, raw_1.recordOf)(tile.text);
+      const name = (0, raw_1.asString)((0, raw_1.recordOf)(text3.title).text);
       if (!id || !name)
         return null;
-      const tags = asArray(text3.tags).flatMap((tag) => asString(asRecord(tag).text) ?? []);
+      const tags = (0, raw_1.asArray)(text3.tags).flatMap((tag) => (0, raw_1.asString)((0, raw_1.recordOf)(tag).text) ?? []);
       return {
         id,
         name,
-        subtitle: asString(asRecord(text3.subtitle).text),
-        imageId: asString(asRecord(tile.image).imageId),
+        subtitle: (0, raw_1.asString)((0, raw_1.recordOf)(text3.subtitle).text),
+        imageId: (0, raw_1.asString)((0, raw_1.recordOf)(tile.image).imageId),
         tags,
         cookingTimeMinutes: (0, lists_1.firstMinutes)(tags)
       };
     }
     function extractFilters(value) {
-      return asArray(value).flatMap((item) => {
-        const filter = asRecord(item);
-        const facetId = asString(filter.facetId);
-        const name = asString(filter.name) ?? asString(filter.header);
-        return facetId && name ? [{ facetId, name, imageId: asString(filter.image) }] : [];
+      return (0, raw_1.asArray)(value).flatMap((item) => {
+        const filter = (0, raw_1.recordOf)(item);
+        const facetId = (0, raw_1.asString)(filter.facetId);
+        const name = (0, raw_1.asString)(filter.name) ?? (0, raw_1.asString)(filter.header);
+        return facetId && name ? [{ facetId, name, imageId: (0, raw_1.asString)(filter.image) }] : [];
       });
     }
     var SEARCH_STATE_ID = "searchState";
@@ -1065,12 +1081,12 @@ var require_search = __commonJS({
     var SORTING_ITEM_ID = "search-header-visual-item-sorting";
     var FILTER_TYPES = { VISUAL_FILTER: "visualFilters", POWER_FILTER: "powerFilters", TEXTUAL_FILTER: "textualFilters" };
     function extractFusionSearchResults(page, query) {
-      const state = asRecord((0, pml_1.findNodeById)(page, SEARCH_STATE_ID)?.state);
-      const analytics = asRecord(asRecord(state.analyticsTemplate).data);
+      const state = (0, raw_1.recordOf)((0, pml_1.findNodeById)(page, SEARCH_STATE_ID)?.state);
+      const analytics = (0, raw_1.recordOf)((0, raw_1.recordOf)(state.analyticsTemplate).data);
       const isRecipeSearch = state.selectedEntityType === "RECIPE";
       return {
         query,
-        correctedQuery: asString(analytics.query_corrected),
+        correctedQuery: (0, raw_1.asString)(analytics.query_corrected),
         products: state.selectedEntityType === "SELLING_UNIT" ? extractFusionProductResults(page, state) : null,
         recipes: isRecipeSearch ? (0, lists_1.extractRecipeTiles)(page).map(({ id, name, subtitle, imageId, tags, cookingTimeMinutes }) => ({ id, name, subtitle, imageId, tags, cookingTimeMinutes })) : []
       };
@@ -1084,8 +1100,8 @@ var require_search = __commonJS({
         wrappers.set(name, [...wrappers.get(name) ?? [], node]);
       });
       const visualSections = (0, pml_1.findNodeById)(page, VISUAL_SECTIONS_ID);
-      const sections = asArray(state.sections).flatMap((value) => {
-        const name = asString(asRecord(value).name);
+      const sections = (0, raw_1.asArray)(state.sections).flatMap((value) => {
+        const name = (0, raw_1.asString)((0, raw_1.recordOf)(value).name);
         const blocks = name ? wrappers.get(name) : void 0;
         if (!name || !blocks)
           return [];
@@ -1109,27 +1125,27 @@ var require_search = __commonJS({
           filters[filter.list].push(filter.filter);
       });
       const productIdsByFacetId = {};
-      for (const [facetId, ids] of Object.entries(asRecord(state.sellingUnitIdsByFacetIds))) {
-        productIdsByFacetId[facetId] = asArray(ids).filter((id) => typeof id === "string");
+      for (const [facetId, ids] of Object.entries((0, raw_1.recordOf)(state.sellingUnitIdsByFacetIds))) {
+        productIdsByFacetId[facetId] = (0, raw_1.asArray)(ids).filter((id) => typeof id === "string");
       }
       return {
         sections,
         ...filters,
         productIdsByFacetId,
         sortingOptions: readSortingOptions((0, pml_1.findNodeById)(page, SORTING_ITEM_ID), state),
-        selectedSorting: asString(state.selectedSorting) ?? "RELEVANCE"
+        selectedSorting: (0, raw_1.asString)(state.selectedSorting) ?? "RELEVANCE"
       };
     }
     function readFilterItem(item) {
       const touchable = (0, pml_1.findNode)(item.pml, (n) => n.type === "TOUCHABLE");
-      const props = asRecord(asRecord(asRecord(touchable?.onPress).callback).props);
-      const facetId = asString(props.v0);
-      const name = asString(props.v1);
+      const props = (0, raw_1.recordOf)((0, raw_1.recordOf)((0, raw_1.recordOf)(touchable?.onPress).callback).props);
+      const facetId = (0, raw_1.asString)(props.v0);
+      const name = (0, raw_1.asString)(props.v1);
       const list = FILTER_TYPES[props.v2];
       if (!facetId || !name || !list)
         return null;
-      const image = (0, pml_1.findNode)(item.pml, (n) => n.type === "IMAGE" && typeof asRecord(n.source).id === "string");
-      return { list, filter: { facetId, name, imageId: image ? asRecord(image.source).id : null } };
+      const image = (0, pml_1.findNode)(item.pml, (n) => n.type === "IMAGE" && typeof (0, raw_1.recordOf)(n.source).id === "string");
+      return { list, filter: { facetId, name, imageId: image ? (0, raw_1.recordOf)(image.source).id : null } };
     }
     function readSortingOptions(button, state) {
       const isSortingDeeplink = (value) => typeof value === "string" && value.includes("sorting_options_ids=");
@@ -1148,8 +1164,8 @@ var require_search = __commonJS({
         if (ids.length > 0)
           return ids.map((name, index) => ({ name, title: titles[index] || name }));
       }
-      return asArray(asRecord(asRecord(state.analyticsTemplate).data).initial_sorting_strategies).flatMap((value) => {
-        const name = asString(value);
+      return (0, raw_1.asArray)((0, raw_1.recordOf)((0, raw_1.recordOf)(state.analyticsTemplate).data).initial_sorting_strategies).flatMap((value) => {
+        const name = (0, raw_1.asString)(value);
         return name ? [{ name, title: name }] : [];
       });
     }
@@ -1583,33 +1599,32 @@ var require_profile = __commonJS({
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.extractProfile = extractProfile;
+    var raw_1 = require_raw();
     var rsc_1 = require_rsc();
-    var asRecord = (value) => typeof value === "object" && value !== null && !Array.isArray(value) ? value : null;
-    var asString = (value) => typeof value === "string" && value !== "" ? value : null;
     function extractProfile(content) {
-      const user = asRecord((0, rsc_1.findRscNode)(content.nodes, "user-info")?.props.user) ?? {};
+      const user = (0, raw_1.asRecord)((0, rsc_1.findRscNode)(content.nodes, "user-info")?.props.user) ?? {};
       const items = (0, rsc_1.findRscNode)(content.nodes, "menu-list")?.props.items;
-      const address = asRecord(user.preferredAddress);
+      const address = (0, raw_1.asRecord)(user.preferredAddress);
       return {
-        firstName: asString(user.firstName) ?? "",
-        lastName: asString(user.lastName) ?? "",
-        avatarUrl: asString(user.avatarUrl),
+        firstName: (0, raw_1.asString)(user.firstName) ?? "",
+        lastName: (0, raw_1.asString)(user.lastName) ?? "",
+        avatarUrl: (0, raw_1.asString)(user.avatarUrl),
         hasMembership: user.hasMembership === true,
         address: address ? extractAddress(address) : null,
         menu: (Array.isArray(items) ? items : []).flatMap((item) => {
-          const entry = asRecord(item);
-          const id = asString(entry?.id);
-          return id ? [{ id, deeplink: asString(entry?.deeplink) }] : [];
+          const entry = (0, raw_1.asRecord)(item);
+          const id = (0, raw_1.asString)(entry?.id);
+          return id ? [{ id, deeplink: (0, raw_1.asString)(entry?.deeplink) }] : [];
         })
       };
     }
     function extractAddress(address) {
       return {
-        street: asString(address.street) ?? "",
+        street: (0, raw_1.asString)(address.street) ?? "",
         houseNumber: typeof address.houseNumber === "number" ? address.houseNumber : null,
-        houseNumberExtension: asString(address.houseNumberExtension),
-        postcode: asString(address.postcode) ?? "",
-        city: asString(address.city) ?? ""
+        houseNumberExtension: (0, raw_1.asString)(address.houseNumberExtension),
+        postcode: (0, raw_1.asString)(address.postcode) ?? "",
+        city: (0, raw_1.asString)(address.city) ?? ""
       };
     }
   }
@@ -1702,25 +1717,24 @@ var require_promotions = __commonJS({
     exports.extractRscPromotions = extractRscPromotions;
     exports.extractPromotions = extractPromotions;
     exports.extractPromotionGroup = extractPromotionGroup;
+    var raw_1 = require_raw();
     var pml_1 = require_pml();
     var tiles_1 = require_tiles();
     var LAYOUT_CONTENT_ID_PREFIX = "campaign-page-layout-content";
     var PROMOTION_GROUP_ID = /[;,]promo_group_id=([^,&;]+)/;
     var STREAMING_DATA_COLLECTOR = "streaming-data-collector";
     var SECTION_EFFECTS = /* @__PURE__ */ new Set(["PAGE_LAYOUT", "PROMOBOX"]);
-    var asRecord = (value) => typeof value === "object" && value !== null && !Array.isArray(value) ? value : {};
-    var asString = (value) => typeof value === "string" && value !== "" ? value : null;
     function extractRscPromotions(content) {
       const effects = [];
       const visit = (nodes) => {
         for (const node of nodes) {
           if (node.component === STREAMING_DATA_COLLECTOR && Array.isArray(node.props.data)) {
-            for (const entry of node.props.data.map(asRecord)) {
+            for (const entry of node.props.data.map(raw_1.recordOf)) {
               if (entry.type !== "RESOLVED")
                 continue;
               effects.push({
                 index: typeof entry.componentIndex === "number" ? entry.componentIndex : effects.length,
-                component: asRecord(entry.component)
+                component: (0, raw_1.recordOf)(entry.component)
               });
             }
           }
@@ -1732,8 +1746,8 @@ var require_promotions = __commonJS({
       return { sections };
     }
     function readRscSection(component) {
-      const items = Array.isArray(component.items) ? component.items.map(asRecord) : [];
-      const title = asString(component.title) ?? asString(items.find((item) => item.type === "section-title")?.title) ?? "";
+      const items = Array.isArray(component.items) ? component.items.map(raw_1.recordOf) : [];
+      const title = (0, raw_1.asString)(component.title) ?? (0, raw_1.asString)(items.find((item) => item.type === "section-title")?.title) ?? "";
       const products = /* @__PURE__ */ new Map();
       const groups = /* @__PURE__ */ new Map();
       const visit = (value) => {
@@ -1756,18 +1770,18 @@ var require_promotions = __commonJS({
         Object.values(value).forEach(visit);
       };
       visit(items);
-      return { id: asString(component.id) ?? "", title, products: [...products.values()], groups: [...groups.values()] };
+      return { id: (0, raw_1.asString)(component.id) ?? "", title, products: [...products.values()], groups: [...groups.values()] };
     }
     function readRscGroup(item) {
       if (item.type !== "promo-group-list-item" && item.type !== "campaign")
         return null;
-      const id = PROMOTION_GROUP_ID.exec(asString(item.deeplink) ?? "")?.[1];
-      const name = asString(item.title)?.trim();
+      const id = PROMOTION_GROUP_ID.exec((0, raw_1.asString)(item.deeplink) ?? "")?.[1];
+      const name = (0, raw_1.asString)(item.title)?.trim();
       if (!id || !name)
         return null;
-      const accessibilityLabel = asString(item.accessibilityLabel);
-      const label = asString(asRecord(item.badge).text) ?? (accessibilityLabel?.startsWith(`${name} `) ? accessibilityLabel.slice(name.length + 1).trim() || null : null);
-      return { id, name, example: asString(item.subtitle)?.trim() || null, label };
+      const accessibilityLabel = (0, raw_1.asString)(item.accessibilityLabel);
+      const label = (0, raw_1.asString)((0, raw_1.recordOf)(item.badge).text) ?? (accessibilityLabel?.startsWith(`${name} `) ? accessibilityLabel.slice(name.length + 1).trim() || null : null);
+      return { id, name, example: (0, raw_1.asString)(item.subtitle)?.trim() || null, label };
     }
     function extractPromotions(page) {
       const layout = (0, pml_1.findNodeByIdPrefix)(page, LAYOUT_CONTENT_ID_PREFIX);
@@ -1960,6 +1974,7 @@ var require_product = __commonJS({
     exports.extractProductDetails = extractProductDetails;
     exports.extractRscProductDetails = extractRscProductDetails;
     exports.productDetailsPageId = productDetailsPageId;
+    var raw_1 = require_raw();
     var rsc_1 = require_rsc();
     var product_not_found_error_1 = require_product_not_found_error();
     var comparison_price_1 = require_comparison_price();
@@ -2161,9 +2176,6 @@ var require_product = __commonJS({
         ...Array.isArray(u.price_ranges) ? { priceRanges: u.price_ranges } : {}
       }));
     }
-    var asRecord = (value) => typeof value === "object" && value !== null && !Array.isArray(value) ? value : {};
-    var asArray = (value) => Array.isArray(value) ? value : [];
-    var asString = (value) => typeof value === "string" && value !== "" ? value : null;
     var asNumber = (value) => typeof value === "number" ? value : null;
     var RSC_COPY = {
       NL: { organic: "Biologisch", new: "Nieuw", per: "Per" },
@@ -2191,27 +2203,27 @@ var require_product = __commonJS({
           throw new product_not_found_error_1.ProductNotFoundError(productId);
         throw new Error(`The product page "${content.pageId}" has no product-details-content or product-details-fallback-content component.`);
       }
-      const vm = asRecord(viewModel);
+      const vm = (0, raw_1.recordOf)(viewModel);
       const copy = RSC_COPY[countryCode] ?? RSC_COPY.NL;
       const color = (name) => content.tokens[RSC_COLORS[name][0]] ?? RSC_COLORS[name][1];
-      const suffixes = asArray(vm.suffixes).map(asRecord);
-      const suffixTexts = (...types) => suffixes.filter((s) => types.includes(String(s.type))).flatMap((s) => asString(s.text) ?? []);
-      const quantitySuffix = suffixes.find((s) => s.type === "TEXT" && asString(s.text) !== null);
-      const unitQuantity = asString(quantitySuffix?.text) ?? "";
-      const notes = suffixes.filter((s) => s !== quantitySuffix && NOTE_SUFFIXES.includes(String(s.type))).flatMap((s) => asString(s.text) ?? []);
-      const productColor = asString(asRecord(vm.color).primary);
-      const price = asRecord(vm.price);
+      const suffixes = (0, raw_1.asArray)(vm.suffixes).map(raw_1.recordOf);
+      const suffixTexts = (...types) => suffixes.filter((s) => types.includes(String(s.type))).flatMap((s) => (0, raw_1.asString)(s.text) ?? []);
+      const quantitySuffix = suffixes.find((s) => s.type === "TEXT" && (0, raw_1.asString)(s.text) !== null);
+      const unitQuantity = (0, raw_1.asString)(quantitySuffix?.text) ?? "";
+      const notes = suffixes.filter((s) => s !== quantitySuffix && NOTE_SUFFIXES.includes(String(s.type))).flatMap((s) => (0, raw_1.asString)(s.text) ?? []);
+      const productColor = (0, raw_1.asString)((0, raw_1.recordOf)(vm.color).primary);
+      const price = (0, raw_1.recordOf)(vm.price);
       const ranges = (0, search_1.readRscPriceRanges)(price.priceRanges);
       const priceRanges = ranges.length > 1 ? ranges : null;
       const displayPrice = (0, search_1.toCents)(price.priceValue) ?? asNumber(price.basePrice) ?? ranges[0]?.price ?? 0;
       const priceColor = price.priceColor === "promo" ? color("promoPrice") : price.priceColor === "family" ? color("familyPrice") : null;
-      const accordions = asArray(vm.accordions).map(asRecord);
+      const accordions = (0, raw_1.asArray)(vm.accordions).map(raw_1.recordOf);
       const readNutrition = (section) => readRscNutritionRows(section, copy.per, color("nutritionStripe"));
-      const nutritionContent = accordions.map((a) => asRecord(a.content)).find((c) => c.type === "nutrition");
+      const nutritionContent = accordions.map((a) => (0, raw_1.recordOf)(a.content)).find((c) => c.type === "nutrition");
       return {
         id: productId,
-        name: asString(vm.headerTitle) ?? asString(vm.title) ?? "",
-        brand: asString(vm.subtitle),
+        name: (0, raw_1.asString)(vm.headerTitle) ?? (0, raw_1.asString)(vm.title) ?? "",
+        brand: (0, raw_1.asString)(vm.subtitle),
         unitQuantity,
         unitPrice: suffixTexts("UNIT_PRICE")[0] ?? null,
         quantityBadges: suffixTexts("SIZE").map((text3) => ({ text: text3, textColor: color("sizeText"), backgroundColor: productColor ?? color("text") })),
@@ -2222,39 +2234,39 @@ var require_product = __commonJS({
         priceRanges,
         comparisonPrice: (0, comparison_price_1.getComparisonPrice)(displayPrice, unitQuantity, priceRanges),
         maxCount: DEFAULT_MAX_COUNT3,
-        imageIds: [...new Set(asArray(vm.images).flatMap((image) => asString(asRecord(image).id) ?? []))],
+        imageIds: [...new Set((0, raw_1.asArray)(vm.images).flatMap((image) => (0, raw_1.asString)((0, raw_1.recordOf)(image).id) ?? []))],
         labels: readRscLabels(vm, copy, color),
-        description: asString(asRecord(vm.description).main),
-        highlightItems: asArray(vm.highlights).flatMap((value) => {
-          const highlight = asRecord(value);
-          const text3 = asString(highlight.titleMarkdown) ?? asString(highlight.title);
-          return text3 ? [{ text: text3, iconKey: asString(highlight.icon), linkTarget: asString(highlight.deeplink) }] : [];
+        description: (0, raw_1.asString)((0, raw_1.recordOf)(vm.description).main),
+        highlightItems: (0, raw_1.asArray)(vm.highlights).flatMap((value) => {
+          const highlight = (0, raw_1.recordOf)(value);
+          const text3 = (0, raw_1.asString)(highlight.titleMarkdown) ?? (0, raw_1.asString)(highlight.title);
+          return text3 ? [{ text: text3, iconKey: (0, raw_1.asString)(highlight.icon), linkTarget: (0, raw_1.asString)(highlight.deeplink) }] : [];
         }),
-        allergenGroups: readRscAllergens(asRecord(vm.allergies), color),
+        allergenGroups: readRscAllergens((0, raw_1.recordOf)(vm.allergies), color),
         infoSections: accordions.flatMap((accordion) => {
-          const title = asString(accordion.title);
-          const section = asRecord(accordion.content);
+          const title = (0, raw_1.asString)(accordion.title);
+          const section = (0, raw_1.recordOf)(accordion.content);
           const text3 = section.type === "nutrition" ? nutritionText(readNutrition(section)) : accordionText(section);
           return title && text3 ? [{ title, content: text3 }] : [];
         }),
         nutritionRows: nutritionContent ? readNutrition(nutritionContent) : [],
         promotion: readRscPromotion(vm),
-        similarProducts: asArray(vm.related).filter(isProductTile2).map(toSimilarProduct)
+        similarProducts: (0, raw_1.asArray)(vm.related).filter(isProductTile2).map(toSimilarProduct)
       };
     }
     function readRscLabels(vm, copy, color) {
       const badges = [];
       if (vm.isOrganic === true)
         badges.push({ text: copy.organic, textColor: "#4B8505", backgroundColor: "#FFFFFF" });
-      const labels = asRecord(vm.labels);
-      const shown = LABEL_POSITIONS.flatMap((position) => asArray(labels[position]).map(asRecord)).filter((label) => RSC_LABEL_ORDER[String(label.type)] !== void 0).sort((a, b) => RSC_LABEL_ORDER[String(a.type)] - RSC_LABEL_ORDER[String(b.type)]);
+      const labels = (0, raw_1.recordOf)(vm.labels);
+      const shown = LABEL_POSITIONS.flatMap((position) => (0, raw_1.asArray)(labels[position]).map(raw_1.recordOf)).filter((label) => RSC_LABEL_ORDER[String(label.type)] !== void 0).sort((a, b) => RSC_LABEL_ORDER[String(a.type)] - RSC_LABEL_ORDER[String(b.type)]);
       for (const label of shown) {
-        const text3 = asString(label.labelText);
+        const text3 = (0, raw_1.asString)(label.labelText);
         if (!text3)
           continue;
         badges.push(label.type === "PROMOBOX_PROMO" ? { text: text3, textColor: color("white"), backgroundColor: color("green") } : { text: text3, textColor: color("promoText"), backgroundColor: color("promoBackground") });
       }
-      if (asRecord(vm.price).label === "FAMILY")
+      if ((0, raw_1.recordOf)(vm.price).label === "FAMILY")
         badges.push({ text: "Family", textColor: color("white"), backgroundColor: color("green") });
       if (vm.isNew === true)
         badges.push({ text: copy.new, textColor: "#4B8505", backgroundColor: "#F3F6E9" });
@@ -2262,24 +2274,24 @@ var require_product = __commonJS({
     }
     function readRscAllergens(allergies, color) {
       return {
-        contains: asArray(allergies.contains).flatMap((value) => {
-          const allergen = asRecord(value);
-          const text3 = asString(allergen.name);
-          return text3 ? [{ text: text3, textColor: color("white"), backgroundColor: asString(allergen.color) ?? color("text") }] : [];
+        contains: (0, raw_1.asArray)(allergies.contains).flatMap((value) => {
+          const allergen = (0, raw_1.recordOf)(value);
+          const text3 = (0, raw_1.asString)(allergen.name);
+          return text3 ? [{ text: text3, textColor: color("white"), backgroundColor: (0, raw_1.asString)(allergen.color) ?? color("text") }] : [];
         }),
-        mayContain: asArray(allergies.mayContain).flatMap((value) => {
-          const text3 = asString(value);
+        mayContain: (0, raw_1.asArray)(allergies.mayContain).flatMap((value) => {
+          const text3 = (0, raw_1.asString)(value);
           return text3 ? [{ text: text3, textColor: color("text"), backgroundColor: "transparent" }] : [];
         })
       };
     }
     function readRscNutritionRows(content, per, stripe) {
-      const unit = asString(content.unit);
+      const unit = (0, raw_1.asString)(content.unit);
       const heading = unit ? [{ label: `${per} ${unit.replace(new RegExp(`^${per}\\s+`, "i"), "")}`, value: null, isCategory: true, backgroundColor: null }] : [];
-      const rows = asArray(content.rows).flatMap((value, index) => {
-        const row = asRecord(value);
-        const label = asString(row.label);
-        return label ? [{ label, value: asString(row.value), isCategory: row.isSubValue !== true, backgroundColor: index % 2 === 0 ? stripe : null }] : [];
+      const rows = (0, raw_1.asArray)(content.rows).flatMap((value, index) => {
+        const row = (0, raw_1.recordOf)(value);
+        const label = (0, raw_1.asString)(row.label);
+        return label ? [{ label, value: (0, raw_1.asString)(row.value), isCategory: row.isSubValue !== true, backgroundColor: index % 2 === 0 ? stripe : null }] : [];
       });
       return (0, nutrition_1.readNutritionRows)([...heading, ...rows]);
     }
@@ -2287,7 +2299,7 @@ var require_product = __commonJS({
       if (typeof content.text === "string")
         return content.text;
       if (Array.isArray(content.text))
-        return content.text.flatMap((text3) => asString(text3) ?? []).join("\n");
+        return content.text.flatMap((text3) => (0, raw_1.asString)(text3) ?? []).join("\n");
       return collectTexts(content).join("\n");
     }
     function collectTexts(value) {
@@ -2303,13 +2315,13 @@ var require_product = __commonJS({
       return rows.flatMap((row) => row.value === null ? [row.label] : [row.label, row.value]).join("\n");
     }
     function readRscPromotion(vm) {
-      for (const slot2 of Object.values(asRecord(asRecord(vm.sellableInteraction).slots))) {
-        for (const action of asArray(asRecord(slot2).actions)) {
-          for (const value of asArray(asRecord(asRecord(action).payload).enrichments)) {
-            const enrichment = asRecord(value);
-            const payload = asRecord(enrichment.payload);
-            const id = asString(payload.promotion_id);
-            const label = asString(payload.promotion_label);
+      for (const slot2 of Object.values((0, raw_1.recordOf)((0, raw_1.recordOf)(vm.sellableInteraction).slots))) {
+        for (const action of (0, raw_1.asArray)((0, raw_1.recordOf)(slot2).actions)) {
+          for (const value of (0, raw_1.asArray)((0, raw_1.recordOf)((0, raw_1.recordOf)(action).payload).enrichments)) {
+            const enrichment = (0, raw_1.recordOf)(value);
+            const payload = (0, raw_1.recordOf)(enrichment.payload);
+            const id = (0, raw_1.asString)(payload.promotion_id);
+            const label = (0, raw_1.asString)(payload.promotion_label);
             if (enrichment.type === "PROMOTION" && id && label)
               return { id, label };
           }
@@ -2318,7 +2330,7 @@ var require_product = __commonJS({
       return null;
     }
     function isProductTile2(value) {
-      const tile = asRecord(value);
+      const tile = (0, raw_1.recordOf)(value);
       return typeof tile.id === "string" && typeof tile.name === "string" && typeof tile.displayPrice === "number";
     }
     function toSimilarProduct(tile) {
@@ -2348,11 +2360,9 @@ var require_categories = __commonJS({
     exports.extractCategoryTree = extractCategoryTree;
     exports.extractSubcategories = extractSubcategories;
     exports.extractCategoryProducts = extractCategoryProducts;
+    var raw_1 = require_raw();
     var rsc_1 = require_rsc();
     var search_1 = require_search();
-    var asRecord = (value) => typeof value === "object" && value !== null && !Array.isArray(value) ? value : null;
-    var asArray = (value) => Array.isArray(value) ? value : [];
-    var asString = (value) => typeof value === "string" && value !== "" ? value : null;
     var TARGET_TYPES = {
       "subcategory-page": "subcategories",
       "category-product-overview": "products",
@@ -2365,25 +2375,25 @@ var require_categories = __commonJS({
       return type && categoryId ? { type, categoryId: decodeURIComponent(categoryId) } : { type: "page" };
     }
     function readLink(item) {
-      const entry = asRecord(item);
-      const name = asString(entry?.title);
-      const deeplink = asString(entry?.deeplink);
+      const entry = (0, raw_1.asRecord)(item);
+      const name = (0, raw_1.asString)(entry?.title);
+      const deeplink = (0, raw_1.asString)(entry?.deeplink);
       if (!entry || !name || !deeplink)
         return null;
       return {
         name,
-        imageId: asString(entry.image),
-        label: asString(asRecord(entry.label)?.title),
+        imageId: (0, raw_1.asString)(entry.image),
+        label: (0, raw_1.asString)((0, raw_1.asRecord)(entry.label)?.title),
         deeplink,
         target: readTarget(deeplink)
       };
     }
     function extractCategoryTree(content) {
       const sections = [{ title: null, links: [] }];
-      for (const item of asArray((0, rsc_1.findRscNode)(content.nodes, "vertical-list")?.props.items)) {
-        const entry = asRecord(item);
+      for (const item of (0, raw_1.asArray)((0, rsc_1.findRscNode)(content.nodes, "vertical-list")?.props.items)) {
+        const entry = (0, raw_1.asRecord)(item);
         if (entry?.type === "section-title") {
-          sections.push({ title: asString(entry.title), links: [] });
+          sections.push({ title: (0, raw_1.asString)(entry.title), links: [] });
           continue;
         }
         const link = readLink(item);
@@ -2396,30 +2406,30 @@ var require_categories = __commonJS({
       const list = (0, rsc_1.findRscNode)(content.nodes, "category-list");
       return {
         categoryId,
-        title: asString(list?.props.title) ?? "",
-        links: asArray(list?.props.items).flatMap((item) => readLink(item) ?? [])
+        title: (0, raw_1.asString)(list?.props.title) ?? "",
+        links: (0, raw_1.asArray)(list?.props.items).flatMap((item) => readLink(item) ?? [])
       };
     }
-    var isProductTile2 = (item) => typeof asRecord(item)?.id === "string" && typeof asRecord(item)?.name === "string" && typeof asRecord(item)?.displayPrice === "number";
+    var isProductTile2 = (item) => typeof (0, raw_1.asRecord)(item)?.id === "string" && typeof (0, raw_1.asRecord)(item)?.name === "string" && typeof (0, raw_1.asRecord)(item)?.displayPrice === "number";
     function extractCategoryProducts(categoryId, content) {
       const items = (0, rsc_1.findRscNode)(content.nodes, "items")?.props;
       const filterBar = (0, rsc_1.findRscNode)(content.nodes, "filter-bar")?.props;
       const productIdsByFacetId = {};
-      for (const [facetId, ids] of Object.entries(asRecord((0, rsc_1.findRscNode)(content.nodes, "context")?.props.entityIdsByFacetId) ?? {})) {
-        productIdsByFacetId[facetId] = asArray(ids).filter((id) => typeof id === "string");
+      for (const [facetId, ids] of Object.entries((0, raw_1.asRecord)((0, rsc_1.findRscNode)(content.nodes, "context")?.props.entityIdsByFacetId) ?? {})) {
+        productIdsByFacetId[facetId] = (0, raw_1.asArray)(ids).filter((id) => typeof id === "string");
       }
-      const sections = asArray(items?.sections).map((value) => {
-        const section = asRecord(value) ?? {};
+      const sections = (0, raw_1.asArray)(items?.sections).map((value) => {
+        const section = (0, raw_1.asRecord)(value) ?? {};
         return {
-          id: asString(section.id) ?? "",
-          type: asString(section.type) ?? "",
-          title: section.shouldShowHeader ? asString(section.headerName) : null,
-          products: asArray(section.items).filter(isProductTile2)
+          id: (0, raw_1.asString)(section.id) ?? "",
+          type: (0, raw_1.asString)(section.type) ?? "",
+          title: section.shouldShowHeader ? (0, raw_1.asString)(section.headerName) : null,
+          products: (0, raw_1.asArray)(section.items).filter(isProductTile2)
         };
       });
       return {
         categoryId,
-        title: asString((0, rsc_1.findRscNode)(content.nodes, "page-header")?.props.title) ?? "",
+        title: (0, raw_1.asString)((0, rsc_1.findRscNode)(content.nodes, "page-header")?.props.title) ?? "",
         results: {
           sections,
           visualFilters: (0, search_1.extractFilters)(filterBar?.visualFilters),
@@ -2440,14 +2450,14 @@ var require_product_page = __commonJS({
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.extractProductPage = extractProductPage;
+    var raw_1 = require_raw();
     var pml_1 = require_pml();
     var tiles_1 = require_tiles();
     var SECTION_ID_PREFIX = "core-horizontal-selling-unit-section-localized";
     var SECTION_HEADER_ID_PREFIX = "horizontal-selling-unit-tiles-sub-header-pml";
-    var asRecord = (value) => typeof value === "object" && value !== null && !Array.isArray(value) ? value : {};
     function extractProductPage(page) {
-      const layout = asRecord(asRecord(page).layout);
-      const header = asRecord(layout.header ?? asRecord(page).header);
+      const layout = (0, raw_1.recordOf)((0, raw_1.recordOf)(page).layout);
+      const header = (0, raw_1.recordOf)(layout.header ?? (0, raw_1.recordOf)(page).header);
       const title = typeof header.title === "string" && header.title !== "" ? header.title : null;
       const rows = [];
       (0, pml_1.walkNodes)(page, (node) => {
@@ -2743,6 +2753,8 @@ var require_footer = __commonJS({
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.extractCartFooter = extractCartFooter;
+    var pml_1 = require_pml();
+    var raw_1 = require_raw();
     var LOYALTY_ID = "loyalty-point-nudge-content";
     var RECOMMENDATIONS_HEADER_ID = "horizontal-selling-unit-tiles-sub-header";
     var RECOMMENDATIONS_TILES_ID = "horizontal-selling-unit-tiles";
@@ -2755,16 +2767,16 @@ var require_footer = __commonJS({
       };
     }
     function extractLoyaltyPoints(rawPage) {
-      const [label, value] = collectTexts(findNodeById2(rawPage, LOYALTY_ID));
+      const [label, value] = collectTexts((0, pml_1.findNodeById)(rawPage, LOYALTY_ID));
       return label && value ? { label, value } : null;
     }
     function extractRecommendations(rawPage) {
-      const header = findNodeById2(rawPage, RECOMMENDATIONS_HEADER_ID);
-      const tilesNode = findNodeById2(rawPage, RECOMMENDATIONS_TILES_ID);
+      const header = (0, pml_1.findNodeById)(rawPage, RECOMMENDATIONS_HEADER_ID);
+      const tilesNode = (0, pml_1.findNodeById)(rawPage, RECOMMENDATIONS_TILES_ID);
       if (!tilesNode)
         return null;
       const tiles = [];
-      for (const child of asArray(tilesNode.children)) {
+      for (const child of (0, raw_1.asArray)(tilesNode.children)) {
         const tile = extractTile(child);
         if (tile)
           tiles.push(tile);
@@ -2775,89 +2787,33 @@ var require_footer = __commonJS({
       return { title, pageId: RECOMMENDATIONS_PAGE_ID, tiles };
     }
     function extractTile(node) {
-      if (!isPmlNode(node) || typeof node.id !== "string" || !node.id.startsWith(TILE_ID_PREFIX)) {
+      if (!(0, raw_1.isRecord)(node) || typeof node.id !== "string" || !node.id.startsWith(TILE_ID_PREFIX)) {
         return null;
       }
-      const image = findFirst(node, (candidate) => candidate.type === "IMAGE");
-      const imageId = isPmlNode(image?.source) ? image.source.id : void 0;
+      const image = (0, pml_1.findNode)(node, (candidate) => candidate.type === "IMAGE");
+      const imageId = (0, raw_1.isRecord)(image?.source) ? image.source.id : void 0;
       if (typeof imageId !== "string" || imageId === "")
         return null;
-      const container = findFirst(node, (candidate) => typeof candidate.backgroundColor === "string");
+      const container = (0, pml_1.findNode)(node, (candidate) => typeof candidate.backgroundColor === "string");
       const backgroundColor = container?.backgroundColor;
       return {
         productId: node.id.slice(TILE_ID_PREFIX.length),
         imageId,
         backgroundColor: typeof backgroundColor === "string" ? backgroundColor : null,
-        hasPromo: findFirst(node, (candidate) => candidate.type === "ICON" && candidate.iconKey === "percentage") !== null
+        hasPromo: (0, pml_1.findNode)(node, (candidate) => candidate.type === "ICON" && candidate.iconKey === "percentage") !== null
       };
     }
-    function findNodeById2(node, id) {
-      if (Array.isArray(node)) {
-        for (const item of node) {
-          const found = findNodeById2(item, id);
-          if (found)
-            return found;
-        }
-        return null;
-      }
-      if (!isPmlNode(node))
-        return null;
-      if (node.id === id)
-        return node;
-      for (const value of Object.values(node)) {
-        const found = findNodeById2(value, id);
-        if (found)
-          return found;
-      }
-      return null;
-    }
-    function findFirst(node, predicate) {
-      if (Array.isArray(node)) {
-        for (const item of node) {
-          const found = findFirst(item, predicate);
-          if (found)
-            return found;
-        }
-        return null;
-      }
-      if (!isPmlNode(node))
-        return null;
-      if (predicate(node))
-        return node;
-      for (const value of Object.values(node)) {
-        const found = findFirst(value, predicate);
-        if (found)
-          return found;
-      }
-      return null;
-    }
-    function collectTexts(node, out = []) {
-      if (Array.isArray(node)) {
-        for (const item of node)
-          collectTexts(item, out);
-        return out;
-      }
-      if (!isPmlNode(node))
-        return out;
-      if (node.type === "RICH_TEXT" && typeof node.markdown === "string") {
-        const text3 = cleanMarkdown2(node.markdown);
-        const color = isPmlNode(node.textAttributes) ? node.textAttributes.color : void 0;
+    function collectTexts(node) {
+      const texts = [];
+      (0, pml_1.walkNodes)(node, (n) => {
+        if (n.type !== "RICH_TEXT" || typeof n.markdown !== "string")
+          return;
+        const text3 = (0, pml_1.cleanMarkdown)(n.markdown);
+        const color = (0, raw_1.isRecord)(n.textAttributes) ? n.textAttributes.color : void 0;
         if (text3)
-          out.push({ text: text3, color: typeof color === "string" ? color : null });
-        return out;
-      }
-      for (const value of Object.values(node))
-        collectTexts(value, out);
-      return out;
-    }
-    function cleanMarkdown2(markdown) {
-      return markdown.replace(/#\([^)]+\)/g, "").trim().replace(/\*\*/g, "").replace(/__/g, "").trim();
-    }
-    function isPmlNode(value) {
-      return typeof value === "object" && value !== null && !Array.isArray(value);
-    }
-    function asArray(value) {
-      return Array.isArray(value) ? value : [];
+          texts.push({ text: text3, color: typeof color === "string" ? color : null });
+      });
+      return texts;
     }
   }
 });
@@ -2871,11 +2827,9 @@ var require_cart = __commonJS({
     exports.readDeposits = readDeposits;
     exports.readFees = readFees;
     exports.extractCart = extractCart;
+    var raw_1 = require_raw();
     var delivery_slots_1 = require_delivery_slots();
     var comparison_price_1 = require_comparison_price();
-    var asRecord = (value) => typeof value === "object" && value !== null && !Array.isArray(value) ? value : null;
-    var asRecords = (value) => Array.isArray(value) ? value.flatMap((v) => asRecord(v) ? [asRecord(v)] : []) : [];
-    var asString = (value) => typeof value === "string" && value !== "" ? value : null;
     var asNumber = (value, fallback = 0) => typeof value === "number" ? value : fallback;
     function mergeDecorators(decorators, overrides) {
       const result = [...decorators];
@@ -2889,36 +2843,36 @@ var require_cart = __commonJS({
       return result;
     }
     function readReplacement(raw) {
-      const id = asString(raw.id);
+      const id = (0, raw_1.asString)(raw.id);
       if (!id)
         return null;
       const imageIds = Array.isArray(raw.image_ids) ? raw.image_ids : [];
       return {
         id,
-        name: asString(raw.name) ?? "",
-        imageId: asString(raw.image_id) ?? asString(imageIds[0]),
+        name: (0, raw_1.asString)(raw.name) ?? "",
+        imageId: (0, raw_1.asString)(raw.image_id) ?? (0, raw_1.asString)(imageIds[0]),
         displayPrice: asNumber(raw.display_price),
-        unitQuantity: asString(raw.unit_quantity) ?? "",
+        unitQuantity: (0, raw_1.asString)(raw.unit_quantity) ?? "",
         maxCount: asNumber(raw.max_count, 99)
       };
     }
     function readLabels(decorators) {
       return decorators.flatMap((d) => {
-        const text3 = asString(d.text);
+        const text3 = (0, raw_1.asString)(d.text);
         if (d.type !== "PROMO" && d.type !== "LABEL" || !text3)
           return [];
-        return [{ text: text3, textColor: asString(d.text_color), backgroundColor: asString(d.background_color) }];
+        return [{ text: text3, textColor: (0, raw_1.asString)(d.text_color), backgroundColor: (0, raw_1.asString)(d.background_color) }];
       });
     }
     function readCartLine(line, overrides = {}) {
       const raw = line;
-      const id = asString(raw.id);
+      const id = (0, raw_1.asString)(raw.id);
       if (!id)
         return null;
-      const article = asRecords(raw.items)[0];
-      const articleId = asString(article?.id);
-      const lineDecorators = mergeDecorators(asRecords(raw.decorators), asRecords(overrides[id]));
-      const articleDecorators = article ? mergeDecorators(asRecords(article.decorators), asRecords(articleId ? overrides[articleId] : [])) : [];
+      const article = (0, raw_1.asRecords)(raw.items)[0];
+      const articleId = (0, raw_1.asString)(article?.id);
+      const lineDecorators = mergeDecorators((0, raw_1.asRecords)(raw.decorators), (0, raw_1.asRecords)(overrides[id]));
+      const articleDecorators = article ? mergeDecorators((0, raw_1.asRecords)(article.decorators), (0, raw_1.asRecords)(articleId ? overrides[articleId] : [])) : [];
       const decorators = mergeDecorators(articleDecorators, lineDecorators);
       const find = (type) => decorators.find((d) => d.type === type);
       const price = asNumber(raw.price);
@@ -2926,50 +2880,50 @@ var require_cart = __commonJS({
       const unavailable = find("UNAVAILABLE");
       const imageIds = Array.isArray(article?.image_ids) ? article.image_ids : [];
       const priceRanges = Array.isArray(article?.price_ranges) && article.price_ranges.length > 1 ? article.price_ranges : null;
-      const unitQuantity = asString(find("UNIT_QUANTITY")?.unit_quantity_text) ?? asString(article?.unit_quantity) ?? "";
+      const unitQuantity = (0, raw_1.asString)(find("UNIT_QUANTITY")?.unit_quantity_text) ?? (0, raw_1.asString)(article?.unit_quantity) ?? "";
       const quantity = asNumber(find("QUANTITY")?.quantity, 1);
       return {
         id,
         productId: articleId ?? "",
-        name: asString(article?.name) ?? asString(raw.name) ?? "",
+        name: (0, raw_1.asString)(article?.name) ?? (0, raw_1.asString)(raw.name) ?? "",
         unitQuantity,
-        imageId: asString(imageIds[0]),
+        imageId: (0, raw_1.asString)(imageIds[0]),
         quantity,
         maxCount: asNumber(article?.max_count, 99),
         displayPrice,
         originalPrice: price > displayPrice ? price : null,
-        priceColor: asString(find("PRICE_STYLE")?.price_color),
+        priceColor: (0, raw_1.asString)(find("PRICE_STYLE")?.price_color),
         priceRanges,
         labels: readLabels(decorators),
-        basePrice: asString(find("BASE_PRICE")?.base_price_text),
+        basePrice: (0, raw_1.asString)(find("BASE_PRICE")?.base_price_text),
         // The line price is for all packages in the line.
         comparisonPrice: quantity > 0 ? (0, comparison_price_1.getComparisonPrice)(Math.round(displayPrice / quantity), unitQuantity, priceRanges) : null,
-        freshness: asString(find("FRESH_LABEL")?.period),
-        characteristics: asRecords(find("PRODUCT_CHARACTERISTICS")?.characteristics).flatMap((c) => asString(c.type) ?? []),
+        freshness: (0, raw_1.asString)(find("FRESH_LABEL")?.period),
+        characteristics: (0, raw_1.asRecords)(find("PRODUCT_CHARACTERISTICS")?.characteristics).flatMap((c) => (0, raw_1.asString)(c.type) ?? []),
         isUnavailable: unavailable !== void 0,
-        unavailableReason: asString(asRecord(unavailable?.explanation)?.short_explanation),
-        replacements: asRecords(unavailable?.replacements).flatMap((r) => readReplacement(r) ?? []),
-        bundlesLink: asString(find("BUNDLES_BUTTON")?.deeplink),
-        recipeId: asString(lineDecorators.find((d) => d.type === "BASKET_GROUP")?.id)
+        unavailableReason: (0, raw_1.asString)((0, raw_1.asRecord)(unavailable?.explanation)?.short_explanation),
+        replacements: (0, raw_1.asRecords)(unavailable?.replacements).flatMap((r) => readReplacement(r) ?? []),
+        bundlesLink: (0, raw_1.asString)(find("BUNDLES_BUTTON")?.deeplink),
+        recipeId: (0, raw_1.asString)(lineDecorators.find((d) => d.type === "BASKET_GROUP")?.id)
       };
     }
     function readRecipes(sections) {
-      return asRecords(sections).flatMap((section) => asRecords(section.groups).flatMap((group) => {
-        const id = asString(group.id);
+      return (0, raw_1.asRecords)(sections).flatMap((section) => (0, raw_1.asRecords)(section.groups).flatMap((group) => {
+        const id = (0, raw_1.asString)(group.id);
         if (!id)
           return [];
-        return [{ id, title: asString(group.title) ?? "", preTitle: asString(group.pre_title), subtitle: asString(group.subtitle), imageId: asString(group.image_id) }];
+        return [{ id, title: (0, raw_1.asString)(group.title) ?? "", preTitle: (0, raw_1.asString)(group.pre_title), subtitle: (0, raw_1.asString)(group.subtitle), imageId: (0, raw_1.asString)(group.image_id) }];
       }));
     }
     function readDeposits(raw) {
-      return asRecords(raw).map((entry) => {
+      return (0, raw_1.asRecords)(raw).map((entry) => {
         const value = asNumber(entry.value);
         const count2 = asNumber(entry.count);
-        return { type: asString(entry.type) ?? "", value, count: count2, total: value * count2 };
+        return { type: (0, raw_1.asString)(entry.type) ?? "", value, count: count2, total: value * count2 };
       });
     }
     function readFees(raw) {
-      return asRecords(raw).map((fee) => ({ type: asString(fee.type) ?? "", name: asString(fee.name) ?? "", amount: asNumber(fee.amount) })).filter((fee) => fee.amount !== 0);
+      return (0, raw_1.asRecords)(raw).map((fee) => ({ type: (0, raw_1.asString)(fee.type) ?? "", name: (0, raw_1.asString)(fee.name) ?? "", amount: asNumber(fee.amount) })).filter((fee) => fee.amount !== 0);
     }
     function extractCart(cart2) {
       const overrides = cart2.decorator_overrides ?? {};
@@ -3205,26 +3159,25 @@ var require_summaries = __commonJS({
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.extractDeliverySummaries = extractDeliverySummaries;
-    var isRawObject = (val) => typeof val === "object" && val !== null && !Array.isArray(val);
+    var raw_1 = require_raw();
     var asText = (val) => typeof val === "string" ? val : "";
     var asAmount = (val) => typeof val === "number" && Number.isFinite(val) ? val : 0;
-    var asObject = (val) => isRawObject(val) ? val : null;
     function extractDeliveryWindow(raw) {
-      const slot2 = asObject(raw["slot"]);
-      const deliveryTime = asObject(raw["delivery_time"]);
-      const eta2 = asObject(raw["eta2"]);
+      const slot2 = (0, raw_1.asRecord)(raw["slot"]);
+      const deliveryTime = (0, raw_1.asRecord)(raw["delivery_time"]);
+      const eta2 = (0, raw_1.asRecord)(raw["eta2"]);
       const windowStart = asText(slot2?.["window_start"]) || asText(deliveryTime?.["start"]) || asText(eta2?.["start"]) || null;
       const windowEnd = asText(slot2?.["window_end"]) || asText(deliveryTime?.["end"]) || asText(eta2?.["end"]) || null;
       return { windowStart, windowEnd };
     }
     function extractDeliverySummary(raw) {
-      if (!isRawObject(raw))
+      if (!(0, raw_1.isRecord)(raw))
         return null;
       const id = asText(raw["delivery_id"]) || asText(raw["id"]);
       if (!id)
         return null;
       const { windowStart, windowEnd } = extractDeliveryWindow(raw);
-      const orders = (Array.isArray(raw["orders"]) ? raw["orders"] : []).filter(isRawObject);
+      const orders = (0, raw_1.asRecords)(raw["orders"]);
       let totalPrice = 0;
       let itemCount = asAmount(raw["total_count"]) || asAmount(raw["sellable_item_count"]);
       for (const order of orders) {
@@ -3260,38 +3213,36 @@ var require_delivery = __commonJS({
     exports.extractDeliveryPosition = extractDeliveryPosition;
     exports.extractDeliveryRoute = extractDeliveryRoute;
     exports.combineDeliveryTracking = combineDeliveryTracking;
+    var raw_1 = require_raw();
     var cart_1 = require_cart();
-    var asRecord = (value) => typeof value === "object" && value !== null && !Array.isArray(value) ? value : null;
-    var asRecords = (value) => Array.isArray(value) ? value.flatMap((v) => asRecord(v) ? [asRecord(v)] : []) : [];
-    var asString = (value) => typeof value === "string" && value !== "" ? value : null;
     var asNumber = (value, fallback = 0) => typeof value === "number" && Number.isFinite(value) ? value : fallback;
     function readReturnedContainers(raw) {
-      return asRecords(raw).map((entry) => ({
-        type: asString(entry.type) ?? "",
-        name: asString(entry.localized_name) ?? asString(entry.type) ?? "",
+      return (0, raw_1.asRecords)(raw).map((entry) => ({
+        type: (0, raw_1.asString)(entry.type) ?? "",
+        name: (0, raw_1.asString)(entry.localized_name) ?? (0, raw_1.asString)(entry.type) ?? "",
         quantity: asNumber(entry.quantity),
         price: asNumber(entry.price)
       }));
     }
     function readPayment(raw) {
-      const info = asRecord(raw);
-      const paymentType = asString(info?.payment_type);
-      const redactedIban = asString(info?.redacted_iban);
+      const info = (0, raw_1.asRecord)(raw);
+      const paymentType = (0, raw_1.asString)(info?.payment_type);
+      const redactedIban = (0, raw_1.asString)(info?.redacted_iban);
       if (!paymentType && !redactedIban)
         return null;
-      return { paymentType, redactedIban, bankId: asString(info?.bank_id) };
+      return { paymentType, redactedIban, bankId: (0, raw_1.asString)(info?.bank_id) };
     }
     function readOrder(order) {
       const raw = order;
-      const id = asString(raw.id);
+      const id = (0, raw_1.asString)(raw.id);
       if (!id)
         return null;
       const deposits = (0, cart_1.readDeposits)(raw.deposit_breakdown);
       const depositTotal = deposits.reduce((sum, deposit) => sum + deposit.total, 0);
       return {
         id,
-        status: asString(raw.status) ?? "COMPLETED",
-        creationTime: asString(raw.creation_time) ?? "",
+        status: (0, raw_1.asString)(raw.status) ?? "COMPLETED",
+        creationTime: (0, raw_1.asString)(raw.creation_time) ?? "",
         items: (order.items ?? []).flatMap((line) => (0, cart_1.readCartLine)(line, order.decorator_overrides ?? {}) ?? []),
         totalPrice: asNumber(raw.total_price),
         checkoutTotalPrice: asNumber(raw.checkout_total_price),
@@ -3306,18 +3257,18 @@ var require_delivery = __commonJS({
     }
     function extractDelivery(delivery) {
       const raw = delivery;
-      const slot2 = asRecord(raw.slot);
-      const deliveryTime = asRecord(raw.delivery_time);
-      const eta2 = asRecord(raw.eta2);
+      const slot2 = (0, raw_1.asRecord)(raw.slot);
+      const deliveryTime = (0, raw_1.asRecord)(raw.delivery_time);
+      const eta2 = (0, raw_1.asRecord)(raw.eta2);
       const orders = (delivery.orders ?? []).flatMap((order) => readOrder(order) ?? []);
       const items = orders.flatMap((order) => order.items);
       const deposits = orders.flatMap((order) => order.deposits);
       return {
-        id: asString(raw.delivery_id) ?? asString(raw.id) ?? "",
-        status: asString(raw.status) ?? "COMPLETED",
-        creationTime: asString(raw.creation_time) ?? "",
-        windowStart: asString(slot2?.window_start) ?? asString(deliveryTime?.start) ?? asString(eta2?.start),
-        windowEnd: asString(slot2?.window_end) ?? asString(deliveryTime?.end) ?? asString(eta2?.end),
+        id: (0, raw_1.asString)(raw.delivery_id) ?? (0, raw_1.asString)(raw.id) ?? "",
+        status: (0, raw_1.asString)(raw.status) ?? "COMPLETED",
+        creationTime: (0, raw_1.asString)(raw.creation_time) ?? "",
+        windowStart: (0, raw_1.asString)(slot2?.window_start) ?? (0, raw_1.asString)(deliveryTime?.start) ?? (0, raw_1.asString)(eta2?.start),
+        windowEnd: (0, raw_1.asString)(slot2?.window_end) ?? (0, raw_1.asString)(deliveryTime?.end) ?? (0, raw_1.asString)(eta2?.end),
         orders,
         returnedContainers: readReturnedContainers(raw.returned_containers),
         totalPrice: orders.reduce((sum, order) => sum + order.checkoutTotalPrice, 0),
@@ -3346,36 +3297,36 @@ var require_delivery = __commonJS({
       return best;
     }
     function extractDeliveryPosition(raw) {
-      const pos = asRecord(raw) ?? {};
-      const etaWindow = asRecord(pos.eta_window);
+      const pos = (0, raw_1.asRecord)(raw) ?? {};
+      const etaWindow = (0, raw_1.asRecord)(pos.eta_window);
       return {
         routeVersion: asNumber(pos.version),
         inProgress: pos.scenario_in_progress === true,
         queryInterval: asNumber(pos.query_interval, 15e3),
         eta: asNumber(pos.eta) || null,
-        etaWindowStart: asString(etaWindow?.start),
-        etaWindowEnd: asString(etaWindow?.end),
+        etaWindowStart: (0, raw_1.asString)(etaWindow?.start),
+        etaWindowEnd: (0, raw_1.asString)(etaWindow?.end),
         routeTime: asNumber(pos.scenario_ts)
       };
     }
     function extractDeliveryRoute(raw) {
-      const scenario = asRecord(raw) ?? {};
-      const points = asRecords(scenario.scenario).flatMap((point) => readRoutePoint(point) ?? []);
-      const driver = asRecord(scenario.driver);
-      const vehicle = asRecord(scenario.vehicle);
-      const destination = asRecord(scenario.destination);
+      const scenario = (0, raw_1.asRecord)(raw) ?? {};
+      const points = (0, raw_1.asRecords)(scenario.scenario).flatMap((point) => readRoutePoint(point) ?? []);
+      const driver = (0, raw_1.asRecord)(scenario.driver);
+      const vehicle = (0, raw_1.asRecord)(scenario.vehicle);
+      const destination = (0, raw_1.asRecord)(scenario.destination);
       const end = points[points.length - 1];
       const lat = asNumber(destination?.lat) || (end?.lat ?? 0);
       const lng = asNumber(destination?.lng) || (end?.lng ?? 0);
-      const image = asString(vehicle?.image);
+      const image = (0, raw_1.asString)(vehicle?.image);
       return {
         version: asNumber(scenario.version),
         points,
-        driverName: asString(driver?.name),
-        driverPhotoUrl: asString(driver?.photo_url),
-        vehicleName: asString(vehicle?.name),
+        driverName: (0, raw_1.asString)(driver?.name),
+        driverPhotoUrl: (0, raw_1.asString)(driver?.photo_url),
+        vehicleName: (0, raw_1.asString)(vehicle?.name),
         vehicleImageDataUrl: image ? image.startsWith("data:") ? image : `data:image/png;base64,${image}` : null,
-        destination: lat !== 0 || lng !== 0 ? { lat, lng, street: asString(destination?.street), city: asString(destination?.city), postcode: asString(destination?.postcode) } : null
+        destination: lat !== 0 || lng !== 0 ? { lat, lng, street: (0, raw_1.asString)(destination?.street), city: (0, raw_1.asString)(destination?.city), postcode: (0, raw_1.asString)(destination?.postcode) } : null
       };
     }
     function combineDeliveryTracking(position, route) {
@@ -3483,18 +3434,16 @@ var require_wallet_transaction = __commonJS({
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.extractWalletTransaction = extractWalletTransaction;
+    var raw_1 = require_raw();
     var cart_1 = require_cart();
     var delivery_1 = require_delivery();
-    var asRecord = (value) => typeof value === "object" && value !== null && !Array.isArray(value) ? value : null;
-    var asRecords = (value) => Array.isArray(value) ? value.flatMap((v) => asRecord(v) ? [asRecord(v)] : []) : [];
-    var asString = (value) => typeof value === "string" && value !== "" ? value : null;
     var asNumber = (value, fallback = 0) => typeof value === "number" && Number.isFinite(value) ? value : fallback;
-    var firstImage = (raw) => asString(Array.isArray(raw?.image_ids) ? raw.image_ids[0] : null);
+    var firstImage = (raw) => (0, raw_1.asString)(Array.isArray(raw?.image_ids) ? raw.image_ids[0] : null);
     function articlesById(lines) {
       const articles = /* @__PURE__ */ new Map();
       for (const line of lines) {
-        for (const article of asRecords(line.items)) {
-          const id = asString(article.id);
+        for (const article of (0, raw_1.asRecords)(line.items)) {
+          const id = (0, raw_1.asString)(article.id);
           if (id)
             articles.set(id, article);
         }
@@ -3502,43 +3451,43 @@ var require_wallet_transaction = __commonJS({
       return articles;
     }
     function readSubstitution(refund, articles) {
-      const replacements = asRecords(refund.substitutions).map((sub) => ({
-        name: asString(sub.name) ?? "",
+      const replacements = (0, raw_1.asRecords)(refund.substitutions).map((sub) => ({
+        name: (0, raw_1.asString)(sub.name) ?? "",
         imageId: firstImage(sub),
         quantity: asNumber(sub.quantity, 1)
       }));
       if (replacements.length === 0)
         return null;
-      const article = articles.get(asString(refund.article_id) ?? "") ?? null;
+      const article = articles.get((0, raw_1.asString)(refund.article_id) ?? "") ?? null;
       return {
-        original: { name: asString(article?.name) ?? "", imageId: firstImage(article), quantity: asNumber(refund.quantity, 1) },
+        original: { name: (0, raw_1.asString)(article?.name) ?? "", imageId: firstImage(article), quantity: asNumber(refund.quantity, 1) },
         refundAmount: asNumber(refund.amount),
         replacements
       };
     }
     function extractWalletTransaction(transactionId, transaction) {
-      const raw = asRecord(transaction) ?? {};
-      const lines = asRecords(raw.shop_items);
+      const raw = (0, raw_1.asRecord)(transaction) ?? {};
+      const lines = (0, raw_1.asRecords)(raw.shop_items);
       const articles = articlesById(lines);
-      const refunds = asRecords(raw.article_issue_refunds);
-      const substitutedIds = new Set(refunds.filter((refund) => asRecords(refund.substitutions).length > 0).map((refund) => asString(refund.article_id)));
-      const items = lines.filter((line) => !asRecords(line.items).some((article) => substitutedIds.has(asString(article.id)))).flatMap((line) => (0, cart_1.readCartLine)(line) ?? []);
+      const refunds = (0, raw_1.asRecords)(raw.article_issue_refunds);
+      const substitutedIds = new Set(refunds.filter((refund) => (0, raw_1.asRecords)(refund.substitutions).length > 0).map((refund) => (0, raw_1.asString)(refund.article_id)));
+      const items = lines.filter((line) => !(0, raw_1.asRecords)(line.items).some((article) => substitutedIds.has((0, raw_1.asString)(article.id)))).flatMap((line) => (0, cart_1.readCartLine)(line) ?? []);
       const returnedContainers = (0, delivery_1.readReturnedContainers)(raw.returned_containers);
-      const displayName = asString(raw.payment_option_display_name);
+      const displayName = (0, raw_1.asString)(raw.payment_option_display_name);
       const paidAt = asNumber(raw.payment_execution_timestamp);
       return {
         id: transactionId,
-        deliveryId: asString(raw.delivery_id),
+        deliveryId: (0, raw_1.asString)(raw.delivery_id),
         paidAt: paidAt > 0 ? paidAt : null,
         amount: asNumber(raw.amount_in_cents),
-        type: asString(raw.transaction_type) ?? "",
-        status: asString(raw.transaction_status) ?? "",
+        type: (0, raw_1.asString)(raw.transaction_type) ?? "",
+        status: (0, raw_1.asString)(raw.transaction_status) ?? "",
         items,
         substitutions: refunds.flatMap((refund) => readSubstitution(refund, articles) ?? []),
-        depositTotal: asRecords(raw.deposits).reduce((sum, deposit) => sum + asNumber(deposit.value) * asNumber(deposit.count), 0),
+        depositTotal: (0, raw_1.asRecords)(raw.deposits).reduce((sum, deposit) => sum + asNumber(deposit.value) * asNumber(deposit.count), 0),
         returnedContainers,
         returnedDepositTotal: returnedContainers.reduce((sum, container) => sum + container.price, 0),
-        paymentMethod: displayName ? { displayName, account: asString(raw.payment_option_account), iconUrl: asString(raw.payment_method_icon_url) } : null
+        paymentMethod: displayName ? { displayName, account: (0, raw_1.asString)(raw.payment_option_account), iconUrl: (0, raw_1.asString)(raw.payment_method_icon_url) } : null
       };
     }
   }
@@ -3720,18 +3669,11 @@ var require_recipe = __commonJS({
     var RECIPE_SCHEMA2 = "iglu:tech.picnic.snowplow.analytics/recipe/jsonschema/";
     var SEGMENT_SCHEMA = "iglu:tech.picnic.snowplow.analytics/segment/jsonschema/";
     var PROMOTION_SCHEMA = "iglu:tech.picnic.snowplow.analytics/promotion/jsonschema/";
-    var walkObjects = (node, visit) => {
-      if (Array.isArray(node)) {
-        node.forEach((child) => walkObjects(child, visit));
-      } else if (node && typeof node === "object") {
-        visit(node);
-        Object.values(node).forEach((child) => walkObjects(child, visit));
-      }
-    };
+    var contextData = (contexts, schema) => contexts.find((c) => c.schema?.startsWith(schema))?.data;
     var plainText = (markdown) => markdown.replace(/#\([^)]*\)/g, "").replace(/\*\*/g, "").replace(/\u00a0/g, " ").trim();
     var textByType = (node, textType) => {
       let result = null;
-      walkObjects(node, (obj) => {
+      (0, pml_1.walkNodes)(node, (obj) => {
         if (!result && obj.type === "RICH_TEXT" && obj.textType === textType && typeof obj.markdown === "string") {
           result = plainText(obj.markdown) || null;
         }
@@ -3740,14 +3682,11 @@ var require_recipe = __commonJS({
     };
     function extractRecipes(page, segmentType) {
       const byId = /* @__PURE__ */ new Map();
-      walkObjects(page, (obj) => {
-        const contexts = obj.analytics?.contexts ?? obj.contexts;
-        if (!Array.isArray(contexts))
+      (0, pml_1.walkNodes)(page, (obj) => {
+        const contexts = (0, pml_1.analyticsContexts)({ analytics: obj.analytics ?? obj });
+        if (contextData(contexts, SEGMENT_SCHEMA)?.segment_type !== segmentType)
           return;
-        const segment = contexts.find((c) => c.schema?.startsWith(SEGMENT_SCHEMA));
-        if (segment?.data?.segment_type !== segmentType)
-          return;
-        const recipe = contexts.find((c) => c.schema?.startsWith(RECIPE_SCHEMA2))?.data;
+        const recipe = contextData(contexts, RECIPE_SCHEMA2);
         if (typeof recipe?.recipe_id !== "string")
           return;
         const previous = byId.get(recipe.recipe_id);
@@ -3775,7 +3714,7 @@ var require_recipe = __commonJS({
       const rowTexts = textRow ? (0, pml_1.childrenOf)(textRow) : [];
       const image = (0, pml_1.findNode)((0, pml_1.findNodeById)(tile.pml, "selling-unit-image"), (n) => n.type === "IMAGE");
       const imageSource = image?.source;
-      const promotion = contexts.find((c) => c.schema?.startsWith(PROMOTION_SCHEMA))?.data;
+      const promotion = contextData(contexts, PROMOTION_SCHEMA);
       return {
         name: markdownText(nameNode ?? void 0),
         brand: nameStack ? findBrand((0, pml_1.childrenOf)(nameStack).slice(1)) : null,
@@ -3790,12 +3729,11 @@ var require_recipe = __commonJS({
     var findBrand = (nodes) => markdownText((0, pml_1.findNode)(nodes, (n) => n.type === "RICH_TEXT" && typeof n.markdown === "string") ?? void 0);
     function extractIngredientTiles(page) {
       const tiles = /* @__PURE__ */ new Map();
-      walkObjects(page, (obj) => {
+      (0, pml_1.walkNodes)(page, (obj) => {
         if (obj.type !== "PML" || typeof obj.id !== "string" || !obj.id.includes("selling-unit-tile"))
           return;
-        const contexts = obj.analytics?.contexts ?? [];
-        const recipe = contexts.find((c) => c.schema?.startsWith(RECIPE_SCHEMA2))?.data;
-        const units = recipe?.selling_units;
+        const contexts = (0, pml_1.analyticsContexts)(obj);
+        const units = contextData(contexts, RECIPE_SCHEMA2)?.selling_units;
         const unit = Array.isArray(units) && units.length === 1 ? units[0] : void 0;
         const ingredientId = unit ? unit.ingredient_id : JSON.stringify(obj.pml ?? {}).match(/ingredient_id=([a-f0-9-]+)&/)?.[1];
         if (typeof ingredientId === "string" && !tiles.has(ingredientId))
@@ -3805,10 +3743,11 @@ var require_recipe = __commonJS({
     }
     function extractIngredientStates(page) {
       const states = /* @__PURE__ */ new Map();
-      walkObjects(page, (obj) => {
+      (0, pml_1.walkNodes)(page, (obj) => {
         if (obj.type !== "STATE_BOUNDARY" || obj.id !== "sellableContentState")
           return;
-        for (const ingredient of obj.state?.ingredientsState ?? []) {
+        const state = obj.state;
+        for (const ingredient of state?.ingredientsState ?? []) {
           if (typeof ingredient?.ingredientId === "string")
             states.set(ingredient.ingredientId, ingredient);
         }
@@ -3823,7 +3762,7 @@ var require_recipe = __commonJS({
     function extractAllergensByIngredient(page) {
       let components = [];
       let names = {};
-      walkObjects(page, (obj) => {
+      (0, pml_1.walkNodes)(page, (obj) => {
         if (obj.type !== "EXPRESSION" || typeof obj.expression !== "string")
           return;
         if (components.length === 0) {
@@ -3896,11 +3835,12 @@ var require_recipe = __commonJS({
       let owner;
       let note = null;
       let imageId = null;
-      walkObjects(page, (obj) => {
+      (0, pml_1.walkNodes)(page, (obj) => {
         if (obj.id === "selling-group-details-image") {
-          walkObjects(obj, (image) => {
-            if (!imageId && image.type === "IMAGE" && typeof image.source?.id === "string")
-              imageId = image.source.id;
+          (0, pml_1.walkNodes)(obj, (image) => {
+            const source = image.source;
+            if (!imageId && image.type === "IMAGE" && typeof source?.id === "string")
+              imageId = source.id;
           });
         }
         if (!recipeContext2 && obj.recipe_id === recipeId && Array.isArray(obj.selling_units) && typeof obj.recipe_name === "string") {
@@ -3921,7 +3861,7 @@ var require_recipe = __commonJS({
       const tiles = extractIngredientTiles(page);
       const states = extractIngredientStates(page);
       const allergens = extractAllergensByIngredient(page);
-      const ingredients = recipeContext2.selling_units.map((unit) => {
+      const ingredients = (recipeContext2.selling_units ?? []).map((unit) => {
         const sellingUnitId = unit.selling_unit_id ?? "";
         const tile = tiles.get(unit.ingredient_id);
         const showsThisUnit = tile?.sellingUnitId === null || tile?.sellingUnitId === sellingUnitId;
@@ -3980,23 +3920,19 @@ var require_recipe = __commonJS({
     exports.extractUserDefinedRecipeDetails = extractRecipeDetails;
     function extractIngredientQuantities(page) {
       const result = {};
-      walkObjects(page, (obj) => {
-        if (obj.type !== "STATE_BOUNDARY" || obj.id !== "sellableContentState")
-          return;
-        for (const ingredient of obj.state?.ingredientsState ?? []) {
-          if (!ingredient?.ingredientId || !ingredient.sellingUnits)
-            continue;
-          result[ingredient.ingredientId] = Object.fromEntries(Object.values(ingredient.sellingUnits).map((unit) => [unit.sellingUnitId, unit.requiredAmount ?? 0]));
-        }
-      });
+      for (const [ingredientId, { sellingUnits }] of extractIngredientStates(page)) {
+        if (sellingUnits)
+          result[ingredientId] = Object.fromEntries(Object.values(sellingUnits).map((unit) => [unit.sellingUnitId, unit.requiredAmount ?? 0]));
+      }
       return result;
     }
     function extractSuggestedImages(page) {
       const images = [];
-      walkObjects(page, (obj) => {
+      (0, pml_1.walkNodes)(page, (obj) => {
         if (obj.type !== "STATE_BOUNDARY" || obj.id !== "ImageSelectionState")
           return;
-        for (const reference of Object.values(obj.state?.referenceImagesById ?? {})) {
+        const state = obj.state;
+        for (const reference of Object.values(state?.referenceImagesById ?? {})) {
           if (reference?.id)
             images.push({ id: reference.id, referenceImage: reference });
         }
@@ -4384,7 +4320,10 @@ var require_service12 = __commonJS({
       uploadUserDefinedRecipeImage(recipeId, image) {
         const type = (image.type ?? "image/jpeg").replace(/jpg/gi, "jpeg");
         const body = image.data instanceof Blob ? image.data : new Uint8Array(image.data);
-        return this.http.sendRequest("POST", `/user-defined-sellable/${encodeURIComponent(recipeId)}`, body, { includePicnicHeaders: true, contentType: type });
+        return this.http.sendRequest("POST", `/user-defined-sellable/${encodeURIComponent(recipeId)}`, body, {
+          includePicnicHeaders: true,
+          contentType: type
+        });
       }
       /**
        * Sets the image of a user defined recipe, either a suggested image from
@@ -6677,10 +6616,14 @@ var PICNIC_HOST = /^(storefront|pages)-prod\.(nl|de|fr)\.picnicinternational\.co
 function installFetchTimeout(timeoutMs = UPSTREAM_TIMEOUT_MS) {
   const original = globalThis.fetch;
   if (original.deskTimeout) return;
-  const wrapped = ((input, init) => original(input, { ...init, signal: init?.signal ?? AbortSignal.timeout(timeoutMs) }));
+  const wrapped = ((input, init) => original(input, { ...init, signal: withLimit(init?.signal, timeoutMs) }));
   wrapped.deskTimeout = true;
   wrapped.deskOnlyPicnic = original.deskOnlyPicnic;
   globalThis.fetch = wrapped;
+}
+function withLimit(own, timeoutMs) {
+  const limit = AbortSignal.timeout(timeoutMs);
+  return own ? AbortSignal.any([own, limit]) : limit;
 }
 function installOnlyPicnic() {
   const original = globalThis.fetch;
@@ -12066,7 +12009,7 @@ function startDesk(env = process.env) {
     pictureCacheMb,
     allowedUsers,
     ingressOnly: env.INGRESS_ONLY === "1",
-    version: true ? "1.0.9" : "dev",
+    version: true ? "1.0.10" : "dev",
     routes: VENDORED_ROUTES,
     demo: demo ? demoShop() : void 0
   });
